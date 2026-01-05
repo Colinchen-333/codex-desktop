@@ -22,6 +22,39 @@ import type {
   StreamErrorEvent,
 } from '../lib/events'
 
+// ==================== Delta Batching for Smooth Streaming ====================
+// Accumulates delta updates and flushes at ~20 FPS to reduce re-renders
+
+interface DeltaBuffer {
+  agentMessages: Map<string, string> // itemId -> accumulated text
+  commandOutputs: Map<string, string> // itemId -> accumulated output
+  fileChangeOutputs: Map<string, string> // itemId -> accumulated output
+  reasoningSummaries: Map<string, { index: number; text: string }[]> // itemId -> summaries
+  reasoningContents: Map<string, { index: number; text: string }[]> // itemId -> content
+  mcpProgress: Map<string, string[]> // itemId -> accumulated progress messages
+}
+
+const deltaBuffer: DeltaBuffer = {
+  agentMessages: new Map(),
+  commandOutputs: new Map(),
+  fileChangeOutputs: new Map(),
+  reasoningSummaries: new Map(),
+  reasoningContents: new Map(),
+  mcpProgress: new Map(),
+}
+
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+const FLUSH_INTERVAL_MS = 50 // 20 FPS
+
+function scheduleFlush(flushFn: () => void) {
+  if (flushTimer === null) {
+    flushTimer = setTimeout(() => {
+      flushTimer = null
+      flushFn()
+    }, FLUSH_INTERVAL_MS)
+  }
+}
+
 // ==================== Thread Item Types ====================
 
 export type ThreadItemType =
@@ -214,7 +247,8 @@ export interface TokenUsage {
 
 interface ThreadState {
   activeThread: ThreadInfo | null
-  items: Map<string, AnyThreadItem>
+  // Using Record instead of Map for better serialization and Zustand devtools compatibility
+  items: Record<string, AnyThreadItem>
   itemOrder: string[]
   turnStatus: TurnStatus
   currentTurnId: string | null
@@ -242,6 +276,7 @@ interface ThreadState {
   ) => Promise<void>
   clearThread: () => void
   addInfoItem: (title: string, details?: string) => void
+  flushDeltaBuffer: () => void
 
   // Event handlers
   handleItemStarted: (event: ItemStartedEvent) => void
@@ -517,7 +552,7 @@ const defaultTokenUsage: TokenUsage = {
 
 export const useThreadStore = create<ThreadState>((set, get) => ({
   activeThread: null,
-  items: new Map(),
+  items: {},
   itemOrder: [],
   turnStatus: 'idle',
   currentTurnId: null,
@@ -539,7 +574,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       )
       set({
         activeThread: response.thread,
-        items: new Map(),
+        items: {},
         itemOrder: [],
         turnStatus: 'idle',
         pendingApprovals: [],
@@ -557,7 +592,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       const response = await threadApi.resume(threadId)
 
       // Convert items from response to our format
-      const items = new Map<string, AnyThreadItem>()
+      const items: Record<string, AnyThreadItem> = {}
       const itemOrder: string[] = []
 
       for (const rawItem of response.items) {
@@ -565,7 +600,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         const item = rawItem as { id?: string; type?: string }
         if (!item.id || !item.type) continue
         const threadItem = toThreadItem(rawItem as { id: string; type: string } & Record<string, unknown>)
-        items.set(threadItem.id, threadItem)
+        items[threadItem.id] = threadItem
         itemOrder.push(threadItem.id)
       }
 
@@ -600,7 +635,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     }
 
     set((state) => ({
-      items: new Map(state.items).set(userMessageId, userMessage),
+      items: { ...state.items, [userMessageId]: userMessage },
       itemOrder: [...state.itemOrder, userMessageId],
       turnStatus: 'running',
     }))
@@ -648,8 +683,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
       // Update item status
       set((state) => {
-        const items = new Map(state.items)
-        const item = items.get(itemId)
+        const item = state.items[itemId]
         if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
           const content = item.content as Record<string, unknown>
           const isApproved = decision !== 'decline'
@@ -672,12 +706,15 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
               approved: isApproved,
               ...extraFields,
             },
+          } as AnyThreadItem
+
+          return {
+            items: { ...state.items, [itemId]: updatedItem },
+            pendingApprovals: state.pendingApprovals.filter((p) => p.itemId !== itemId),
           }
-          items.set(itemId, updatedItem as AnyThreadItem)
         }
 
         return {
-          items,
           pendingApprovals: state.pendingApprovals.filter((p) => p.itemId !== itemId),
         }
       })
@@ -688,15 +725,178 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   clearThread: () => {
+    // Clear the delta buffer
+    deltaBuffer.agentMessages.clear()
+    deltaBuffer.commandOutputs.clear()
+    deltaBuffer.fileChangeOutputs.clear()
+    deltaBuffer.reasoningSummaries.clear()
+    deltaBuffer.reasoningContents.clear()
+    deltaBuffer.mcpProgress.clear()
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+
     set({
       activeThread: null,
-      items: new Map(),
+      items: {},
       itemOrder: [],
       turnStatus: 'idle',
       currentTurnId: null,
       pendingApprovals: [],
       snapshots: [],
       error: null,
+    })
+  },
+
+  flushDeltaBuffer: () => {
+    const hasAgentMessages = deltaBuffer.agentMessages.size > 0
+    const hasCommandOutputs = deltaBuffer.commandOutputs.size > 0
+    const hasFileChangeOutputs = deltaBuffer.fileChangeOutputs.size > 0
+    const hasReasoningSummaries = deltaBuffer.reasoningSummaries.size > 0
+    const hasReasoningContents = deltaBuffer.reasoningContents.size > 0
+    const hasMcpProgress = deltaBuffer.mcpProgress.size > 0
+
+    if (
+      !hasAgentMessages &&
+      !hasCommandOutputs &&
+      !hasFileChangeOutputs &&
+      !hasReasoningSummaries &&
+      !hasReasoningContents &&
+      !hasMcpProgress
+    ) {
+      return
+    }
+
+    set((state) => {
+      const updatedItems = { ...state.items }
+      let newItemOrder = state.itemOrder
+
+      // Apply agent message deltas
+      deltaBuffer.agentMessages.forEach((text, itemId) => {
+        const existing = updatedItems[itemId] as AgentMessageItem | undefined
+        if (existing && existing.type === 'agentMessage') {
+          updatedItems[itemId] = {
+            ...existing,
+            content: {
+              text: existing.content.text + text,
+              isStreaming: true,
+            },
+          }
+        } else {
+          const newItem: AgentMessageItem = {
+            id: itemId,
+            type: 'agentMessage',
+            status: 'inProgress',
+            content: { text, isStreaming: true },
+            createdAt: Date.now(),
+          }
+          updatedItems[itemId] = newItem
+          if (!newItemOrder.includes(itemId)) {
+            newItemOrder = [...newItemOrder, itemId]
+          }
+        }
+      })
+
+      // Apply command output deltas
+      deltaBuffer.commandOutputs.forEach((output, itemId) => {
+        const existing = updatedItems[itemId] as CommandExecutionItem | undefined
+        if (existing && existing.type === 'commandExecution') {
+          updatedItems[itemId] = {
+            ...existing,
+            content: {
+              ...existing.content,
+              output: (existing.content.output || '') + output,
+              isRunning: true,
+            },
+          }
+        }
+      })
+
+      // Apply file change output deltas
+      deltaBuffer.fileChangeOutputs.forEach((output, itemId) => {
+        const existing = updatedItems[itemId] as FileChangeItem | undefined
+        if (existing && existing.type === 'fileChange') {
+          updatedItems[itemId] = {
+            ...existing,
+            content: {
+              ...existing.content,
+              output: (existing.content.output || '') + output,
+            },
+          }
+        }
+      })
+
+      // Apply reasoning summary deltas
+      deltaBuffer.reasoningSummaries.forEach((updates, itemId) => {
+        const existing = updatedItems[itemId] as ReasoningItem | undefined
+        if (existing && existing.type === 'reasoning') {
+          const summary = [...existing.content.summary]
+          updates.forEach(({ index, text }) => {
+            summary[index] = (summary[index] || '') + text
+          })
+          updatedItems[itemId] = {
+            ...existing,
+            content: { ...existing.content, summary, isStreaming: true },
+          }
+        } else {
+          const summary: string[] = []
+          updates.forEach(({ index, text }) => {
+            summary[index] = (summary[index] || '') + text
+          })
+          const newItem: ReasoningItem = {
+            id: itemId,
+            type: 'reasoning',
+            status: 'inProgress',
+            content: { summary, isStreaming: true },
+            createdAt: Date.now(),
+          }
+          updatedItems[itemId] = newItem
+          if (!newItemOrder.includes(itemId)) {
+            newItemOrder = [...newItemOrder, itemId]
+          }
+        }
+      })
+
+      // Apply reasoning content deltas
+      deltaBuffer.reasoningContents.forEach((updates, itemId) => {
+        const existing = updatedItems[itemId] as ReasoningItem | undefined
+        if (existing && existing.type === 'reasoning') {
+          const fullContent = existing.content.fullContent ? [...existing.content.fullContent] : []
+          updates.forEach(({ index, text }) => {
+            fullContent[index] = (fullContent[index] || '') + text
+          })
+          updatedItems[itemId] = {
+            ...existing,
+            content: { ...existing.content, fullContent, isStreaming: true },
+          }
+        }
+      })
+
+      // Apply MCP progress
+      deltaBuffer.mcpProgress.forEach((messages, itemId) => {
+        const existing = updatedItems[itemId] as McpToolItem | undefined
+        if (existing && existing.type === 'mcpTool') {
+          updatedItems[itemId] = {
+            ...existing,
+            content: {
+              ...existing.content,
+              progress: [...(existing.content.progress || []), ...messages],
+              isRunning: true,
+            },
+          }
+        }
+      })
+
+      // Clear buffers after applying
+      deltaBuffer.agentMessages.clear()
+      deltaBuffer.commandOutputs.clear()
+      deltaBuffer.fileChangeOutputs.clear()
+      deltaBuffer.reasoningSummaries.clear()
+      deltaBuffer.reasoningContents.clear()
+      deltaBuffer.mcpProgress.clear()
+
+      return { items: updatedItems, itemOrder: newItemOrder }
     })
   },
 
@@ -709,7 +909,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       createdAt: Date.now(),
     }
     set((state) => ({
-      items: new Map(state.items).set(infoItem.id, infoItem),
+      items: { ...state.items, [infoItem.id]: infoItem },
       itemOrder: [...state.itemOrder, infoItem.id],
     }))
   },
@@ -727,9 +927,9 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       if (inProgressItem.type === 'userMessage') {
         const lastUserId = [...state.itemOrder]
           .reverse()
-          .find((id) => state.items.get(id)?.type === 'userMessage')
+          .find((id) => state.items[id]?.type === 'userMessage')
         const lastUser = lastUserId
-          ? (state.items.get(lastUserId) as UserMessageItem)
+          ? (state.items[lastUserId] as UserMessageItem)
           : null
         const nextUser = inProgressItem as UserMessageItem
         if (
@@ -745,7 +945,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       return {
         items: isDuplicateUserMessage
           ? state.items
-          : new Map(state.items).set(item.id, inProgressItem),
+          : { ...state.items, [item.id]: inProgressItem },
         itemOrder: isDuplicateUserMessage ? state.itemOrder : [...state.itemOrder, item.id],
       }
     })
@@ -753,14 +953,13 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
   handleItemCompleted: (event) => {
     set((state) => {
-      const items = new Map(state.items)
       const nextItem = toThreadItem(event.item)
-      const existing = items.get(nextItem.id)
+      const existing = state.items[nextItem.id]
 
       if (existing) {
         const existingContent = existing.content as Record<string, unknown>
         const nextContent = nextItem.content as Record<string, unknown>
-        items.set(nextItem.id, {
+        const updatedItem = {
           ...nextItem,
           status: nextItem.status === 'inProgress' ? 'completed' : nextItem.status,
           content: {
@@ -771,62 +970,31 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
             snapshotId: existingContent.snapshotId ?? nextContent.snapshotId,
             output: existingContent.output ?? nextContent.output,
           },
-        } as AnyThreadItem)
+        } as AnyThreadItem
+        return { items: { ...state.items, [nextItem.id]: updatedItem } }
       } else {
-        items.set(nextItem.id, nextItem)
         return {
-          items,
+          items: { ...state.items, [nextItem.id]: nextItem },
           itemOrder: state.itemOrder.includes(nextItem.id)
             ? state.itemOrder
             : [...state.itemOrder, nextItem.id],
         }
       }
-      return { items }
     })
   },
 
   handleAgentMessageDelta: (event) => {
-    set((state) => {
-      const items = new Map(state.items)
-      const existing = items.get(event.itemId) as AgentMessageItem | undefined
-
-      if (existing && existing.type === 'agentMessage') {
-        items.set(event.itemId, {
-          ...existing,
-          content: {
-            text: existing.content.text + event.delta,
-            isStreaming: true,
-          },
-        })
-      } else {
-        // Create new agent message item
-        const newItem: AgentMessageItem = {
-          id: event.itemId,
-          type: 'agentMessage',
-          status: 'inProgress',
-          content: {
-            text: event.delta,
-            isStreaming: true,
-          },
-          createdAt: Date.now(),
-        }
-        items.set(event.itemId, newItem)
-        return {
-          items,
-          itemOrder: state.itemOrder.includes(event.itemId)
-            ? state.itemOrder
-            : [...state.itemOrder, event.itemId],
-        }
-      }
-
-      return { items }
-    })
+    // Buffer the delta instead of updating state immediately
+    const current = deltaBuffer.agentMessages.get(event.itemId) || ''
+    deltaBuffer.agentMessages.set(event.itemId, current + event.delta)
+    scheduleFlush(() => get().flushDeltaBuffer())
   },
 
   handleCommandApprovalRequested: (event) => {
-    set((state) => ({
-      items: new Map(state.items).set(event.itemId, {
-        ...(state.items.get(event.itemId) || {
+    set((state) => {
+      const existing = state.items[event.itemId]
+      const updatedItem = {
+        ...(existing || {
           id: event.itemId,
           type: 'commandExecution',
           status: 'inProgress',
@@ -838,26 +1006,30 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           createdAt: Date.now(),
         }),
         content: {
-          ...((state.items.get(event.itemId)?.content || {}) as Record<string, unknown>),
+          ...((existing?.content || {}) as Record<string, unknown>),
           needsApproval: true,
           reason: event.reason,
           proposedExecpolicyAmendment: event.proposedExecpolicyAmendment,
         },
-      } as AnyThreadItem),
-      itemOrder: state.itemOrder.includes(event.itemId)
-        ? state.itemOrder
-        : [...state.itemOrder, event.itemId],
-      pendingApprovals: [
-        ...state.pendingApprovals,
-        { itemId: event.itemId, type: 'command', data: event, requestId: event._requestId },
-      ],
-    }))
+      } as AnyThreadItem
+      return {
+        items: { ...state.items, [event.itemId]: updatedItem },
+        itemOrder: state.itemOrder.includes(event.itemId)
+          ? state.itemOrder
+          : [...state.itemOrder, event.itemId],
+        pendingApprovals: [
+          ...state.pendingApprovals,
+          { itemId: event.itemId, type: 'command', data: event, requestId: event._requestId },
+        ],
+      }
+    })
   },
 
   handleFileChangeApprovalRequested: (event) => {
-    set((state) => ({
-      items: new Map(state.items).set(event.itemId, {
-        ...(state.items.get(event.itemId) || {
+    set((state) => {
+      const existing = state.items[event.itemId]
+      const updatedItem = {
+        ...(existing || {
           id: event.itemId,
           type: 'fileChange',
           status: 'inProgress',
@@ -867,19 +1039,22 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           createdAt: Date.now(),
         }),
         content: {
-          ...((state.items.get(event.itemId)?.content || {}) as Record<string, unknown>),
+          ...((existing?.content || {}) as Record<string, unknown>),
           needsApproval: true,
           reason: event.reason,
         },
-      } as AnyThreadItem),
-      itemOrder: state.itemOrder.includes(event.itemId)
-        ? state.itemOrder
-        : [...state.itemOrder, event.itemId],
-      pendingApprovals: [
-        ...state.pendingApprovals,
-        { itemId: event.itemId, type: 'fileChange', data: event, requestId: event._requestId },
-      ],
-    }))
+      } as AnyThreadItem
+      return {
+        items: { ...state.items, [event.itemId]: updatedItem },
+        itemOrder: state.itemOrder.includes(event.itemId)
+          ? state.itemOrder
+          : [...state.itemOrder, event.itemId],
+        pendingApprovals: [
+          ...state.pendingApprovals,
+          { itemId: event.itemId, type: 'fileChange', data: event, requestId: event._requestId },
+        ],
+      }
+    })
   },
 
   handleTurnStarted: (event) => {
@@ -891,6 +1066,13 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleTurnCompleted: (event) => {
+    // Flush any pending deltas before completing the turn
+    get().flushDeltaBuffer()
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+
     const status = event.turn.status
     const nextTurnStatus: TurnStatus =
       status === 'failed'
@@ -901,22 +1083,22 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
     set((state) => {
       // Mark all streaming items as complete
-      const items = new Map(state.items)
-      items.forEach((item, id) => {
+      const updatedItems = { ...state.items }
+      Object.entries(updatedItems).forEach(([id, item]) => {
         if (item.type === 'agentMessage' && (item as AgentMessageItem).content.isStreaming) {
-          items.set(id, {
+          updatedItems[id] = {
             ...item,
             status: 'completed',
             content: {
               ...(item as AgentMessageItem).content,
               isStreaming: false,
             },
-          } as AgentMessageItem)
+          } as AgentMessageItem
         }
       })
 
       return {
-        items,
+        items: updatedItems,
         turnStatus: nextTurnStatus,
         currentTurnId: null,
         error: event.turn.error?.message || null,
@@ -937,7 +1119,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     }
 
     set((state) => ({
-      items: new Map(state.items).set(infoItem.id, infoItem),
+      items: { ...state.items, [infoItem.id]: infoItem },
       itemOrder: state.itemOrder.includes(infoItem.id)
         ? state.itemOrder
         : [...state.itemOrder, infoItem.id],
@@ -984,7 +1166,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     }
 
     set((state) => ({
-      items: new Map(state.items).set(planItem.id, planItem),
+      items: { ...state.items, [planItem.id]: planItem },
       itemOrder: state.itemOrder.includes(planItem.id)
         ? state.itemOrder
         : [...state.itemOrder, planItem.id],
@@ -1004,7 +1186,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     }
 
     set((state) => ({
-      items: new Map(state.items).set(infoItem.id, infoItem),
+      items: { ...state.items, [infoItem.id]: infoItem },
       itemOrder: state.itemOrder.includes(infoItem.id)
         ? state.itemOrder
         : [...state.itemOrder, infoItem.id],
@@ -1012,154 +1194,58 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleCommandExecutionOutputDelta: (event) => {
-    set((state) => {
-      const items = new Map(state.items)
-      const existing = items.get(event.itemId) as CommandExecutionItem | undefined
-
-      if (existing && existing.type === 'commandExecution') {
-        items.set(event.itemId, {
-          ...existing,
-          content: {
-            ...existing.content,
-            output: (existing.content.output || '') + event.delta,
-            isRunning: true,
-          },
-        })
-      }
-
-      return { items }
-    })
+    // Buffer the delta instead of updating state immediately
+    const current = deltaBuffer.commandOutputs.get(event.itemId) || ''
+    deltaBuffer.commandOutputs.set(event.itemId, current + event.delta)
+    scheduleFlush(() => get().flushDeltaBuffer())
   },
 
   handleFileChangeOutputDelta: (event) => {
-    set((state) => {
-      const items = new Map(state.items)
-      const existing = items.get(event.itemId) as FileChangeItem | undefined
-
-      if (existing && existing.type === 'fileChange') {
-        items.set(event.itemId, {
-          ...existing,
-          content: {
-            ...existing.content,
-            output: (existing.content.output || '') + event.delta,
-          },
-        })
-      }
-
-      return { items }
-    })
+    // Buffer the delta instead of updating state immediately
+    const current = deltaBuffer.fileChangeOutputs.get(event.itemId) || ''
+    deltaBuffer.fileChangeOutputs.set(event.itemId, current + event.delta)
+    scheduleFlush(() => get().flushDeltaBuffer())
   },
 
   handleReasoningSummaryTextDelta: (event) => {
-    set((state) => {
-      const items = new Map(state.items)
-      const existing = items.get(event.itemId) as ReasoningItem | undefined
-      const index = event.summaryIndex ?? 0
-
-      if (existing && existing.type === 'reasoning') {
-        const summary = [...existing.content.summary]
-        summary[index] = (summary[index] || '') + event.delta
-
-        items.set(event.itemId, {
-          ...existing,
-          content: {
-            ...existing.content,
-            summary,
-            isStreaming: true,
-          },
-        })
-      } else {
-        const summary: string[] = []
-        summary[index] = event.delta
-        const newItem: ReasoningItem = {
-          id: event.itemId,
-          type: 'reasoning',
-          status: 'inProgress',
-          content: {
-            summary,
-            isStreaming: true,
-          },
-          createdAt: Date.now(),
-        }
-        items.set(event.itemId, newItem)
-        return {
-          items,
-          itemOrder: state.itemOrder.includes(event.itemId)
-            ? state.itemOrder
-            : [...state.itemOrder, event.itemId],
-        }
-      }
-
-      return { items }
-    })
+    // Buffer the delta instead of updating state immediately
+    const index = event.summaryIndex ?? 0
+    const updates = deltaBuffer.reasoningSummaries.get(event.itemId) || []
+    const existingIdx = updates.findIndex((u) => u.index === index)
+    if (existingIdx >= 0) {
+      updates[existingIdx].text += event.delta
+    } else {
+      updates.push({ index, text: event.delta })
+    }
+    deltaBuffer.reasoningSummaries.set(event.itemId, updates)
+    scheduleFlush(() => get().flushDeltaBuffer())
   },
 
-  handleReasoningSummaryPartAdded: (event) => {
-    set((state) => {
-      const items = new Map(state.items)
-      const existing = items.get(event.itemId) as ReasoningItem | undefined
-
-      if (existing && existing.type === 'reasoning') {
-        const summary = [...existing.content.summary]
-        const index = event.summaryIndex ?? summary.length
-        summary[index] = summary[index] || ''
-
-        items.set(event.itemId, {
-          ...existing,
-          content: {
-            ...existing.content,
-            summary,
-            isStreaming: true,
-          },
-        })
-      }
-
-      return { items }
-    })
+  handleReasoningSummaryPartAdded: (_event) => {
+    // This just initializes a slot, the actual text comes from TextDelta
+    // No state update needed - the slot will be created when text arrives
   },
 
   handleReasoningTextDelta: (event) => {
-    set((state) => {
-      const items = new Map(state.items)
-      const existing = items.get(event.itemId) as ReasoningItem | undefined
-      const index = event.contentIndex ?? 0
-
-      if (existing && existing.type === 'reasoning') {
-        const content = existing.content.fullContent ? [...existing.content.fullContent] : []
-        content[index] = (content[index] || '') + event.delta
-
-        items.set(event.itemId, {
-          ...existing,
-          content: {
-            ...existing.content,
-            fullContent: content,
-            isStreaming: true,
-          },
-        })
-      }
-
-      return { items }
-    })
+    // Buffer the delta instead of updating state immediately
+    const index = event.contentIndex ?? 0
+    const updates = deltaBuffer.reasoningContents.get(event.itemId) || []
+    const existingIdx = updates.findIndex((u) => u.index === index)
+    if (existingIdx >= 0) {
+      updates[existingIdx].text += event.delta
+    } else {
+      updates.push({ index, text: event.delta })
+    }
+    deltaBuffer.reasoningContents.set(event.itemId, updates)
+    scheduleFlush(() => get().flushDeltaBuffer())
   },
 
   handleMcpToolCallProgress: (event) => {
-    set((state) => {
-      const items = new Map(state.items)
-      const existing = items.get(event.itemId) as McpToolItem | undefined
-
-      if (existing && existing.type === 'mcpTool') {
-        items.set(event.itemId, {
-          ...existing,
-          content: {
-            ...existing.content,
-            progress: [...(existing.content.progress || []), event.message],
-            isRunning: true,
-          },
-        })
-      }
-
-      return { items }
-    })
+    // Buffer the progress message instead of updating state immediately
+    const messages = deltaBuffer.mcpProgress.get(event.itemId) || []
+    messages.push(event.message)
+    deltaBuffer.mcpProgress.set(event.itemId, messages)
+    scheduleFlush(() => get().flushDeltaBuffer())
   },
 
   // Token Usage Handler
@@ -1205,7 +1291,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     }
 
     set((state) => ({
-      items: new Map(state.items).set(errorItem.id, errorItem),
+      items: { ...state.items, [errorItem.id]: errorItem },
       itemOrder: [...state.itemOrder, errorItem.id],
       error: event.error.message,
       turnStatus: event.willRetry ? state.turnStatus : 'failed',

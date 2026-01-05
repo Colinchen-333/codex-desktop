@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, memo } from 'react'
 import { X, Paperclip, Image as ImageIcon, StopCircle, ArrowUp, Terminal, FileCode, Brain, Wrench, AlertCircle, ChevronDown, ChevronRight, ExternalLink, ListChecks, Circle, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useThreadStore, type AnyThreadItem, type PlanStep } from '../../stores/thread'
@@ -498,7 +498,7 @@ export function ChatView() {
       >
         <div className="mx-auto max-w-3xl space-y-6 pb-4">
           {itemOrder.map((id) => {
-            const item = items.get(id)
+            const item = items[id]
             if (!item) return null
             return <MessageItem key={id} item={item} />
           })}
@@ -631,40 +631,60 @@ export function ChatView() {
   )
 }
 
-// Message Item Component
+// Message Item Component - Memoized to prevent unnecessary re-renders
 interface MessageItemProps {
   item: AnyThreadItem
 }
 
-function MessageItem({ item }: MessageItemProps) {
-  switch (item.type) {
-    case 'userMessage':
-      return <UserMessage item={item} />
-    case 'agentMessage':
-      return <AgentMessage item={item} />
-    case 'commandExecution':
-      return <CommandExecutionCard item={item} />
-    case 'fileChange':
-      return <FileChangeCard item={item} />
-    case 'reasoning':
-      return <ReasoningCard item={item} />
-    case 'mcpTool':
-      return <McpToolCard item={item} />
-    case 'webSearch':
-      return <WebSearchCard item={item} />
-    case 'review':
-      return <ReviewCard item={item} />
-    case 'info':
-      return <InfoCard item={item} />
-    case 'error':
-      return <ErrorCard item={item} />
-    case 'plan':
-      return <PlanCard item={item} />
-    default:
-      console.warn(`Unknown item type: ${(item as AnyThreadItem).type}`)
-      return null
+const MessageItem = memo(
+  function MessageItem({ item }: MessageItemProps) {
+    switch (item.type) {
+      case 'userMessage':
+        return <UserMessage item={item} />
+      case 'agentMessage':
+        return <AgentMessage item={item} />
+      case 'commandExecution':
+        return <CommandExecutionCard item={item} />
+      case 'fileChange':
+        return <FileChangeCard item={item} />
+      case 'reasoning':
+        return <ReasoningCard item={item} />
+      case 'mcpTool':
+        return <McpToolCard item={item} />
+      case 'webSearch':
+        return <WebSearchCard item={item} />
+      case 'review':
+        return <ReviewCard item={item} />
+      case 'info':
+        return <InfoCard item={item} />
+      case 'error':
+        return <ErrorCard item={item} />
+      case 'plan':
+        return <PlanCard item={item} />
+      default:
+        console.warn(`Unknown item type: ${(item as AnyThreadItem).type}`)
+        return null
+    }
+  },
+  // Custom comparison function for better memoization
+  (prevProps, nextProps) => {
+    const prev = prevProps.item
+    const next = nextProps.item
+    // Compare identity first
+    if (prev === next) return true
+    // Compare key properties
+    if (prev.id !== next.id) return false
+    if (prev.status !== next.status) return false
+    // For streaming content, compare content deeply
+    if (prev.type === 'agentMessage' && next.type === 'agentMessage') {
+      const prevContent = prev.content as { text: string; isStreaming: boolean }
+      const nextContent = next.content as { text: string; isStreaming: boolean }
+      return prevContent.text === nextContent.text && prevContent.isStreaming === nextContent.isStreaming
+    }
+    // Default: use shallow comparison of content
+    return JSON.stringify(prev.content) === JSON.stringify(next.content)
   }
-}
+)
 
 // User Message
 function UserMessage({ item }: { item: AnyThreadItem }) {
