@@ -43,6 +43,28 @@ pub struct ThreadStartParams {
     pub config: Option<JsonValue>,
 }
 
+/// Sandbox policy response (tagged union)
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SandboxPolicy {
+    ReadOnly,
+    WorkspaceWrite {
+        #[serde(default)]
+        writable_roots: Vec<String>,
+        #[serde(default)]
+        network_access: bool,
+    },
+    DangerFullAccess,
+    ExternalSandbox {
+        #[serde(default = "default_network_access")]
+        network_access: String,
+    },
+}
+
+fn default_network_access() -> String {
+    "restricted".to_string()
+}
+
 /// Thread start response
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +74,7 @@ pub struct ThreadStartResponse {
     pub model_provider: String,
     pub cwd: String,
     pub approval_policy: String,
-    pub sandbox: String,
+    pub sandbox: SandboxPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
 }
@@ -213,8 +235,13 @@ pub struct TurnInterruptParams {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ApprovalDecision {
+    /// Run this action once
     Accept,
+    /// Allow this action for the current session
     AcceptForSession,
+    /// Always allow this action (persistent)
+    AcceptAlways,
+    /// Decline/reject this action
     Decline,
 }
 

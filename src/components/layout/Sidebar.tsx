@@ -145,7 +145,7 @@ export function Sidebar() {
         project.path,
         settings.model,
         settings.sandboxMode,
-        settings.askForApproval
+        settings.approvalPolicy
       )
       // Refresh sessions list to show the new session
       await fetchSessions(selectedProjectId)

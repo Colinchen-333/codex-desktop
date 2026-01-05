@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useProjectsStore } from '../../stores/projects'
 import { useThreadStore } from '../../stores/thread'
 import { useSessionsStore } from '../../stores/sessions'
 import { useSettingsStore } from '../../stores/settings'
 import { ChatView } from '../chat/ChatView'
+import { parseError } from '../../lib/errorUtils'
 
 export function MainArea() {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId)
@@ -100,26 +101,61 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
   const gitInfo = useProjectsStore((state) => state.gitInfo)
   const startThread = useThreadStore((state) => state.startThread)
   const isLoading = useThreadStore((state) => state.isLoading)
+  const threadError = useThreadStore((state) => state.error)
   const settings = useSettingsStore((state) => state.settings)
+  const [localError, setLocalError] = useState<string | null>(null)
+  const [serverReady, setServerReady] = useState<boolean | null>(null)
 
   const project = projects.find((p) => p.id === projectId)
   const info = gitInfo[projectId]
 
+  // Check server status on mount
+  useEffect(() => {
+    const checkServer = async () => {
+      try {
+        const { serverApi } = await import('../../lib/api')
+        const status = await serverApi.getStatus()
+        setServerReady(status.isRunning)
+      } catch {
+        setServerReady(false)
+      }
+    }
+    checkServer()
+  }, [])
+
+  // Clear local error when project changes
+  useEffect(() => {
+    setLocalError(null)
+  }, [projectId])
+
   if (!project) return null
 
   const handleStartSession = async () => {
+    setLocalError(null)
+    console.log('[StartSession] Starting session with:', {
+      projectId,
+      path: project.path,
+      model: settings.model,
+      sandboxMode: settings.sandboxMode,
+      approvalPolicy: settings.approvalPolicy,
+    })
+
     try {
       await startThread(
         projectId,
         project.path,
         settings.model,
         settings.sandboxMode,
-        settings.askForApproval
+        settings.approvalPolicy
       )
+      console.log('[StartSession] Session started successfully')
     } catch (error) {
-      console.error('Failed to start session:', error)
+      console.error('[StartSession] Failed to start session:', error)
+      setLocalError(parseError(error))
     }
   }
+
+  const displayError = localError || threadError
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center p-8">
@@ -154,13 +190,69 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
           </div>
         )}
 
+        {/* Error Display */}
+        {displayError && (
+          <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-left">
+            <div className="flex items-start gap-2">
+              <span className="text-destructive">⚠️</span>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-destructive">Failed to start session</p>
+                <p className="mt-1 text-xs text-destructive/80 break-words">{displayError}</p>
+                {displayError.includes('Codex CLI not found') && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    <p>Please install Codex CLI first:</p>
+                    <code className="mt-1 block rounded bg-secondary px-2 py-1 font-mono">
+                      npm install -g @anthropic/codex
+                    </code>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <button
-          className="w-full rounded-lg bg-primary px-6 py-3 font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="w-full rounded-lg bg-primary px-6 py-3 font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
           onClick={handleStartSession}
           disabled={isLoading}
         >
-          {isLoading ? 'Starting...' : 'Start New Session'}
+          {isLoading && (
+            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+                fill="none"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+          )}
+          {isLoading ? 'Starting Session...' : 'Start New Session'}
         </button>
+
+        {/* Server Status Warning */}
+        {serverReady === false && (
+          <div className="mt-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-3">
+            <div className="flex items-center gap-2 text-xs text-yellow-600 dark:text-yellow-400">
+              <span>⚠️</span>
+              <span>Codex engine is not running. It will start automatically when you begin a session.</span>
+            </div>
+          </div>
+        )}
+
+        {/* Model Info */}
+        <div className="mt-4 text-xs text-muted-foreground">
+          Model: <span className="font-medium">{settings.model}</span>
+          {' • '}
+          Sandbox: <span className="font-medium">{settings.sandboxMode}</span>
+        </div>
       </div>
     </div>
   )

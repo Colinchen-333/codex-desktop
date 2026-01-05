@@ -6,6 +6,8 @@ import { useProjectsStore } from '../../stores/projects'
 import { useAppStore } from '../../stores/app'
 import { Markdown } from '../ui/Markdown'
 import { DiffView, parseDiff, type FileDiff } from '../ui/DiffView'
+import { SlashCommandPopup } from './SlashCommandPopup'
+import { type SlashCommand, isCompleteCommand } from '../../lib/slashCommands'
 
 // Maximum height for the textarea (in pixels)
 const MAX_TEXTAREA_HEIGHT = 200
@@ -16,8 +18,25 @@ export function ChatView() {
   const [inputValue, setInputValue] = useState('')
   const [attachedImages, setAttachedImages] = useState<string[]>([])
   const [isDragging, setIsDragging] = useState(false)
+  const [showSlashCommands, setShowSlashCommands] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  // Show slash command popup when typing starts with /
+  useEffect(() => {
+    if (inputValue.startsWith('/') && !inputValue.includes(' ')) {
+      setShowSlashCommands(true)
+    } else {
+      setShowSlashCommands(false)
+    }
+  }, [inputValue])
+
+  // Handle slash command selection
+  const handleSlashCommandSelect = useCallback((command: SlashCommand) => {
+    setInputValue(`/${command.name} `)
+    setShowSlashCommands(false)
+    inputRef.current?.focus()
+  }, [])
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -137,17 +156,32 @@ export function ChatView() {
     <div className="flex flex-1 flex-col overflow-hidden relative">
       {/* Drag Overlay */}
       {isDragging && (
-        <div 
-          className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm m-4 rounded-2xl border-2 border-dashed border-primary animate-in fade-in duration-200"
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-primary/5 via-background/95 to-primary/10 backdrop-blur-md animate-in fade-in zoom-in-95 duration-300"
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
         >
-          <div className="flex flex-col items-center gap-4 text-primary pointer-events-none">
-            <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
-              <ImageIcon size={32} />
+          <div className="relative pointer-events-none">
+            {/* Animated rings */}
+            <div className="absolute inset-0 -m-8 rounded-full border-2 border-primary/20 animate-ping" style={{ animationDuration: '2s' }} />
+            <div className="absolute inset-0 -m-4 rounded-full border-2 border-primary/30 animate-pulse" />
+
+            {/* Main content */}
+            <div className="relative flex flex-col items-center gap-5 p-10 rounded-3xl bg-card/80 border-2 border-dashed border-primary/50 shadow-2xl shadow-primary/10">
+              <div className="relative">
+                <div className="h-20 w-20 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center shadow-lg">
+                  <ImageIcon size={36} className="text-primary" />
+                </div>
+                <div className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-primary flex items-center justify-center shadow-md">
+                  <span className="text-primary-foreground text-xs font-bold">+</span>
+                </div>
+              </div>
+              <div className="text-center">
+                <p className="text-xl font-semibold text-foreground mb-1">拖放图片到此处</p>
+                <p className="text-sm text-muted-foreground">支持 PNG, JPG, GIF, WebP 格式</p>
+              </div>
             </div>
-            <p className="text-xl font-medium">Drop images here</p>
           </div>
         </div>
       )}
@@ -170,12 +204,19 @@ export function ChatView() {
       {/* Input Area */}
       <div className="p-4 bg-transparent">
         <div className="mx-auto max-w-3xl">
-          <div 
+          <div
             className={cn(
               "relative rounded-3xl bg-card shadow-lg border border-border/50 p-2 transition-all duration-200",
               isDragging && "scale-[1.02] ring-2 ring-primary ring-offset-2"
             )}
           >
+            {/* Slash Command Popup */}
+            <SlashCommandPopup
+              input={inputValue}
+              onSelect={handleSlashCommandSelect}
+              onClose={() => setShowSlashCommands(false)}
+              isVisible={showSlashCommands}
+            />
             {/* Attached Images Preview */}
             {attachedImages.length > 0 && (
               <div className="flex flex-wrap gap-2 px-2 pt-2 pb-1">
@@ -198,12 +239,29 @@ export function ChatView() {
             )}
 
             <div className="flex items-end gap-2 pl-2">
-              <button 
+              <input
+                type="file"
+                id="image-upload"
+                className="hidden"
+                accept="image/*"
+                multiple
+                onChange={(e) => {
+                  const files = e.target.files
+                  if (files) {
+                    for (const file of files) {
+                      handleImageFile(file)
+                    }
+                  }
+                  // Reset input value to allow re-selecting same file
+                  e.target.value = ''
+                }}
+              />
+              <button
                 className="mb-2 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-full transition-colors"
                 onClick={() => {
-                  // TODO: Trigger file selection
+                  document.getElementById('image-upload')?.click()
                 }}
-                title="Attach images"
+                title="附加图片"
               >
                 <Paperclip size={20} />
               </button>
@@ -329,14 +387,16 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
   const content = item.content as {
     command: string
     cwd: string
+    commandActions: string[]
     needsApproval: boolean
     approved?: boolean
     output?: string
     exitCode?: number
   }
   const { respondToApproval, activeThread } = useThreadStore()
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
-  const handleApprove = (decision: 'accept' | 'acceptForSession' | 'decline') => {
+  const handleApprove = (decision: 'accept' | 'acceptForSession' | 'acceptAlways' | 'decline') => {
     if (activeThread) {
       respondToApproval(item.id, decision)
     }
@@ -347,8 +407,8 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
       <div
         className={cn(
           'w-full max-w-2xl overflow-hidden rounded-xl border bg-card shadow-sm transition-all',
-          content.needsApproval 
-            ? 'border-l-4 border-l-yellow-500 border-y-border/50 border-r-border/50' 
+          content.needsApproval
+            ? 'border-l-4 border-l-yellow-500 border-y-border/50 border-r-border/50'
             : 'border-border/50'
         )}
       >
@@ -363,8 +423,8 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
             <span
               className={cn(
                 'rounded-full px-2 py-0.5 text-[10px] font-medium',
-                content.exitCode === 0 
-                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' 
+                content.exitCode === 0
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
                   : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
               )}
             >
@@ -383,6 +443,20 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
             </div>
           </div>
 
+          {/* Command Actions Tags */}
+          {content.commandActions && content.commandActions.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {content.commandActions.map((action, i) => (
+                <span
+                  key={i}
+                  className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border/50"
+                >
+                  {action}
+                </span>
+              ))}
+            </div>
+          )}
+
           {content.output && (
             <div className="mt-4">
               <div className="mb-1 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Output</div>
@@ -393,25 +467,48 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
           )}
 
           {content.needsApproval && (
-            <div className="mt-5 flex gap-3 pt-3 border-t border-border/40">
+            <div className="mt-5 pt-3 border-t border-border/40">
+              {/* Primary Actions */}
+              <div className="flex gap-2">
+                <button
+                  className="flex-1 rounded-lg bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
+                  onClick={() => handleApprove('accept')}
+                >
+                  Run Once
+                </button>
+                <button
+                  className="flex-1 rounded-lg bg-secondary px-4 py-2.5 text-xs font-semibold text-secondary-foreground hover:bg-secondary/80 transition-colors"
+                  onClick={() => handleApprove('acceptForSession')}
+                >
+                  Allow for Session
+                </button>
+                <button
+                  className="rounded-lg border border-border bg-background px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-colors"
+                  onClick={() => handleApprove('decline')}
+                >
+                  Decline
+                </button>
+              </div>
+
+              {/* Advanced Options Toggle */}
               <button
-                className="flex-1 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
-                onClick={() => handleApprove('accept')}
+                className="mt-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setShowAdvanced(!showAdvanced)}
               >
-                Run Once
+                {showAdvanced ? '▼ Hide options' : '▶ More options'}
               </button>
-              <button
-                className="flex-1 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground hover:bg-secondary/80 transition-colors"
-                onClick={() => handleApprove('acceptForSession')}
-              >
-                Always Allow
-              </button>
-              <button
-                className="rounded-lg border border-border bg-background px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-colors"
-                onClick={() => handleApprove('decline')}
-              >
-                Decline
-              </button>
+
+              {/* Advanced Actions */}
+              {showAdvanced && (
+                <div className="mt-2 flex gap-2 animate-in slide-in-from-top-2 duration-200">
+                  <button
+                    className="flex-1 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-[11px] font-medium text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
+                    onClick={() => handleApprove('acceptAlways')}
+                  >
+                    Always Allow (Persistent)
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -435,10 +532,11 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
   const [expandedFiles, setExpandedFiles] = useState<Set<number>>(new Set())
   const [isApplying, setIsApplying] = useState(false)
   const [isReverting, setIsReverting] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const project = projects.find((p) => p.id === selectedProjectId)
 
-  const handleApplyChanges = async () => {
+  const handleApplyChanges = async (decision: 'accept' | 'acceptForSession' | 'acceptAlways' = 'accept') => {
     if (!activeThread || !project || isApplying) return
 
     setIsApplying(true)
@@ -447,7 +545,7 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
       const snapshot = await createSnapshot(project.path)
 
       // Approve the changes with the specific snapshot ID
-      await respondToApproval(item.id, 'accept', snapshot.id)
+      await respondToApproval(item.id, decision, snapshot.id)
     } catch (error) {
       console.error('Failed to apply changes:', error)
     } finally {
@@ -536,21 +634,50 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
 
         {content.needsApproval && (
           <div className="bg-secondary/10 p-4 border-t border-border/40">
-            <div className="flex gap-3">
+            {/* Primary Actions */}
+            <div className="flex gap-2">
               <button
-                className="flex-1 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm disabled:opacity-50"
-                onClick={handleApplyChanges}
+                className="flex-1 rounded-lg bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm disabled:opacity-50"
+                onClick={() => handleApplyChanges('accept')}
                 disabled={isApplying}
               >
                 {isApplying ? 'Applying...' : 'Apply Changes'}
               </button>
               <button
-                className="rounded-lg border border-border bg-background px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-colors"
+                className="flex-1 rounded-lg bg-secondary px-4 py-2.5 text-xs font-semibold text-secondary-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+                onClick={() => handleApplyChanges('acceptForSession')}
+                disabled={isApplying}
+              >
+                Allow for Session
+              </button>
+              <button
+                className="rounded-lg border border-border bg-background px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-colors"
                 onClick={handleDecline}
               >
                 Decline
               </button>
             </div>
+
+            {/* Advanced Options Toggle */}
+            <button
+              className="mt-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+            >
+              {showAdvanced ? '▼ Hide options' : '▶ More options'}
+            </button>
+
+            {/* Advanced Actions */}
+            {showAdvanced && (
+              <div className="mt-2 flex gap-2 animate-in slide-in-from-top-2 duration-200">
+                <button
+                  className="flex-1 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-[11px] font-medium text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors disabled:opacity-50"
+                  onClick={() => handleApplyChanges('acceptAlways')}
+                  disabled={isApplying}
+                >
+                  Always Allow (Persistent)
+                </button>
+              </div>
+            )}
           </div>
         )}
 

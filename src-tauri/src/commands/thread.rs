@@ -166,6 +166,7 @@ pub async fn respond_to_approval(
     let decision = match decision.as_str() {
         "accept" => ApprovalDecision::Accept,
         "acceptForSession" => ApprovalDecision::AcceptForSession,
+        "acceptAlways" => ApprovalDecision::AcceptAlways,
         "decline" => ApprovalDecision::Decline,
         _ => return Err(crate::Error::Other(format!("Invalid decision: {}", decision))),
     };

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { threadApi, snapshotApi, type ThreadInfo, type Snapshot } from '../lib/api'
+import { parseError } from '../lib/errorUtils'
 import type {
   ItemStartedEvent,
   ItemCompletedEvent,
@@ -113,14 +114,14 @@ interface ThreadState {
     cwd: string,
     model?: string,
     sandboxMode?: string,
-    askForApproval?: string
+    approvalPolicy?: string
   ) => Promise<void>
   resumeThread: (threadId: string) => Promise<void>
   sendMessage: (text: string, images?: string[]) => Promise<void>
   interrupt: () => Promise<void>
   respondToApproval: (
     itemId: string,
-    decision: 'accept' | 'acceptForSession' | 'decline',
+    decision: 'accept' | 'acceptForSession' | 'acceptAlways' | 'decline',
     snapshotId?: string
   ) => Promise<void>
   clearThread: () => void
@@ -173,7 +174,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   isLoading: false,
   error: null,
 
-  startThread: async (projectId, cwd, model, sandboxMode, askForApproval) => {
+  startThread: async (projectId, cwd, model, sandboxMode, approvalPolicy) => {
     set({ isLoading: true, error: null })
     try {
       const response = await threadApi.start(
@@ -181,7 +182,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         cwd,
         model,
         sandboxMode,
-        askForApproval
+        approvalPolicy
       )
       set({
         activeThread: response.thread,
@@ -192,7 +193,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         isLoading: false,
       })
     } catch (error) {
-      set({ error: String(error), isLoading: false })
+      set({ error: parseError(error), isLoading: false })
       throw error
     }
   },
@@ -231,7 +232,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         isLoading: false,
       })
     } catch (error) {
-      set({ error: String(error), isLoading: false })
+      set({ error: parseError(error), isLoading: false })
       throw error
     }
   },
@@ -275,7 +276,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       await threadApi.interrupt(activeThread.id)
       set({ turnStatus: 'interrupted' })
     } catch (error) {
-      set({ error: String(error) })
+      set({ error: parseError(error) })
     }
   },
 
@@ -329,7 +330,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         }
       })
     } catch (error) {
-      set({ error: String(error) })
+      set({ error: parseError(error) })
       throw error
     }
   },

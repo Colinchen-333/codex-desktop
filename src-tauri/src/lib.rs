@@ -12,7 +12,7 @@ pub mod snapshots;
 mod error;
 mod state;
 
-pub use error::{Error, Result};
+pub use error::{CodexErrorInfo, CodexErrorType, Error, Result};
 pub use state::AppState;
 
 use tauri::Manager;
@@ -72,6 +72,9 @@ pub fn run() {
             commands::app_server::start_login,
             commands::app_server::logout,
             commands::app_server::get_models,
+            // Config commands
+            commands::app_server::read_config,
+            commands::app_server::write_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

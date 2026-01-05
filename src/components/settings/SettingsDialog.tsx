@@ -1,8 +1,17 @@
 import { useState, useEffect } from 'react'
 import { cn } from '../../lib/utils'
-import { serverApi, type AccountInfo } from '../../lib/api'
+import { serverApi, type AccountInfo, type Model } from '../../lib/api'
 import { useTheme } from '../../lib/theme'
-import { useSettingsStore, type Settings } from '../../stores/settings'
+import {
+  useSettingsStore,
+  type Settings,
+  type SandboxMode,
+  type ApprovalPolicy,
+  SANDBOX_MODE_OPTIONS,
+  APPROVAL_POLICY_OPTIONS,
+  REASONING_SUMMARY_OPTIONS,
+} from '../../stores/settings'
+import { useModelsStore, modelSupportsReasoning } from '../../stores/models'
 
 interface SettingsDialogProps {
   isOpen: boolean
@@ -173,12 +182,28 @@ function ModelSettings({
   settings: Settings
   updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void
 }) {
-  const models = [
-    { id: 'gpt-4o', name: 'GPT-4o', description: 'Most capable model, best for complex tasks' },
-    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Faster and more cost-effective' },
-    { id: 'o1', name: 'o1', description: 'Advanced reasoning capabilities' },
-    { id: 'o3-mini', name: 'o3-mini', description: 'Latest mini model with improved performance' },
-  ]
+  const { models, isLoading, error, fetchModels, getModelById, getDefaultModel } = useModelsStore()
+
+  // Fetch models on mount
+  useEffect(() => {
+    fetchModels()
+  }, [fetchModels])
+
+  // Auto-select default model if none is selected
+  useEffect(() => {
+    if (!settings.model && models.length > 0) {
+      const defaultModel = getDefaultModel()
+      if (defaultModel) {
+        updateSetting('model', defaultModel.model)
+      }
+    }
+  }, [settings.model, models, getDefaultModel, updateSetting])
+
+  const currentModel = getModelById(settings.model) || getDefaultModel()
+  const supportsReasoning = currentModel ? modelSupportsReasoning(currentModel) : false
+
+  // Get reasoning effort options from current model
+  const reasoningEffortOptions = currentModel?.supportedReasoningEfforts || []
 
   return (
     <div className="space-y-6">
@@ -186,33 +211,126 @@ function ModelSettings({
 
       <div>
         <label className="mb-2 block text-sm font-medium">Default Model</label>
-        <div className="space-y-2">
-          {models.map((model) => (
-            <label
-              key={model.id}
-              className={cn(
-                'flex cursor-pointer items-center gap-3 rounded-lg border p-3',
-                settings.model === model.id
-                  ? 'border-primary bg-primary/5'
-                  : 'border-border hover:border-primary/50'
-              )}
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            Loading models...
+          </div>
+        ) : error ? (
+          <div className="text-sm text-destructive py-2">
+            Failed to load models: {error}
+            <button
+              className="ml-2 text-primary underline"
+              onClick={() => fetchModels()}
             >
-              <input
-                type="radio"
-                name="model"
-                value={model.id}
-                checked={settings.model === model.id}
-                onChange={(e) => updateSetting('model', e.target.value)}
-                className="h-4 w-4"
-              />
-              <div>
-                <div className="font-medium">{model.name}</div>
-                <div className="text-xs text-muted-foreground">{model.description}</div>
-              </div>
-            </label>
-          ))}
-        </div>
+              Retry
+            </button>
+          </div>
+        ) : models.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-2">
+            No models available. Make sure Codex CLI is running.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {models.map((model) => {
+              // Check if this model is selected (either explicitly or as default when no model is set)
+              const isSelected = settings.model === model.model || (!settings.model && model.isDefault)
+              return (
+              <label
+                key={model.id}
+                className={cn(
+                  'flex cursor-pointer items-center gap-3 rounded-lg border p-3',
+                  isSelected
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-primary/50'
+                )}
+              >
+                <input
+                  type="radio"
+                  name="model"
+                  value={model.model}
+                  checked={isSelected}
+                  onChange={(e) => updateSetting('model', e.target.value)}
+                  className="h-4 w-4"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{model.displayName}</span>
+                    {model.isDefault && (
+                      <span className="text-[10px] bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-1.5 py-0.5 rounded">
+                        Default
+                      </span>
+                    )}
+                    {modelSupportsReasoning(model) && (
+                      <span className="text-[10px] bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 px-1.5 py-0.5 rounded">
+                        Reasoning
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">{model.description}</div>
+                </div>
+              </label>
+              )
+            })}
+          </div>
+        )}
       </div>
+
+      {/* Reasoning Effort - only shown for models that support it */}
+      {supportsReasoning && reasoningEffortOptions.length > 0 && (
+        <>
+          <div>
+            <label className="mb-2 block text-sm font-medium">Reasoning Effort</label>
+            <div className="grid grid-cols-3 gap-2">
+              {reasoningEffortOptions.map((option) => (
+                <button
+                  key={option.reasoningEffort}
+                  className={cn(
+                    'rounded-lg border px-3 py-2 text-left transition-colors',
+                    settings.reasoningEffort === option.reasoningEffort
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border hover:border-primary/50'
+                  )}
+                  onClick={() => updateSetting('reasoningEffort', option.reasoningEffort as Settings['reasoningEffort'])}
+                >
+                  <div className="text-sm font-medium capitalize">{option.reasoningEffort.replace('_', ' ')}</div>
+                  <div className="text-[10px] text-muted-foreground line-clamp-2">{option.description}</div>
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              How deeply the model should think before responding. Higher effort may improve quality but increases response time.
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium">Reasoning Summary</label>
+            <div className="flex gap-2">
+              {REASONING_SUMMARY_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  className={cn(
+                    'flex-1 rounded-lg border px-3 py-2 text-center transition-colors',
+                    settings.reasoningSummary === option.value
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border hover:border-primary/50'
+                  )}
+                  onClick={() => updateSetting('reasoningSummary', option.value)}
+                >
+                  <div className="text-sm font-medium">{option.label}</div>
+                  <div className="text-[10px] text-muted-foreground">{option.description}</div>
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              How much of the model's reasoning process to include in responses.
+            </p>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -231,33 +349,67 @@ function SafetySettings({
 
       <div>
         <label className="mb-2 block text-sm font-medium">Sandbox Mode</label>
-        <select
-          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          value={settings.sandboxMode}
-          onChange={(e) => updateSetting('sandboxMode', e.target.value as Settings['sandboxMode'])}
-        >
-          <option value="strict">Strict - Isolated environment only</option>
-          <option value="permissive">Permissive - Limited file system access</option>
-          <option value="off">Off - Full access (use with caution)</option>
-        </select>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <div className="space-y-2">
+          {SANDBOX_MODE_OPTIONS.map((option) => (
+            <label
+              key={option.value}
+              className={cn(
+                'flex cursor-pointer items-center gap-3 rounded-lg border p-3',
+                settings.sandboxMode === option.value
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border hover:border-primary/50'
+              )}
+            >
+              <input
+                type="radio"
+                name="sandboxMode"
+                value={option.value}
+                checked={settings.sandboxMode === option.value}
+                onChange={(e) => updateSetting('sandboxMode', e.target.value as SandboxMode)}
+                className="h-4 w-4"
+              />
+              <div>
+                <div className="font-medium">{option.label}</div>
+                <div className="text-xs text-muted-foreground">{option.description}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
           Controls how Codex interacts with your file system
         </p>
       </div>
 
       <div>
-        <label className="mb-2 block text-sm font-medium">Approval Mode</label>
-        <select
-          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          value={settings.askForApproval}
-          onChange={(e) => updateSetting('askForApproval', e.target.value as Settings['askForApproval'])}
-        >
-          <option value="always">Always ask for approval</option>
-          <option value="auto">Auto-approve safe operations</option>
-          <option value="never">Never ask (not recommended)</option>
-        </select>
-        <p className="mt-1 text-xs text-muted-foreground">
-          When to ask for your confirmation before executing commands
+        <label className="mb-2 block text-sm font-medium">Approval Policy</label>
+        <div className="space-y-2">
+          {APPROVAL_POLICY_OPTIONS.map((option) => (
+            <label
+              key={option.value}
+              className={cn(
+                'flex cursor-pointer items-center gap-3 rounded-lg border p-3',
+                settings.approvalPolicy === option.value
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border hover:border-primary/50'
+              )}
+            >
+              <input
+                type="radio"
+                name="approvalPolicy"
+                value={option.value}
+                checked={settings.approvalPolicy === option.value}
+                onChange={(e) => updateSetting('approvalPolicy', e.target.value as ApprovalPolicy)}
+                className="h-4 w-4"
+              />
+              <div>
+                <div className="font-medium">{option.label}</div>
+                <div className="text-xs text-muted-foreground">{option.description}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          When to ask for your confirmation before executing changes
         </p>
       </div>
     </div>

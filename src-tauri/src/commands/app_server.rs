@@ -148,3 +148,82 @@ pub async fn get_models(state: State<'_, AppState>) -> Result<ModelListResponse>
 
     Ok(response)
 }
+
+// ==================== Config Commands ====================
+
+/// Config layer information
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigLayer {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub config: serde_json::Value,
+}
+
+/// Config origin information
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigOrigin {
+    pub layer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// Config read response
+#[derive(Debug, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigReadResponse {
+    pub config: serde_json::Value,
+    pub origins: std::collections::HashMap<String, ConfigOrigin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<ConfigLayer>>,
+}
+
+/// Read configuration
+#[tauri::command]
+pub async fn read_config(
+    state: State<'_, AppState>,
+    include_layers: Option<bool>,
+) -> Result<ConfigReadResponse> {
+    // Ensure app-server is running
+    state.start_app_server().await?;
+
+    let mut server = state.app_server.write().await;
+    let server = server
+        .as_mut()
+        .ok_or_else(|| crate::Error::AppServer("App server not running".to_string()))?;
+
+    let params = serde_json::json!({
+        "includeLayers": include_layers.unwrap_or(false),
+    });
+
+    let response: ConfigReadResponse = server.send_request("config/read", params).await?;
+
+    Ok(response)
+}
+
+/// Write configuration
+#[tauri::command]
+pub async fn write_config(
+    state: State<'_, AppState>,
+    key: String,
+    value: serde_json::Value,
+) -> Result<()> {
+    // Ensure app-server is running
+    state.start_app_server().await?;
+
+    let mut server = state.app_server.write().await;
+    let server = server
+        .as_mut()
+        .ok_or_else(|| crate::Error::AppServer("App server not running".to_string()))?;
+
+    let params = serde_json::json!({
+        "key": key,
+        "value": value,
+    });
+
+    let _: serde_json::Value = server.send_request("config/write", params).await?;
+
+    Ok(())
+}

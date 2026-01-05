@@ -46,13 +46,20 @@ export interface ThreadInfo {
   gitInfo?: ThreadGitInfo
 }
 
+// Sandbox policy (tagged union from API response)
+export type SandboxPolicy =
+  | { type: 'readOnly' }
+  | { type: 'workspaceWrite'; writableRoots?: string[]; networkAccess?: boolean }
+  | { type: 'dangerFullAccess' }
+  | { type: 'externalSandbox'; networkAccess?: string }
+
 export interface ThreadStartResponse {
   thread: ThreadInfo
   model: string
   modelProvider: string
   cwd: string
   approvalPolicy: string
-  sandbox: string
+  sandbox: SandboxPolicy
   reasoningEffort?: string
 }
 
@@ -112,6 +119,27 @@ export interface Model {
 export interface ModelListResponse {
   data: Model[]
   nextCursor: string | null
+}
+
+// ==================== Config Types ====================
+
+export interface ConfigLayer {
+  name: string
+  path?: string
+  config: Record<string, unknown>
+}
+
+export interface ConfigOrigins {
+  [key: string]: {
+    layer: string
+    path?: string
+  }
+}
+
+export interface ConfigReadResponse {
+  config: Record<string, unknown>
+  origins: ConfigOrigins
+  layers?: ConfigLayer[]
 }
 
 export interface Snapshot {
@@ -178,9 +206,10 @@ export const threadApi = {
     invoke<ThreadStartResponse>('start_thread', {
       projectId,
       cwd,
-      model,
-      sandbox,
-      approvalPolicy,
+      // Only send non-empty values
+      model: model || undefined,
+      sandbox: sandbox || undefined,
+      approvalPolicy: approvalPolicy || undefined,
     }),
 
   resume: (threadId: string) =>
@@ -245,4 +274,14 @@ export const serverApi = {
   logout: () => invoke<void>('logout'),
 
   getModels: () => invoke<ModelListResponse>('get_models'),
+}
+
+// ==================== Config API ====================
+
+export const configApi = {
+  read: (includeLayers?: boolean) =>
+    invoke<ConfigReadResponse>('read_config', { includeLayers }),
+
+  write: (key: string, value: unknown) =>
+    invoke<void>('write_config', { key, value }),
 }
