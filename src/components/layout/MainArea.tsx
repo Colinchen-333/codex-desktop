@@ -49,7 +49,7 @@ export function MainArea() {
 // Welcome View when no project is selected
 function WelcomeView() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-background p-8">
+    <div className="flex flex-1 flex-col items-center justify-center p-8">
       <div className="max-w-md text-center">
         <h1 className="mb-4 text-3xl font-bold text-foreground">
           Welcome to Codex Desktop
@@ -102,7 +102,7 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-background p-8">
+    <div className="flex flex-1 flex-col items-center justify-center p-8">
       <div className="max-w-md text-center">
         <div className="mb-6">
           <h1 className="mb-2 text-2xl font-bold text-foreground">

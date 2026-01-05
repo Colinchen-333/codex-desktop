@@ -126,14 +126,14 @@ export function Sidebar() {
   }
 
   return (
-    <div className="flex h-full w-64 flex-col border-r border-border bg-card">
+    <div className="flex h-full w-64 flex-col bg-background p-3">
       {/* Tab Headers */}
-      <div className="flex border-b border-border">
+      <div className="flex mb-4 rounded-lg bg-secondary/50 p-1">
         <button
           className={cn(
-            'flex-1 px-4 py-3 text-sm font-medium transition-colors',
+            'flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all',
             activeTab === 'projects'
-              ? 'border-b-2 border-primary text-foreground'
+              ? 'bg-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
           )}
           onClick={() => setActiveTab('projects')}
@@ -142,9 +142,9 @@ export function Sidebar() {
         </button>
         <button
           className={cn(
-            'flex-1 px-4 py-3 text-sm font-medium transition-colors',
+            'flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all',
             activeTab === 'sessions'
-              ? 'border-b-2 border-primary text-foreground'
+              ? 'bg-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
           )}
           onClick={() => setActiveTab('sessions')}
@@ -154,7 +154,7 @@ export function Sidebar() {
       </div>
 
       {/* Tab Content */}
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto -mx-2 px-2">
         {activeTab === 'projects' ? (
           <ProjectList
             projects={projects}
@@ -190,13 +190,13 @@ export function Sidebar() {
       </div>
 
       {/* Add Button */}
-      <div className="border-t border-border p-2">
+      <div className="mt-2 pt-2">
         <button
-          className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 shadow-sm"
           onClick={activeTab === 'projects' ? handleAddProject : handleNewSession}
           disabled={activeTab === 'sessions' && !selectedProjectId}
         >
-          {activeTab === 'projects' ? '+ Add Project' : '+ New Session'}
+          {activeTab === 'projects' ? 'Add Project' : 'New Session'}
         </button>
       </div>
 
@@ -271,10 +271,10 @@ function ProjectList({ projects, selectedId, onSelect, onRename, onDelete }: Pro
           <ContextMenu key={project.id} items={contextMenuItems}>
             <button
               className={cn(
-                'w-full rounded-md px-3 py-2 text-left transition-colors',
+                'w-full rounded-md px-3 py-2 text-left transition-all mb-1',
                 selectedId === project.id
-                  ? 'bg-accent text-accent-foreground'
-                  : 'hover:bg-accent/50'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
               )}
               onClick={() => onSelect(project.id)}
             >
@@ -376,10 +376,10 @@ function SessionList({
           <ContextMenu key={session.sessionId} items={contextMenuItems}>
             <button
               className={cn(
-                'w-full rounded-md px-3 py-2 text-left transition-colors',
+                'w-full rounded-md px-3 py-2 text-left transition-all mb-1',
                 selectedId === session.sessionId
-                  ? 'bg-accent text-accent-foreground'
-                  : 'hover:bg-accent/50'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
               )}
               onClick={() => onSelect(session.sessionId)}
             >

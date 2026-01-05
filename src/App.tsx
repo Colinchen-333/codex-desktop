@@ -86,12 +86,12 @@ function App() {
     <ErrorBoundary>
       <ToastProvider>
         <KeyboardShortcuts />
-        <div className="flex h-screen w-screen overflow-hidden bg-background">
+        <div className="flex h-screen w-screen overflow-hidden bg-background p-3 gap-3">
           {/* Left Sidebar */}
           <Sidebar />
 
           {/* Main Content Area */}
-          <div className="flex flex-1 flex-col overflow-hidden">
+          <div className="flex flex-1 flex-col overflow-hidden rounded-2xl bg-card shadow-sm border border-border/50 relative">
             <MainArea />
             <StatusBar />
           </div>
