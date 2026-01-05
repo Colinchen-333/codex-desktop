@@ -18,6 +18,10 @@ pub struct ThreadStartParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
+    /// Model provider (e.g., "openai", "anthropic")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+
     /// Sandbox policy: "readOnly" | "workspaceWrite" | "dangerFullAccess"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
@@ -25,6 +29,18 @@ pub struct ThreadStartParams {
     /// Approval policy: "never" | "onRequest" | "onFailure" | "unlessTrusted"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
+
+    /// Base instructions for the agent
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<String>,
+
+    /// Developer instructions (overrides base)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub developer_instructions: Option<String>,
+
+    /// Additional configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<JsonValue>,
 }
 
 /// Thread start response
@@ -32,6 +48,13 @@ pub struct ThreadStartParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartResponse {
     pub thread: ThreadInfo,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: String,
+    pub approval_policy: String,
+    pub sandbox: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Thread information
@@ -42,6 +65,14 @@ pub struct ThreadInfo {
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cli_version: Option<String>,
 }
 
 /// Thread resume parameters
@@ -68,6 +99,10 @@ pub struct ThreadListParams {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+
+    /// Filter by model providers (e.g., ["openai", "anthropic"])
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_providers: Option<Vec<String>>,
 }
 
 /// Thread list response
@@ -80,16 +115,31 @@ pub struct ThreadListResponse {
     pub next_cursor: Option<String>,
 }
 
+/// Git information
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GitInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_url: Option<String>,
+}
+
 /// Thread summary for listing
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
     pub id: String,
+    pub preview: String,
+    pub model_provider: String,
+    pub created_at: i64,  // Unix timestamp
     pub cwd: String,
-    pub created_at: String,
-    pub updated_at: String,
+    pub cli_version: String,
+    pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    pub git_info: Option<GitInfo>,
 }
 
 /// Turn start parameters
@@ -98,6 +148,30 @@ pub struct ThreadSummary {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+
+    /// Optional reasoning effort: "none" | "minimal" | "low" | "medium" | "high" | "x_high"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+
+    /// Optional reasoning summary config: "none" | "concise" | "detailed"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+
+    /// Optional CWD override
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+
+    /// Optional approval policy override
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<String>,
+
+    /// Optional sandbox policy override
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<String>,
+
+    /// Optional model override
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// User input types

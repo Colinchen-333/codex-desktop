@@ -29,14 +29,31 @@ export interface GitInfo {
   lastCommit: string | null
 }
 
+export interface ThreadGitInfo {
+  sha?: string
+  branch?: string
+  originUrl?: string
+}
+
 export interface ThreadInfo {
   id: string
   cwd: string
-  model: string | null
+  model?: string
+  modelProvider?: string
+  preview?: string
+  createdAt?: number
+  cliVersion?: string
+  gitInfo?: ThreadGitInfo
 }
 
 export interface ThreadStartResponse {
   thread: ThreadInfo
+  model: string
+  modelProvider: string
+  cwd: string
+  approvalPolicy: string
+  sandbox: string
+  reasoningEffort?: string
 }
 
 export interface ThreadResumeResponse {
@@ -169,8 +186,24 @@ export const threadApi = {
   resume: (threadId: string) =>
     invoke<ThreadResumeResponse>('resume_thread', { threadId }),
 
-  sendMessage: (threadId: string, text: string, images?: string[]) =>
-    invoke<TurnStartResponse>('send_message', { threadId, text, images }),
+  sendMessage: (
+    threadId: string,
+    text: string,
+    images?: string[],
+    options?: {
+      effort?: string
+      summary?: string
+      model?: string
+      approvalPolicy?: string
+      sandboxPolicy?: string
+    }
+  ) =>
+    invoke<TurnStartResponse>('send_message', {
+      threadId,
+      text,
+      images,
+      ...options,
+    }),
 
   interrupt: (threadId: string) =>
     invoke<void>('interrupt_turn', { threadId }),

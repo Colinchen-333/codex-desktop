@@ -30,8 +30,12 @@ pub async fn start_thread(
     let params = ThreadStartParams {
         cwd: Some(cwd.clone()),
         model,
+        model_provider: None,
         sandbox,
         approval_policy,
+        base_instructions: None,
+        developer_instructions: None,
+        config: None,
     };
 
     let mut server = state.app_server.write().await;
@@ -83,6 +87,11 @@ pub async fn send_message(
     thread_id: String,
     text: String,
     images: Option<Vec<String>>,
+    effort: Option<String>,
+    summary: Option<String>,
+    model: Option<String>,
+    approval_policy: Option<String>,
+    sandbox_policy: Option<String>,
 ) -> Result<TurnStartResponse> {
     let mut input: Vec<UserInput> = vec![UserInput::Text { text }];
 
@@ -101,7 +110,16 @@ pub async fn send_message(
         }
     }
 
-    let params = TurnStartParams { thread_id, input };
+    let params = TurnStartParams {
+        thread_id,
+        input,
+        effort,
+        summary,
+        cwd: None,
+        approval_policy,
+        sandbox_policy,
+        model,
+    };
 
     let mut server = state.app_server.write().await;
     let server = server
@@ -177,7 +195,11 @@ pub async fn list_threads(
     // Ensure app-server is running
     state.start_app_server().await?;
 
-    let params = ThreadListParams { limit, cursor };
+    let params = ThreadListParams {
+        limit,
+        cursor,
+        model_providers: None,
+    };
 
     let mut server = state.app_server.write().await;
     let server = server
