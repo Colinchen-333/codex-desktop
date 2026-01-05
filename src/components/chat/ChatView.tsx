@@ -19,6 +19,31 @@ import { serverApi, projectApi } from '../../lib/api'
 // Maximum height for the textarea (in pixels)
 const MAX_TEXTAREA_HEIGHT = 200
 
+// Maximum lines before truncating output
+const MAX_OUTPUT_LINES = 50
+
+// Format timestamp for display
+function formatTimestamp(ts: number): string {
+  const date = new Date(ts)
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+
+  if (isToday) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+// Truncate output and return truncation info
+function truncateOutput(output: string, maxLines: number = MAX_OUTPUT_LINES): { text: string; truncated: boolean; omittedLines: number } {
+  const lines = output.split('\n')
+  if (lines.length <= maxLines) {
+    return { text: output, truncated: false, omittedLines: 0 }
+  }
+  const truncatedText = lines.slice(0, maxLines).join('\n')
+  return { text: truncatedText, truncated: true, omittedLines: lines.length - maxLines }
+}
+
 export function ChatView() {
   const { items, itemOrder, turnStatus, sendMessage, interrupt, addInfoItem } = useThreadStore()
   const { shouldFocusInput, clearFocusInput } = useAppStore()
@@ -592,7 +617,7 @@ function MessageItem({ item }: MessageItemProps) {
     case 'plan':
       return <PlanCard item={item} />
     default:
-      console.warn(`Unknown item type: ${item.type}`)
+      console.warn(`Unknown item type: ${(item as AnyThreadItem).type}`)
       return null
   }
 }
@@ -667,6 +692,7 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
   const { respondToApproval, activeThread } = useThreadStore()
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [isExpanded, setIsExpanded] = useState(true)
+  const [showFullOutput, setShowFullOutput] = useState(false)
   const outputRef = useRef<HTMLPreElement>(null)
 
   // Format command for display
@@ -675,7 +701,9 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
     : content.command
 
   // Get output content (prefer output, fallback to stdout)
-  const outputContent = content.output || content.stdout || ''
+  const rawOutput = content.output || content.stdout || ''
+  const { text: outputContent, truncated: isOutputTruncated, omittedLines } =
+    showFullOutput ? { text: rawOutput, truncated: false, omittedLines: 0 } : truncateOutput(rawOutput)
 
   // Auto-scroll output when streaming
   useEffect(() => {
@@ -750,6 +778,10 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
                   : `${(content.durationMs / 1000).toFixed(1)}s`}
               </span>
             )}
+            {/* Timestamp */}
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatTimestamp(item.createdAt)}
+            </span>
             <span className="text-muted-foreground text-xs">
               {isExpanded ? '▼' : '▶'}
             </span>
@@ -779,7 +811,7 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
             )}
 
             {/* Output */}
-            {(outputContent || content.isRunning) && (
+            {(rawOutput || content.isRunning) && (
               <div>
                 <div className="mb-1 text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                   Output
@@ -800,6 +832,25 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
                 >
                   {outputContent || (content.isRunning ? '...' : '')}
                 </pre>
+                {/* Truncation indicator */}
+                {isOutputTruncated && !content.isRunning && (
+                  <button
+                    className="mt-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+                    onClick={() => setShowFullOutput(true)}
+                  >
+                    <span className="text-yellow-600 dark:text-yellow-400">...</span>
+                    +{omittedLines} lines hidden
+                    <span className="text-blue-500 hover:underline">Show all</span>
+                  </button>
+                )}
+                {showFullOutput && rawOutput.split('\n').length > MAX_OUTPUT_LINES && (
+                  <button
+                    className="mt-1 text-[10px] text-blue-500 hover:underline"
+                    onClick={() => setShowFullOutput(false)}
+                  >
+                    Collapse output
+                  </button>
+                )}
               </div>
             )}
 
@@ -975,10 +1026,14 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
             </div>
             <span className="text-xs font-medium text-foreground">Proposed Changes</span>
           </div>
-          <div className="flex gap-3 text-[10px] font-medium">
+          <div className="flex items-center gap-3 text-[10px] font-medium">
             {addCount > 0 && <span className="text-green-600 bg-green-50 dark:bg-green-900/20 px-1.5 py-0.5 rounded">+{addCount} added</span>}
             {modifyCount > 0 && <span className="text-yellow-600 bg-yellow-50 dark:bg-yellow-900/20 px-1.5 py-0.5 rounded">~{modifyCount} modified</span>}
             {deleteCount > 0 && <span className="text-red-600 bg-red-50 dark:bg-red-900/20 px-1.5 py-0.5 rounded">-{deleteCount} deleted</span>}
+            {/* Timestamp */}
+            <span className="text-muted-foreground/60 font-normal">
+              {formatTimestamp(item.createdAt)}
+            </span>
           </div>
         </div>
 
@@ -1061,6 +1116,9 @@ function ReasoningCard({ item }: { item: AnyThreadItem }) {
     isStreaming: boolean
   }
   const [isExpanded, setIsExpanded] = useState(false)
+  const [showFullContent, setShowFullContent] = useState(false)
+
+  const hasFullContent = content.fullContent && content.fullContent.length > 0
 
   return (
     <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
@@ -1094,19 +1152,65 @@ function ReasoningCard({ item }: { item: AnyThreadItem }) {
               </span>
             )}
           </div>
-          <span className="text-muted-foreground text-xs">
-            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </span>
+          <div className="flex items-center gap-2">
+            {/* Timestamp */}
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatTimestamp(item.createdAt)}
+            </span>
+            <span className="text-muted-foreground text-xs">
+              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </span>
+          </div>
         </div>
 
         {/* Content */}
-        {isExpanded && content.summary && content.summary.length > 0 && (
-          <div className="p-4 space-y-2">
-            {content.summary.map((text, i) => (
-              <div key={i} className="text-sm text-muted-foreground leading-relaxed">
-                {text}
+        {isExpanded && (
+          <div className="p-4 space-y-3">
+            {/* View mode toggle - only if fullContent exists */}
+            {hasFullContent && (
+              <div className="flex items-center gap-2 text-[10px]">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowFullContent(false) }}
+                  className={cn(
+                    'px-2 py-0.5 rounded transition-colors',
+                    !showFullContent ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : 'text-muted-foreground hover:bg-secondary'
+                  )}
+                >
+                  Summary
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowFullContent(true) }}
+                  className={cn(
+                    'px-2 py-0.5 rounded transition-colors',
+                    showFullContent ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : 'text-muted-foreground hover:bg-secondary'
+                  )}
+                >
+                  Full Thinking
+                </button>
               </div>
-            ))}
+            )}
+
+            {/* Summary content */}
+            {(!showFullContent || !hasFullContent) && content.summary && content.summary.length > 0 && (
+              <div className="space-y-2">
+                {content.summary.map((text, i) => (
+                  <div key={i} className="text-sm text-muted-foreground leading-relaxed">
+                    • {text}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Full content */}
+            {showFullContent && hasFullContent && (
+              <div className="space-y-2 max-h-80 overflow-y-auto">
+                {content.fullContent!.map((text, i) => (
+                  <p key={i} className="text-sm text-foreground/80 leading-relaxed">
+                    {text}
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -1187,6 +1291,10 @@ function McpToolCard({ item }: { item: AnyThreadItem }) {
                   : `${(content.durationMs / 1000).toFixed(1)}s`}
               </span>
             )}
+            {/* Timestamp */}
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatTimestamp(item.createdAt)}
+            </span>
             <span className="text-muted-foreground text-xs">
               {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </span>
@@ -1270,9 +1378,18 @@ function WebSearchCard({ item }: { item: AnyThreadItem }) {
             </div>
             <span className="text-xs font-medium text-foreground">Web Search</span>
           </div>
-          {content.isSearching && (
-            <span className="text-[10px] text-muted-foreground">Searching...</span>
-          )}
+          <div className="flex items-center gap-2">
+            {content.isSearching && (
+              <span className="flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+                Searching...
+              </span>
+            )}
+            {/* Timestamp */}
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatTimestamp(item.createdAt)}
+            </span>
+          </div>
         </div>
         <div className="p-4 space-y-3">
           <div className="text-sm text-muted-foreground">Query: {content.query}</div>
@@ -1308,6 +1425,10 @@ function ReviewCard({ item }: { item: AnyThreadItem }) {
               {content.phase === 'started' ? 'Review started' : 'Review complete'}
             </span>
           </div>
+          {/* Timestamp */}
+          <span className="text-[10px] text-muted-foreground/60">
+            {formatTimestamp(item.createdAt)}
+          </span>
         </div>
         <div className="p-4">
           <Markdown content={content.text} />
@@ -1330,6 +1451,10 @@ function InfoCard({ item }: { item: AnyThreadItem }) {
             </div>
             <span className="text-xs font-medium text-foreground">{content.title}</span>
           </div>
+          {/* Timestamp */}
+          <span className="text-[10px] text-muted-foreground/60">
+            {formatTimestamp(item.createdAt)}
+          </span>
         </div>
         {content.details && (
           <pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap font-mono">
@@ -1371,11 +1496,17 @@ function ErrorCard({ item }: { item: AnyThreadItem }) {
               </span>
             )}
           </div>
-          {content.willRetry && (
-            <span className="text-[10px] text-amber-600 dark:text-amber-400">
-              Will retry...
+          <div className="flex items-center gap-2">
+            {content.willRetry && (
+              <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                Will retry...
+              </span>
+            )}
+            {/* Timestamp */}
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatTimestamp(item.createdAt)}
             </span>
-          )}
+          </div>
         </div>
 
         {/* Content */}
@@ -1461,6 +1592,10 @@ function PlanCard({ item }: { item: AnyThreadItem }) {
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
+            {/* Timestamp */}
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatTimestamp(item.createdAt)}
+            </span>
             <span className="text-muted-foreground text-xs">
               {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </span>

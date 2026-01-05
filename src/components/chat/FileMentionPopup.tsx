@@ -27,7 +27,7 @@ export function FileMentionPopup({
   const [isLoading, setIsLoading] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
-  const debounceRef = useRef<NodeJS.Timeout>()
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // Fetch files with debouncing
   const fetchFiles = useCallback(async (searchQuery: string) => {

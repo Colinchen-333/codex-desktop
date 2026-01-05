@@ -76,7 +76,7 @@ export function Sidebar() {
 
   // Search state with debounce
   const [localSearchQuery, setLocalSearchQuery] = useState('')
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Debounced search
   const handleSearchChange = useCallback(

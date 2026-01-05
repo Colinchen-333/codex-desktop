@@ -1,13 +1,10 @@
-import { useEffect, useState, useCallback } from 'react'
-import { cn } from '../../lib/utils'
-import { projectApi, type Project } from '../../lib/api'
+import { useEffect, useState } from 'react'
+import { projectApi } from '../../lib/api'
 import { useProjectsStore } from '../../stores/projects'
-import { useModelsStore, modelSupportsReasoning } from '../../stores/models'
+import { useModelsStore } from '../../stores/models'
 import {
   SANDBOX_MODE_OPTIONS,
   APPROVAL_POLICY_OPTIONS,
-  type SandboxMode,
-  type ApprovalPolicy,
 } from '../../stores/settings'
 
 interface ProjectSettingsDialogProps {
