@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { cn } from '../../lib/utils'
 import { useProjectsStore } from '../../stores/projects'
@@ -9,12 +9,36 @@ import { useToast } from '../ui/Toast'
 
 type Tab = 'projects' | 'sessions'
 
+// Helper function to format relative time
+function formatRelativeTime(timestamp: number): string {
+  const now = Date.now()
+  const diff = now - timestamp
+
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days = Math.floor(diff / 86400000)
+
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes}m ago`
+  if (hours < 24) return `${hours}h ago`
+  if (days < 7) return `${days}d ago`
+  return new Date(timestamp).toLocaleDateString()
+}
+
 export function Sidebar() {
   const [activeTab, setActiveTab] = useState<Tab>('projects')
   const { projects, selectedProjectId, selectProject, addProject, removeProject, updateProject } =
     useProjectsStore()
-  const { sessions, selectedSessionId, selectSession } = useSessionsStore()
+  const { sessions, selectedSessionId, selectSession, fetchSessions, updateSession, deleteSession, isLoading: sessionsLoading } =
+    useSessionsStore()
   const { showToast } = useToast()
+
+  // Fetch sessions when project is selected
+  useEffect(() => {
+    if (selectedProjectId) {
+      fetchSessions(selectedProjectId)
+    }
+  }, [selectedProjectId, fetchSessions])
 
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
@@ -112,6 +136,23 @@ export function Sidebar() {
             sessions={sessions}
             selectedId={selectedSessionId}
             onSelect={selectSession}
+            onToggleFavorite={async (sessionId, isFavorite) => {
+              try {
+                await updateSession(sessionId, { isFavorite: !isFavorite })
+              } catch (error) {
+                showToast('Failed to update session', 'error')
+              }
+            }}
+            onDelete={async (sessionId) => {
+              try {
+                await deleteSession(sessionId)
+                showToast('Session deleted', 'success')
+              } catch (error) {
+                showToast('Failed to delete session', 'error')
+              }
+            }}
+            isLoading={sessionsLoading}
+            hasProject={!!selectedProjectId}
           />
         )}
       </div>
@@ -228,9 +269,38 @@ interface SessionListProps {
   }>
   selectedId: string | null
   onSelect: (id: string | null) => void
+  onToggleFavorite: (sessionId: string, isFavorite: boolean) => void
+  onDelete: (sessionId: string) => void
+  isLoading: boolean
+  hasProject: boolean
 }
 
-function SessionList({ sessions, selectedId, onSelect }: SessionListProps) {
+function SessionList({
+  sessions,
+  selectedId,
+  onSelect,
+  onToggleFavorite,
+  onDelete,
+  isLoading,
+  hasProject,
+}: SessionListProps) {
+  if (!hasProject) {
+    return (
+      <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+        Select a project to view sessions
+      </div>
+    )
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+        <div className="animate-spin mr-2">⚙️</div>
+        Loading sessions...
+      </div>
+    )
+  }
+
   if (sessions.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
@@ -239,40 +309,70 @@ function SessionList({ sessions, selectedId, onSelect }: SessionListProps) {
     )
   }
 
+  // Sort sessions: favorites first, then by last accessed or created time
+  const sortedSessions = [...sessions].sort((a, b) => {
+    if (a.isFavorite !== b.isFavorite) {
+      return a.isFavorite ? -1 : 1
+    }
+    const timeA = a.lastAccessedAt || a.createdAt
+    const timeB = b.lastAccessedAt || b.createdAt
+    return timeB - timeA
+  })
+
   return (
     <div className="space-y-1">
-      {sessions.map((session) => {
+      {sortedSessions.map((session) => {
         const tags = session.tags ? JSON.parse(session.tags) : []
+        const timeAgo = formatRelativeTime(session.lastAccessedAt || session.createdAt)
+
+        const contextMenuItems: ContextMenuItem[] = [
+          {
+            label: session.isFavorite ? 'Remove from favorites' : 'Add to favorites',
+            icon: session.isFavorite ? '☆' : '★',
+            onClick: () => onToggleFavorite(session.sessionId, session.isFavorite),
+          },
+          {
+            label: 'Delete',
+            icon: '🗑️',
+            onClick: () => onDelete(session.sessionId),
+            variant: 'danger',
+          },
+        ]
+
         return (
-          <button
-            key={session.sessionId}
-            className={cn(
-              'w-full rounded-md px-3 py-2 text-left transition-colors',
-              selectedId === session.sessionId
-                ? 'bg-accent text-accent-foreground'
-                : 'hover:bg-accent/50'
-            )}
-            onClick={() => onSelect(session.sessionId)}
-          >
-            <div className="flex items-center gap-2">
-              {session.isFavorite && <span className="text-yellow-500">★</span>}
-              <span className="truncate text-sm font-medium">
-                {session.title || `Session ${session.sessionId.slice(0, 8)}`}
-              </span>
-            </div>
-            {tags.length > 0 && (
-              <div className="mt-1 flex flex-wrap gap-1">
-                {tags.slice(0, 3).map((tag: string) => (
-                  <span
-                    key={tag}
-                    className="rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground"
-                  >
-                    {tag}
+          <ContextMenu key={session.sessionId} items={contextMenuItems}>
+            <button
+              className={cn(
+                'w-full rounded-md px-3 py-2 text-left transition-colors',
+                selectedId === session.sessionId
+                  ? 'bg-accent text-accent-foreground'
+                  : 'hover:bg-accent/50'
+              )}
+              onClick={() => onSelect(session.sessionId)}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {session.isFavorite && <span className="text-yellow-500 flex-shrink-0">★</span>}
+                  <span className="truncate text-sm font-medium">
+                    {session.title || `Session ${session.sessionId.slice(0, 8)}`}
                   </span>
-                ))}
+                </div>
+                <span className="text-xs text-muted-foreground flex-shrink-0">{timeAgo}</span>
               </div>
-            )}
-          </button>
+              {tags.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {tags.slice(0, 3).map((tag: string) => (
+                    <span
+                      key={tag}
+                      className="rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </button>
+          </ContextMenu>
         )
       })}
     </div>
