@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { serverApi, allowlistApi, type AccountInfo } from '../../lib/api'
@@ -33,11 +33,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
       serverApi.getAccountInfo().then(setAccountInfo).catch(console.error)
     }
   }, [isOpen])
-
-  const handleSave = () => {
-    // Settings are already saved via zustand persist
-    onClose()
-  }
 
   if (!isOpen) return null
 
@@ -420,6 +415,22 @@ function AccountSettings({
 }) {
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+        pollIntervalRef.current = null
+      }
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current)
+        pollTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   const handleLogin = async () => {
     setIsLoggingIn(true)
@@ -431,17 +442,27 @@ function AccountSettings({
         await open(response.authUrl)
       }
       // Poll for login completion
-      const checkLogin = setInterval(async () => {
+      pollIntervalRef.current = setInterval(async () => {
         const info = await serverApi.getAccountInfo()
         if (info.account) {
-          clearInterval(checkLogin)
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current)
+            pollIntervalRef.current = null
+          }
+          if (pollTimeoutRef.current) {
+            clearTimeout(pollTimeoutRef.current)
+            pollTimeoutRef.current = null
+          }
           await onRefresh()
           setIsLoggingIn(false)
         }
       }, 2000)
       // Stop polling after 60 seconds
-      setTimeout(() => {
-        clearInterval(checkLogin)
+      pollTimeoutRef.current = setTimeout(() => {
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current)
+          pollIntervalRef.current = null
+        }
         setIsLoggingIn(false)
       }, 60000)
     } catch (error) {

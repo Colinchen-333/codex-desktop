@@ -36,7 +36,11 @@ function App() {
     if (listenersSetupRef.current) return
     listenersSetupRef.current = true
 
-    setupEventListeners({
+    // Track if component is still mounted
+    let isMounted = true
+    let setupPromise: Promise<(() => void)[]> | null = null
+
+    setupPromise = setupEventListeners({
       // Item lifecycle
       onItemStarted: (event) => useThreadStore.getState().handleItemStarted(event),
       onItemCompleted: (event) => useThreadStore.getState().handleItemCompleted(event),
@@ -73,12 +77,26 @@ function App() {
         console.log('Server disconnected')
         // TODO: Show reconnection UI
       },
-    }).then((listeners) => {
-      unlistenersRef.current = listeners
     })
 
+    setupPromise
+      .then((listeners) => {
+        if (isMounted) {
+          unlistenersRef.current = listeners
+        } else {
+          // Component unmounted before setup completed, cleanup immediately
+          cleanupEventListeners(listeners)
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to setup event listeners:', error)
+      })
+
     return () => {
+      isMounted = false
+      // Cleanup any listeners that were set up
       cleanupEventListeners(unlistenersRef.current)
+      unlistenersRef.current = []
       listenersSetupRef.current = false
     }
   }, []) // Empty deps - only run once

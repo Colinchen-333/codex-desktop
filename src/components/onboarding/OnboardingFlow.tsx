@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Rocket, Lock, Folder, CheckCircle, ArrowRight, RefreshCcw } from 'lucide-react'
 import { cn } from '../../lib/utils'
@@ -141,6 +141,22 @@ function LoginStep({
   onRefresh: () => Promise<void>
 }) {
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+        pollIntervalRef.current = null
+      }
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current)
+        pollTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   const handleLogin = async () => {
     setIsLoggingIn(true)
@@ -152,17 +168,27 @@ function LoginStep({
         await open(response.authUrl)
       }
       // Poll for login completion
-      const checkLogin = setInterval(async () => {
+      pollIntervalRef.current = setInterval(async () => {
         const info = await serverApi.getAccountInfo()
         if (info.account) {
-          clearInterval(checkLogin)
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current)
+            pollIntervalRef.current = null
+          }
+          if (pollTimeoutRef.current) {
+            clearTimeout(pollTimeoutRef.current)
+            pollTimeoutRef.current = null
+          }
           await onRefresh()
           setIsLoggingIn(false)
         }
       }, 2000)
       // Stop polling after 60 seconds
-      setTimeout(() => {
-        clearInterval(checkLogin)
+      pollTimeoutRef.current = setTimeout(() => {
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current)
+          pollIntervalRef.current = null
+        }
         setIsLoggingIn(false)
       }, 60000)
     } catch (error) {

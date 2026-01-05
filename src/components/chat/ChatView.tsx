@@ -117,9 +117,10 @@ export function ChatView() {
   const handleFileMentionSelect = useCallback((file: FileEntry) => {
     if (mentionStartPos >= 0) {
       // Replace @query with @filepath
+      // Calculate the end position of the current query (@ + query text)
+      const queryEndPos = mentionStartPos + 1 + fileMentionQuery.length
       const before = inputValue.slice(0, mentionStartPos)
-      const cursorPos = inputRef.current?.selectionStart ?? inputValue.length
-      const after = inputValue.slice(cursorPos)
+      const after = inputValue.slice(queryEndPos)
       const newValue = `${before}@${file.path} ${after}`
       setInputValue(newValue)
 
@@ -135,7 +136,7 @@ export function ChatView() {
     setShowFileMention(false)
     setFileMentionQuery('')
     setMentionStartPos(-1)
-  }, [inputValue, mentionStartPos])
+  }, [inputValue, mentionStartPos, fileMentionQuery])
 
   // Auto-scroll to bottom when new messages or deltas arrive
   useEffect(() => {
@@ -339,6 +340,7 @@ export function ChatView() {
         }
       } catch (error) {
         console.error('Failed to execute command:', error)
+        showToast('Failed to execute command', 'error')
       }
     }
 
@@ -346,6 +348,7 @@ export function ChatView() {
       await sendMessage(text, attachedImages.length > 0 ? attachedImages : undefined)
     } catch (error) {
       console.error('Failed to send message:', error)
+      showToast('Failed to send message. Please try again.', 'error')
     }
   }
 
@@ -356,17 +359,45 @@ export function ChatView() {
     }
   }
 
+  // Maximum image size (5MB) and max images count
+  const MAX_IMAGE_SIZE = 5 * 1024 * 1024
+  const MAX_IMAGES_COUNT = 5
+
   // Handle image file
   const handleImageFile = useCallback((file: File) => {
-    if (!file.type.startsWith('image/')) return
-
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const base64 = e.target?.result as string
-      setAttachedImages((prev) => [...prev, base64])
+    if (!file.type.startsWith('image/')) {
+      showToast('Only image files are supported', 'error')
+      return
     }
-    reader.readAsDataURL(file)
-  }, [])
+
+    // Check file size
+    if (file.size > MAX_IMAGE_SIZE) {
+      showToast('Image too large (max 5MB)', 'error')
+      return
+    }
+
+    // Check max images count
+    setAttachedImages((prev) => {
+      if (prev.length >= MAX_IMAGES_COUNT) {
+        showToast(`Maximum ${MAX_IMAGES_COUNT} images allowed`, 'error')
+        return prev
+      }
+
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        const base64 = e.target?.result as string
+        setAttachedImages((current) => {
+          if (current.length >= MAX_IMAGES_COUNT) return current
+          return [...current, base64]
+        })
+      }
+      reader.onerror = () => {
+        showToast('Failed to read image file', 'error')
+      }
+      reader.readAsDataURL(file)
+      return prev
+    })
+  }, [showToast])
 
   // Handle paste event for images
   const handlePaste = useCallback(
@@ -393,8 +424,13 @@ export function ChatView() {
   }, [])
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
+    // Only set isDragging to false if we're actually leaving the container
+    // Check if the related target is outside the current target
+    const relatedTarget = e.relatedTarget as Node | null
+    const currentTarget = e.currentTarget as Node
+    if (!relatedTarget || !currentTarget.contains(relatedTarget)) {
+      setIsDragging(false)
+    }
   }, [])
 
   const handleDrop = useCallback(
@@ -456,6 +492,9 @@ export function ChatView() {
         className="flex-1 overflow-y-auto p-4"
         onDragOver={handleDragOver}
         onScroll={handleScroll}
+        role="log"
+        aria-label="Chat messages"
+        aria-live="polite"
       >
         <div className="mx-auto max-w-3xl space-y-6 pb-4">
           {itemOrder.map((id) => {
@@ -468,7 +507,7 @@ export function ChatView() {
       </div>
 
       {/* Input Area */}
-      <div className="p-4 bg-transparent">
+      <div className="p-4 bg-transparent" role="form" aria-label="Message composer">
         <div className="mx-auto max-w-3xl">
           <div
             className={cn(
@@ -535,11 +574,12 @@ export function ChatView() {
                 onClick={() => {
                   document.getElementById('image-upload')?.click()
                 }}
-                title="附加图片"
+                title="Attach images"
+                aria-label="Attach images"
               >
-                <Paperclip size={20} />
+                <Paperclip size={20} aria-hidden="true" />
               </button>
-              
+
               <textarea
                 ref={inputRef}
                 className="flex-1 max-h-[200px] min-h-[44px] resize-none bg-transparent py-3 text-sm focus:outline-none placeholder:text-muted-foreground/70"
@@ -550,6 +590,8 @@ export function ChatView() {
                 onPaste={handlePaste}
                 disabled={turnStatus === 'running'}
                 rows={1}
+                aria-label="Message input"
+                aria-describedby="input-hint"
               />
 
               {turnStatus === 'running' ? (
@@ -557,8 +599,9 @@ export function ChatView() {
                   className="mb-1 h-10 w-10 flex items-center justify-center rounded-full bg-secondary text-secondary-foreground hover:bg-destructive hover:text-destructive-foreground transition-all duration-200"
                   onClick={interrupt}
                   title="Stop generation"
+                  aria-label="Stop generation"
                 >
-                  <StopCircle size={20} />
+                  <StopCircle size={20} aria-hidden="true" />
                 </button>
               ) : (
                 <button
@@ -571,14 +614,15 @@ export function ChatView() {
                   onClick={handleSend}
                   disabled={!inputValue.trim() && attachedImages.length === 0}
                   title="Send message (Enter)"
+                  aria-label="Send message"
                 >
-                  <ArrowUp size={20} />
+                  <ArrowUp size={20} aria-hidden="true" />
                 </button>
               )}
             </div>
           </div>
           
-          <div className="mt-2 text-center text-[10px] text-muted-foreground/60 select-none">
+          <div id="input-hint" className="mt-2 text-center text-[10px] text-muted-foreground/60 select-none">
             Codex can make mistakes. Review code before applying.
           </div>
         </div>

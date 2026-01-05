@@ -317,7 +317,13 @@ export async function setupEventListeners(
   return unlisteners
 }
 
-// Cleanup all listeners
+// Cleanup all listeners with error handling
 export function cleanupEventListeners(unlisteners: UnlistenFn[]) {
-  unlisteners.forEach((unlisten) => unlisten())
+  unlisteners.forEach((unlisten) => {
+    try {
+      unlisten()
+    } catch (error) {
+      console.error('Failed to cleanup event listener:', error)
+    }
+  })
 }
