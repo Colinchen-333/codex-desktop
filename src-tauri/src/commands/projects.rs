@@ -1,6 +1,7 @@
 //! Project management commands
 
 use std::path::Path;
+use std::collections::HashSet;
 
 use tauri::State;
 
@@ -236,4 +237,185 @@ fn run_git_capture_diff(project_path: &Path, args: &[&str]) -> Result<String> {
             args, output.status
         )))
     }
+}
+
+/// File entry for @ mention autocomplete
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    /// Relative path from project root
+    pub path: String,
+    /// File name only
+    pub name: String,
+    /// Whether it's a directory
+    pub is_dir: bool,
+}
+
+/// List project files for @ mention autocomplete
+#[tauri::command]
+pub async fn list_project_files(
+    path: String,
+    query: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<FileEntry>> {
+    let project_path = Path::new(&path);
+    if !project_path.exists() {
+        return Err(crate::Error::InvalidPath(format!(
+            "Path does not exist: {}",
+            path
+        )));
+    }
+
+    // Directories to ignore
+    let ignore_dirs: HashSet<&str> = [
+        "node_modules",
+        ".git",
+        ".svn",
+        ".hg",
+        "target",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        "venv",
+        ".venv",
+        "env",
+        ".env",
+        "vendor",
+        ".idea",
+        ".vscode",
+        "coverage",
+        ".cache",
+        ".parcel-cache",
+        ".turbo",
+    ]
+    .into_iter()
+    .collect();
+
+    let query_lower = query.as_ref().map(|q| q.to_lowercase());
+    let max_files = limit.unwrap_or(100);
+    let mut files: Vec<FileEntry> = Vec::new();
+
+    // Collect files recursively
+    collect_files_recursive(
+        project_path,
+        project_path,
+        &ignore_dirs,
+        &query_lower,
+        &mut files,
+        max_files,
+        0,
+        5, // max depth
+    );
+
+    // Sort: directories first, then by path
+    files.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.path.cmp(&b.path),
+        }
+    });
+
+    Ok(files)
+}
+
+fn collect_files_recursive(
+    root: &Path,
+    current: &Path,
+    ignore_dirs: &HashSet<&str>,
+    query: &Option<String>,
+    files: &mut Vec<FileEntry>,
+    max_files: usize,
+    depth: usize,
+    max_depth: usize,
+) {
+    if files.len() >= max_files || depth > max_depth {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(current) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        if files.len() >= max_files {
+            break;
+        }
+
+        let path = entry.path();
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        // Skip hidden files (except specific ones)
+        if file_name.starts_with('.') && !matches!(file_name.as_str(), ".env" | ".gitignore" | ".eslintrc" | ".prettierrc") {
+            continue;
+        }
+
+        let is_dir = path.is_dir();
+
+        // Skip ignored directories
+        if is_dir && ignore_dirs.contains(file_name.as_str()) {
+            continue;
+        }
+
+        // Get relative path
+        let relative_path = match path.strip_prefix(root) {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(_) => continue,
+        };
+
+        // Apply query filter (fuzzy match on path and name)
+        let matches_query = match query {
+            Some(q) => {
+                let path_lower = relative_path.to_lowercase();
+                let name_lower = file_name.to_lowercase();
+                path_lower.contains(q) || name_lower.contains(q) || fuzzy_match(&name_lower, q)
+            }
+            None => true,
+        };
+
+        if matches_query {
+            files.push(FileEntry {
+                path: relative_path,
+                name: file_name,
+                is_dir,
+            });
+        }
+
+        // Recurse into directories
+        if is_dir {
+            collect_files_recursive(
+                root,
+                &path,
+                ignore_dirs,
+                query,
+                files,
+                max_files,
+                depth + 1,
+                max_depth,
+            );
+        }
+    }
+}
+
+/// Simple fuzzy match: check if all characters in query appear in order in target
+fn fuzzy_match(target: &str, query: &str) -> bool {
+    let mut target_chars = target.chars().peekable();
+    for query_char in query.chars() {
+        loop {
+            match target_chars.next() {
+                Some(c) if c == query_char => break,
+                Some(_) => continue,
+                None => return false,
+            }
+        }
+    }
+    true
 }

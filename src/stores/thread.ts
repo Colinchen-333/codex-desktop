@@ -11,6 +11,7 @@ import type {
   TurnStartedEvent,
   TurnDiffUpdatedEvent,
   TurnPlanUpdatedEvent,
+  ThreadCompactedEvent,
   CommandExecutionOutputDeltaEvent,
   FileChangeOutputDeltaEvent,
   ReasoningSummaryTextDeltaEvent,
@@ -34,6 +35,7 @@ export type ThreadItemType =
   | 'review'
   | 'info'
   | 'error'
+  | 'plan'
 
 export interface ThreadItem {
   id: string
@@ -160,6 +162,20 @@ export interface ErrorItem extends ThreadItem {
   }
 }
 
+export interface PlanStep {
+  step: string
+  status: 'pending' | 'in_progress' | 'completed' | 'failed'
+}
+
+export interface PlanItem extends ThreadItem {
+  type: 'plan'
+  content: {
+    explanation?: string
+    steps: PlanStep[]
+    isActive: boolean
+  }
+}
+
 export type AnyThreadItem =
   | UserMessageItem
   | AgentMessageItem
@@ -171,6 +187,7 @@ export type AnyThreadItem =
   | ReviewItem
   | InfoItem
   | ErrorItem
+  | PlanItem
   | ThreadItem
 
 // ==================== Turn Status ====================
@@ -237,6 +254,7 @@ interface ThreadState {
   handleTurnCompleted: (event: TurnCompletedEvent) => void
   handleTurnDiffUpdated: (event: TurnDiffUpdatedEvent) => void
   handleTurnPlanUpdated: (event: TurnPlanUpdatedEvent) => void
+  handleThreadCompacted: (event: ThreadCompactedEvent) => void
   handleCommandExecutionOutputDelta: (event: CommandExecutionOutputDeltaEvent) => void
   handleFileChangeOutputDelta: (event: FileChangeOutputDeltaEvent) => void
   handleReasoningSummaryTextDelta: (event: ReasoningSummaryTextDeltaEvent) => void
@@ -694,10 +712,33 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       status: 'inProgress',
     } as AnyThreadItem
 
-    set((state) => ({
-      items: new Map(state.items).set(item.id, inProgressItem),
-      itemOrder: [...state.itemOrder, item.id],
-    }))
+    set((state) => {
+      let isDuplicateUserMessage = false
+      if (inProgressItem.type === 'userMessage') {
+        const lastUserId = [...state.itemOrder]
+          .reverse()
+          .find((id) => state.items.get(id)?.type === 'userMessage')
+        const lastUser = lastUserId
+          ? (state.items.get(lastUserId) as UserMessageItem)
+          : null
+        const nextUser = inProgressItem as UserMessageItem
+        if (
+          lastUser &&
+          lastUser.content.text === nextUser.content.text &&
+          JSON.stringify(lastUser.content.images || []) ===
+            JSON.stringify(nextUser.content.images || [])
+        ) {
+          isDuplicateUserMessage = true
+        }
+      }
+
+      return {
+        items: isDuplicateUserMessage
+          ? state.items
+          : new Map(state.items).set(item.id, inProgressItem),
+        itemOrder: isDuplicateUserMessage ? state.itemOrder : [...state.itemOrder, item.id],
+      }
+    })
   },
 
   handleItemCompleted: (event) => {
@@ -869,6 +910,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         turnStatus: nextTurnStatus,
         currentTurnId: null,
         error: event.turn.error?.message || null,
+        pendingApprovals: [],
       }
     })
   },
@@ -893,15 +935,60 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleTurnPlanUpdated: (event) => {
-    const steps = event.plan.map((step) => `${step.status}: ${step.step}`).join('\n')
-    const details = event.explanation ? `${event.explanation}\n${steps}` : steps
-    const infoItem: InfoItem = {
+    // Map step status from event to PlanStep status
+    const mapStepStatus = (status: string): PlanStep['status'] => {
+      switch (status.toLowerCase()) {
+        case 'completed':
+        case 'done':
+          return 'completed'
+        case 'in_progress':
+        case 'inprogress':
+        case 'running':
+          return 'in_progress'
+        case 'failed':
+        case 'error':
+          return 'failed'
+        default:
+          return 'pending'
+      }
+    }
+
+    const steps: PlanStep[] = event.plan.map((step) => ({
+      step: step.step,
+      status: mapStepStatus(step.status),
+    }))
+
+    // Check if any step is in progress
+    const isActive = steps.some((s) => s.status === 'in_progress' || s.status === 'pending')
+
+    const planItem: PlanItem = {
       id: `plan-${event.turnId}`,
+      type: 'plan',
+      status: isActive ? 'inProgress' : 'completed',
+      content: {
+        explanation: event.explanation ?? undefined,
+        steps,
+        isActive,
+      },
+      createdAt: Date.now(),
+    }
+
+    set((state) => ({
+      items: new Map(state.items).set(planItem.id, planItem),
+      itemOrder: state.itemOrder.includes(planItem.id)
+        ? state.itemOrder
+        : [...state.itemOrder, planItem.id],
+    }))
+  },
+
+  handleThreadCompacted: (event) => {
+    const infoItem: InfoItem = {
+      id: `compact-${event.turnId}`,
       type: 'info',
       status: 'completed',
       content: {
-        title: 'Plan updated',
-        details,
+        title: 'Context compacted',
+        details: 'Conversation context was compacted to stay within limits.',
       },
       createdAt: Date.now(),
     }
@@ -1110,7 +1197,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     set((state) => ({
       items: new Map(state.items).set(errorItem.id, errorItem),
       itemOrder: [...state.itemOrder, errorItem.id],
-      error: event.message,
+      error: event.error.message,
+      turnStatus: event.willRetry ? state.turnStatus : 'failed',
     }))
   },
 

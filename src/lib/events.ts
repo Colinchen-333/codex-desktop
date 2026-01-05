@@ -60,6 +60,11 @@ export interface TurnPlanUpdatedEvent {
   }>
 }
 
+export interface ThreadCompactedEvent {
+  threadId: string
+  turnId: string
+}
+
 // Item lifecycle events
 export interface ThreadItemPayload {
   id: string
@@ -184,9 +189,7 @@ export interface FileChangeApprovalRequestedEvent {
   _requestId: number // JSON-RPC request ID for responding
 }
 
-export interface ServerDisconnectedEvent {
-  // Empty payload
-}
+export type ServerDisconnectedEvent = Record<string, never>
 
 // ==================== Event Handlers ====================
 
@@ -197,6 +200,7 @@ export type EventHandlers = {
   onTurnCompleted?: (event: TurnCompletedEvent) => void
   onTurnDiffUpdated?: (event: TurnDiffUpdatedEvent) => void
   onTurnPlanUpdated?: (event: TurnPlanUpdatedEvent) => void
+  onThreadCompacted?: (event: ThreadCompactedEvent) => void
 
   // Item lifecycle
   onItemStarted?: (event: ItemStartedEvent) => void
@@ -254,6 +258,7 @@ export async function setupEventListeners(
   await addListener('turn-completed', handlers.onTurnCompleted, unlisteners)
   await addListener('turn-diff-updated', handlers.onTurnDiffUpdated, unlisteners)
   await addListener('turn-plan-updated', handlers.onTurnPlanUpdated, unlisteners)
+  await addListener('thread-compacted', handlers.onThreadCompacted, unlisteners)
 
   // Item lifecycle
   await addListener('item-started', handlers.onItemStarted, unlisteners)

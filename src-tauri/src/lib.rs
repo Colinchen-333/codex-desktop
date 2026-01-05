@@ -50,11 +50,13 @@ pub fn run() {
             commands::projects::update_project,
             commands::projects::get_project_git_info,
             commands::projects::get_project_git_diff,
+            commands::projects::list_project_files,
             // Session commands
             commands::sessions::list_sessions,
             commands::sessions::get_session,
             commands::sessions::update_session_metadata,
             commands::sessions::delete_session,
+            commands::sessions::search_sessions,
             // Thread commands (proxy to app-server)
             commands::thread::start_thread,
             commands::thread::resume_thread,
@@ -79,6 +81,10 @@ pub fn run() {
             // Config commands
             commands::app_server::read_config,
             commands::app_server::write_config,
+            // Allowlist commands
+            commands::allowlist::get_allowlist,
+            commands::allowlist::add_to_allowlist,
+            commands::allowlist::remove_from_allowlist,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

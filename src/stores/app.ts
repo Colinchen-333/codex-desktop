@@ -6,14 +6,16 @@ interface AppState {
   // Dialog states
   settingsOpen: boolean
   setSettingsOpen: (open: boolean) => void
-  settingsTab: 'general' | 'model' | 'safety' | 'account'
-  setSettingsTab: (tab: 'general' | 'model' | 'safety' | 'account') => void
+  settingsTab: 'general' | 'model' | 'safety' | 'account' | 'allowlist'
+  setSettingsTab: (tab: 'general' | 'model' | 'safety' | 'account' | 'allowlist') => void
   snapshotsOpen: boolean
   setSnapshotsOpen: (open: boolean) => void
   aboutOpen: boolean
   setAboutOpen: (open: boolean) => void
   helpOpen: boolean
   setHelpOpen: (open: boolean) => void
+  keyboardShortcutsOpen: boolean
+  setKeyboardShortcutsOpen: (open: boolean) => void
 
   // Sidebar state
   sidebarTab: SidebarTab
@@ -37,6 +39,8 @@ export const useAppStore = create<AppState>((set) => ({
   setAboutOpen: (open) => set({ aboutOpen: open }),
   helpOpen: false,
   setHelpOpen: (open) => set({ helpOpen: open }),
+  keyboardShortcutsOpen: false,
+  setKeyboardShortcutsOpen: (open) => set({ keyboardShortcutsOpen: open }),
 
   // Sidebar state
   sidebarTab: 'projects',

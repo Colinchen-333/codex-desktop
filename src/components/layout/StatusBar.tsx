@@ -1,17 +1,22 @@
 import { useEffect, useState } from 'react'
-import { Activity, ShieldCheck, HelpCircle, Info, Settings, Camera } from 'lucide-react'
+import { Activity, ShieldCheck, HelpCircle, Info, Settings, Camera, Coins, GitBranch } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import { serverApi, type ServerStatus, type AccountInfo } from '../../lib/api'
+import { serverApi, projectApi, type ServerStatus, type AccountInfo, type GitInfo } from '../../lib/api'
+import { useProjectsStore } from '../../stores/projects'
 import { SettingsDialog } from '../settings/SettingsDialog'
 import { SnapshotListDialog } from '../dialogs/SnapshotListDialog'
 import { AboutDialog } from '../dialogs/AboutDialog'
 import { HelpDialog } from '../dialogs/HelpDialog'
+import { KeyboardShortcutsDialog } from '../dialogs/KeyboardShortcutsDialog'
 import { useAppStore } from '../../stores/app'
 import { useThreadStore } from '../../stores/thread'
 
 export function StatusBar() {
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
+  const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
+  const { selectedProjectId, projects } = useProjectsStore()
+  const selectedProject = projects.find((p) => p.id === selectedProjectId)
   const {
     settingsOpen,
     setSettingsOpen,
@@ -21,8 +26,12 @@ export function StatusBar() {
     setAboutOpen,
     helpOpen,
     setHelpOpen,
+    keyboardShortcutsOpen,
+    setKeyboardShortcutsOpen,
   } = useAppStore()
   const activeThread = useThreadStore((state) => state.activeThread)
+  const tokenUsage = useThreadStore((state) => state.tokenUsage)
+  const turnStatus = useThreadStore((state) => state.turnStatus)
 
   useEffect(() => {
     // Fetch status on mount
@@ -51,6 +60,46 @@ export function StatusBar() {
     const interval = setInterval(fetchStatus, 10000)
     return () => clearInterval(interval)
   }, [])
+
+  // Fetch git info when project changes
+  useEffect(() => {
+    if (!selectedProject?.path) {
+      setGitInfo(null)
+      return
+    }
+
+    const fetchGitInfo = async () => {
+      try {
+        const info = await projectApi.getGitInfo(selectedProject.path)
+        setGitInfo(info)
+      } catch (error) {
+        console.error('Failed to fetch git info:', error)
+        setGitInfo(null)
+      }
+    }
+
+    fetchGitInfo()
+    // Poll git status every 30 seconds
+    const interval = setInterval(fetchGitInfo, 30000)
+    return () => clearInterval(interval)
+  }, [selectedProject?.path])
+
+  // Listen for ? key to open keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only trigger if not in an input/textarea and ? is pressed
+      if (
+        e.key === '?' &&
+        !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName || '')
+      ) {
+        e.preventDefault()
+        setKeyboardShortcutsOpen(true)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [setKeyboardShortcutsOpen])
 
   const handleRestartServer = async () => {
     try {
@@ -92,6 +141,30 @@ export function StatusBar() {
             >
               Restart
             </button>
+          )}
+
+          {/* Git branch indicator */}
+          {gitInfo?.isGitRepo && gitInfo.branch && (
+            <div className="flex items-center gap-1.5 text-muted-foreground/70">
+              <GitBranch size={12} />
+              <span className="text-[10px] max-w-[80px] truncate">{gitInfo.branch}</span>
+              {gitInfo.isDirty && (
+                <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" title="Uncommitted changes" />
+              )}
+            </div>
+          )}
+
+          {/* Turn status indicator */}
+          {turnStatus === 'running' && (
+            <div className="flex items-center gap-1.5 text-blue-500">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+              <span className="uppercase tracking-widest text-[10px]">Processing...</span>
+            </div>
+          )}
+
+          {/* Token usage with context window indicator */}
+          {activeThread && tokenUsage.totalTokens > 0 && (
+            <ContextWindowIndicator tokenUsage={tokenUsage} />
           )}
         </div>
 
@@ -148,7 +221,64 @@ export function StatusBar() {
       <SnapshotListDialog isOpen={snapshotsOpen} onClose={() => setSnapshotsOpen(false)} />
       <AboutDialog isOpen={aboutOpen} onClose={() => setAboutOpen(false)} />
       <HelpDialog isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
+      <KeyboardShortcutsDialog isOpen={keyboardShortcutsOpen} onClose={() => setKeyboardShortcutsOpen(false)} />
     </>
+  )
+}
+
+// Context Window Indicator Component
+interface ContextWindowIndicatorProps {
+  tokenUsage: {
+    totalTokens: number
+    inputTokens: number
+    outputTokens: number
+    cachedInputTokens: number
+  }
+}
+
+function ContextWindowIndicator({ tokenUsage }: ContextWindowIndicatorProps) {
+  // Common model context windows (conservative estimate)
+  const MAX_CONTEXT = 200000 // 200k tokens (Claude 3.5)
+
+  const usagePercent = Math.min((tokenUsage.totalTokens / MAX_CONTEXT) * 100, 100)
+  const cachePercent = tokenUsage.inputTokens > 0
+    ? Math.round((tokenUsage.cachedInputTokens / tokenUsage.inputTokens) * 100)
+    : 0
+
+  // Color based on usage
+  const getColor = (percent: number) => {
+    if (percent >= 90) return 'bg-red-500'
+    if (percent >= 70) return 'bg-yellow-500'
+    return 'bg-green-500'
+  }
+
+  const getTextColor = (percent: number) => {
+    if (percent >= 90) return 'text-red-500'
+    if (percent >= 70) return 'text-yellow-500'
+    return 'text-muted-foreground/70'
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Coins size={12} className={getTextColor(usagePercent)} />
+
+      {/* Progress bar */}
+      <div className="relative w-16 h-1.5 bg-secondary rounded-full overflow-hidden">
+        <div
+          className={cn('h-full transition-all duration-300', getColor(usagePercent))}
+          style={{ width: `${usagePercent}%` }}
+        />
+      </div>
+
+      <span className={cn('text-[10px]', getTextColor(usagePercent))}>
+        {tokenUsage.totalTokens.toLocaleString()}
+        {cachePercent > 0 && (
+          <span className="text-green-500/70 ml-1">
+            ({cachePercent}% cached)
+          </span>
+        )}
+      </span>
+    </div>
   )
 }
 

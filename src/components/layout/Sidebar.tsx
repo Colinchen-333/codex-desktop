@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { cn } from '../../lib/utils'
 import { useProjectsStore } from '../../stores/projects'
@@ -8,6 +8,7 @@ import { useThreadStore } from '../../stores/thread'
 import { useSettingsStore } from '../../stores/settings'
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
 import { RenameDialog } from '../ui/RenameDialog'
+import { ProjectSettingsDialog } from '../dialogs/ProjectSettingsDialog'
 import { useToast } from '../ui/Toast'
 
 // Helper function to format relative time
@@ -30,8 +31,20 @@ export function Sidebar() {
   const { sidebarTab: activeTab, setSidebarTab: setActiveTab } = useAppStore()
   const { projects, selectedProjectId, selectProject, addProject, removeProject, updateProject } =
     useProjectsStore()
-  const { sessions, selectedSessionId, selectSession, fetchSessions, updateSession, deleteSession, isLoading: sessionsLoading } =
-    useSessionsStore()
+  const {
+    sessions,
+    selectedSessionId,
+    selectSession,
+    fetchSessions,
+    updateSession,
+    deleteSession,
+    isLoading: sessionsLoading,
+    searchQuery: storeSearchQuery,
+    searchResults,
+    isSearching,
+    searchSessions,
+    clearSearch,
+  } = useSessionsStore()
   const { startThread, clearThread } = useThreadStore()
   const settings = useSettingsStore((state) => state.settings)
   const { showToast } = useToast()
@@ -57,8 +70,48 @@ export function Sidebar() {
     name: string
   } | null>(null)
 
-  // Search state
-  const [searchQuery, setSearchQuery] = useState('')
+  // Project settings dialog state
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
+  const [projectSettingsId, setProjectSettingsId] = useState<string | null>(null)
+
+  // Search state with debounce
+  const [localSearchQuery, setLocalSearchQuery] = useState('')
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Debounced search
+  const handleSearchChange = useCallback(
+    (query: string) => {
+      setLocalSearchQuery(query)
+
+      // Clear previous timeout
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current)
+      }
+
+      // Debounce search API call
+      searchTimeoutRef.current = setTimeout(() => {
+        if (query.trim()) {
+          searchSessions(query)
+        } else {
+          clearSearch()
+        }
+      }, 300)
+    },
+    [searchSessions, clearSearch]
+  )
+
+  // Clear search when switching tabs or projects
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  // Determine which sessions to display
+  const displaySessions = storeSearchQuery ? searchResults : sessions
+  const isGlobalSearch = !!storeSearchQuery
 
   const handleAddProject = async () => {
     try {
@@ -94,6 +147,11 @@ export function Sidebar() {
     }
     setRenameDialogOpen(false)
     setProjectToRename(null)
+  }
+
+  const handleOpenProjectSettings = (id: string) => {
+    setProjectSettingsId(id)
+    setProjectSettingsOpen(true)
   }
 
   const handleDeleteProject = async (id: string) => {
@@ -187,15 +245,38 @@ export function Sidebar() {
       </div>
 
       {/* Search Input */}
-      {activeTab === 'sessions' && sessions.length > 0 && (
+      {activeTab === 'sessions' && (
         <div className="mb-3">
-          <input
-            type="text"
-            placeholder="Search sessions..."
-            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Search all sessions..."
+              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none pr-8"
+              value={localSearchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+            />
+            {isSearching && (
+              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              </div>
+            )}
+            {localSearchQuery && !isSearching && (
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setLocalSearchQuery('')
+                  clearSearch()
+                }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {isGlobalSearch && searchResults.length > 0 && (
+            <div className="mt-1 text-xs text-muted-foreground">
+              Found {searchResults.length} session(s) across all projects
+            </div>
+          )}
         </div>
       )}
 
@@ -208,16 +289,11 @@ export function Sidebar() {
             onSelect={selectProject}
             onRename={handleRenameProject}
             onDelete={handleDeleteProject}
+            onSettings={handleOpenProjectSettings}
           />
         ) : (
           <SessionList
-            sessions={sessions.filter((session) => {
-              if (!searchQuery.trim()) return true
-              const query = searchQuery.toLowerCase()
-              const title = (session.title || `Session ${session.sessionId.slice(0, 8)}`).toLowerCase()
-              const tags = session.tags ? JSON.parse(session.tags).join(' ').toLowerCase() : ''
-              return title.includes(query) || tags.includes(query)
-            })}
+            sessions={displaySessions}
             selectedId={selectedSessionId}
             onSelect={selectSession}
             onToggleFavorite={async (sessionId, isFavorite) => {
@@ -236,8 +312,9 @@ export function Sidebar() {
                 showToast('Failed to delete session', 'error')
               }
             }}
-            isLoading={sessionsLoading}
+            isLoading={sessionsLoading || isSearching}
             hasProject={!!selectedProjectId}
+            isGlobalSearch={isGlobalSearch}
           />
         )}
       </div>
@@ -276,6 +353,16 @@ export function Sidebar() {
           setSessionToRename(null)
         }}
       />
+
+      {/* Project Settings Dialog */}
+      <ProjectSettingsDialog
+        isOpen={projectSettingsOpen}
+        onClose={() => {
+          setProjectSettingsOpen(false)
+          setProjectSettingsId(null)
+        }}
+        projectId={projectSettingsId}
+      />
     </div>
   )
 }
@@ -292,9 +379,10 @@ interface ProjectListProps {
   onSelect: (id: string | null) => void
   onRename: (id: string, currentName: string) => void
   onDelete: (id: string) => void
+  onSettings: (id: string) => void
 }
 
-function ProjectList({ projects, selectedId, onSelect, onRename, onDelete }: ProjectListProps) {
+function ProjectList({ projects, selectedId, onSelect, onRename, onDelete, onSettings }: ProjectListProps) {
   if (projects.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
@@ -313,6 +401,11 @@ function ProjectList({ projects, selectedId, onSelect, onRename, onDelete }: Pro
             label: 'Rename',
             icon: '✏️',
             onClick: () => onRename(project.id, displayName),
+          },
+          {
+            label: 'Settings',
+            icon: '⚙️',
+            onClick: () => onSettings(project.id),
           },
           {
             label: 'Open in Finder',
@@ -359,6 +452,7 @@ function ProjectList({ projects, selectedId, onSelect, onRename, onDelete }: Pro
 interface SessionListProps {
   sessions: Array<{
     sessionId: string
+    projectId: string
     title: string | null
     tags: string | null
     isFavorite: boolean
@@ -372,6 +466,7 @@ interface SessionListProps {
   onDelete: (sessionId: string) => void
   isLoading: boolean
   hasProject: boolean
+  isGlobalSearch?: boolean
 }
 
 function SessionList({
@@ -383,8 +478,10 @@ function SessionList({
   onDelete,
   isLoading,
   hasProject,
+  isGlobalSearch,
 }: SessionListProps) {
-  if (!hasProject) {
+  // When doing global search, don't require project selection
+  if (!hasProject && !isGlobalSearch) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
         Select a project to view sessions
@@ -396,7 +493,7 @@ function SessionList({
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
         <div className="animate-spin mr-2">⚙️</div>
-        Loading sessions...
+        {isGlobalSearch ? 'Searching...' : 'Loading sessions...'}
       </div>
     )
   }
@@ -404,7 +501,7 @@ function SessionList({
   if (sessions.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-        No sessions yet
+        {isGlobalSearch ? 'No matching sessions found' : 'No sessions yet'}
       </div>
     )
   }

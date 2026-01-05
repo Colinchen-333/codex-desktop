@@ -1,7 +1,7 @@
-import { useRef, useEffect, useState, useCallback, type RefObject } from 'react'
-import { X, Paperclip, Image as ImageIcon, StopCircle, ArrowUp, Terminal, FileCode, Brain, Wrench, AlertCircle, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
+import { useRef, useEffect, useState, useCallback } from 'react'
+import { X, Paperclip, Image as ImageIcon, StopCircle, ArrowUp, Terminal, FileCode, Brain, Wrench, AlertCircle, ChevronDown, ChevronRight, ExternalLink, ListChecks, Circle, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import { useThreadStore, type AnyThreadItem } from '../../stores/thread'
+import { useThreadStore, type AnyThreadItem, type PlanStep } from '../../stores/thread'
 import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
 import { useSettingsStore } from '../../stores/settings'
@@ -9,7 +9,9 @@ import { useAppStore } from '../../stores/app'
 import { Markdown } from '../ui/Markdown'
 import { DiffView, parseDiff, type FileDiff } from '../ui/DiffView'
 import { SlashCommandPopup } from './SlashCommandPopup'
+import { FileMentionPopup } from './FileMentionPopup'
 import { type SlashCommand } from '../../lib/slashCommands'
+import { type FileEntry } from '../../lib/api'
 import { executeCommand } from '../../lib/commandExecutor'
 import { useToast } from '../ui/Toast'
 import { serverApi, projectApi } from '../../lib/api'
@@ -33,7 +35,12 @@ export function ChatView() {
   const [attachedImages, setAttachedImages] = useState<string[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [showSlashCommands, setShowSlashCommands] = useState(false)
+  const [showFileMention, setShowFileMention] = useState(false)
+  const [fileMentionQuery, setFileMentionQuery] = useState('')
+  const [mentionStartPos, setMentionStartPos] = useState(-1)
+  const [autoScroll, setAutoScroll] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   // Show slash command popup when typing starts with /
@@ -45,6 +52,35 @@ export function ChatView() {
     }
   }, [inputValue])
 
+  // Detect @ file mention trigger
+  useEffect(() => {
+    const cursorPos = inputRef.current?.selectionStart ?? inputValue.length
+
+    // Find the last @ before cursor
+    const textBeforeCursor = inputValue.slice(0, cursorPos)
+    const lastAtIndex = textBeforeCursor.lastIndexOf('@')
+
+    if (lastAtIndex >= 0) {
+      // Check if @ is at start or preceded by whitespace
+      const charBefore = lastAtIndex > 0 ? inputValue[lastAtIndex - 1] : ' '
+      if (charBefore === ' ' || charBefore === '\n' || lastAtIndex === 0) {
+        // Extract query after @
+        const query = textBeforeCursor.slice(lastAtIndex + 1)
+        // Only show if no space in query (still typing the mention)
+        if (!query.includes(' ')) {
+          setShowFileMention(true)
+          setFileMentionQuery(query)
+          setMentionStartPos(lastAtIndex)
+          return
+        }
+      }
+    }
+
+    setShowFileMention(false)
+    setFileMentionQuery('')
+    setMentionStartPos(-1)
+  }, [inputValue])
+
   // Handle slash command selection
   const handleSlashCommandSelect = useCallback((command: SlashCommand) => {
     setInputValue(`/${command.name} `)
@@ -52,10 +88,45 @@ export function ChatView() {
     inputRef.current?.focus()
   }, [])
 
-  // Auto-scroll to bottom when new messages arrive
+  // Handle file mention selection
+  const handleFileMentionSelect = useCallback((file: FileEntry) => {
+    if (mentionStartPos >= 0) {
+      // Replace @query with @filepath
+      const before = inputValue.slice(0, mentionStartPos)
+      const cursorPos = inputRef.current?.selectionStart ?? inputValue.length
+      const after = inputValue.slice(cursorPos)
+      const newValue = `${before}@${file.path} ${after}`
+      setInputValue(newValue)
+
+      // Move cursor after the inserted path
+      setTimeout(() => {
+        if (inputRef.current) {
+          const newPos = mentionStartPos + file.path.length + 2 // @ + path + space
+          inputRef.current.setSelectionRange(newPos, newPos)
+          inputRef.current.focus()
+        }
+      }, 0)
+    }
+    setShowFileMention(false)
+    setFileMentionQuery('')
+    setMentionStartPos(-1)
+  }, [inputValue, mentionStartPos])
+
+  // Auto-scroll to bottom when new messages or deltas arrive
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [itemOrder])
+    if (autoScroll) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [itemOrder, items, autoScroll])
+
+  const handleScroll = useCallback(() => {
+    const container = scrollAreaRef.current
+    if (!container) return
+    const threshold = 120
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight
+    setAutoScroll(distanceFromBottom < threshold)
+  }, [])
 
   // Handle focus input trigger from keyboard shortcut
   useEffect(() => {
@@ -218,8 +289,20 @@ export function ChatView() {
             })
           },
           insertText: (value) => {
-            setInputValue(value)
-            inputRef.current?.focus()
+            const textarea = inputRef.current
+            if (!textarea) {
+              setInputValue((prev) => `${prev}${value}`)
+              return
+            }
+            const start = textarea.selectionStart ?? inputValue.length
+            const end = textarea.selectionEnd ?? inputValue.length
+            const nextValue = `${inputValue.slice(0, start)}${value}${inputValue.slice(end)}`
+            setInputValue(nextValue)
+            requestAnimationFrame(() => {
+              textarea.focus()
+              const cursor = start + value.length
+              textarea.setSelectionRange(cursor, cursor)
+            })
           },
           openUrl: (url) => {
             import('@tauri-apps/plugin-shell').then(({ open }) => open(url))
@@ -343,9 +426,11 @@ export function ChatView() {
       )}
 
       {/* Messages Area */}
-      <div 
-        className="flex-1 overflow-y-auto p-4" 
+      <div
+        ref={scrollAreaRef}
+        className="flex-1 overflow-y-auto p-4"
         onDragOver={handleDragOver}
+        onScroll={handleScroll}
       >
         <div className="mx-auto max-w-3xl space-y-6 pb-4">
           {itemOrder.map((id) => {
@@ -372,6 +457,14 @@ export function ChatView() {
               onSelect={handleSlashCommandSelect}
               onClose={() => setShowSlashCommands(false)}
               isVisible={showSlashCommands}
+            />
+            {/* File Mention Popup */}
+            <FileMentionPopup
+              query={fileMentionQuery}
+              projectPath={projects.find((p) => p.id === selectedProjectId)?.path ?? ''}
+              onSelect={handleFileMentionSelect}
+              onClose={() => setShowFileMention(false)}
+              isVisible={showFileMention && !!selectedProjectId}
             />
             {/* Attached Images Preview */}
             {attachedImages.length > 0 && (
@@ -496,6 +589,8 @@ function MessageItem({ item }: MessageItemProps) {
       return <InfoCard item={item} />
     case 'error':
       return <ErrorCard item={item} />
+    case 'plan':
+      return <PlanCard item={item} />
     default:
       console.warn(`Unknown item type: ${item.type}`)
       return null
@@ -860,6 +955,7 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
     kind: change.kind as 'add' | 'modify' | 'delete' | 'rename',
     oldPath: change.oldPath,
     hunks: change.diff ? parseDiff(change.diff) : [],
+    raw: change.diff,
   }))
 
   return (
@@ -1288,6 +1384,125 @@ function ErrorCard({ item }: { item: AnyThreadItem }) {
             {content.message}
           </p>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Plan Card - Shows turn plan with step progress
+function PlanCard({ item }: { item: AnyThreadItem }) {
+  const content = item.content as {
+    explanation?: string
+    steps: PlanStep[]
+    isActive: boolean
+  }
+  const [isExpanded, setIsExpanded] = useState(true)
+
+  // Get step status icon
+  const getStepIcon = (status: PlanStep['status']) => {
+    switch (status) {
+      case 'completed':
+        return <CheckCircle2 size={14} className="text-green-500" />
+      case 'in_progress':
+        return <Loader2 size={14} className="text-blue-500 animate-spin" />
+      case 'failed':
+        return <XCircle size={14} className="text-red-500" />
+      default:
+        return <Circle size={14} className="text-muted-foreground/50" />
+    }
+  }
+
+  // Calculate progress
+  const completedSteps = content.steps.filter((s) => s.status === 'completed').length
+  const totalSteps = content.steps.length
+  const progressPercent = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0
+
+  return (
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+      <div
+        className={cn(
+          'w-full max-w-2xl overflow-hidden rounded-xl border bg-card shadow-sm transition-all',
+          content.isActive
+            ? 'border-l-4 border-l-blue-500 border-y-border/50 border-r-border/50'
+            : 'border-border/50'
+        )}
+      >
+        {/* Header */}
+        <div
+          className="flex items-center justify-between border-b border-border/40 bg-blue-50/50 dark:bg-blue-900/10 px-4 py-2.5 cursor-pointer select-none"
+          onClick={() => setIsExpanded(!isExpanded)}
+        >
+          <div className="flex items-center gap-2">
+            <div
+              className={cn(
+                'rounded-md p-1 shadow-sm',
+                content.isActive
+                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
+              )}
+            >
+              <ListChecks size={14} />
+            </div>
+            <span className="text-xs font-medium text-foreground">
+              {content.isActive ? 'Executing Plan' : 'Plan Completed'}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              {completedSteps}/{totalSteps} steps
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Progress bar */}
+            <div className="w-20 h-1.5 bg-secondary rounded-full overflow-hidden">
+              <div
+                className={cn(
+                  'h-full transition-all duration-300',
+                  content.isActive ? 'bg-blue-500' : 'bg-green-500'
+                )}
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <span className="text-muted-foreground text-xs">
+              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </span>
+          </div>
+        </div>
+
+        {/* Content */}
+        {isExpanded && (
+          <div className="p-4 space-y-3">
+            {/* Explanation */}
+            {content.explanation && (
+              <p className="text-sm text-muted-foreground mb-3">{content.explanation}</p>
+            )}
+
+            {/* Steps */}
+            <div className="space-y-2">
+              {content.steps.map((step, index) => (
+                <div
+                  key={index}
+                  className={cn(
+                    'flex items-start gap-2.5 py-1.5 px-2 rounded-lg transition-colors',
+                    step.status === 'in_progress' && 'bg-blue-50/50 dark:bg-blue-900/10',
+                    step.status === 'completed' && 'opacity-70'
+                  )}
+                >
+                  <div className="mt-0.5 flex-shrink-0">{getStepIcon(step.status)}</div>
+                  <span
+                    className={cn(
+                      'text-sm leading-relaxed',
+                      step.status === 'completed' && 'line-through text-muted-foreground',
+                      step.status === 'in_progress' && 'text-blue-700 dark:text-blue-300 font-medium',
+                      step.status === 'failed' && 'text-red-700 dark:text-red-300',
+                      step.status === 'pending' && 'text-muted-foreground'
+                    )}
+                  >
+                    {step.step}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

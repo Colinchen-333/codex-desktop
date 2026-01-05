@@ -1,7 +1,7 @@
 // Command Executor for Slash Commands
 // Handles execution of slash commands with proper context
 
-import { SLASH_COMMANDS, type SlashCommand, isCompleteCommand } from './slashCommands'
+import { SLASH_COMMANDS, type SlashCommand } from './slashCommands'
 
 export interface CommandContext {
   clearThread: () => void
@@ -98,11 +98,11 @@ export async function executeImmediateCommand(
       return { executed: false }
 
     case 'skills':
+      context.insertText?.('$')
       if (context.listSkills) {
         await context.listSkills()
-        return { executed: true }
       }
-      return { executed: false }
+      return { executed: true }
 
     case 'mcp':
       if (context.listMcp) {

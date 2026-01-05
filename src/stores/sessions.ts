@@ -7,6 +7,11 @@ interface SessionsState {
   isLoading: boolean
   error: string | null
 
+  // Search state
+  searchQuery: string
+  searchResults: SessionMetadata[]
+  isSearching: boolean
+
   // Actions
   fetchSessions: (projectId: string) => Promise<void>
   selectSession: (id: string | null) => void
@@ -21,6 +26,10 @@ interface SessionsState {
   ) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   addSession: (session: SessionMetadata) => void
+
+  // Search actions
+  searchSessions: (query: string, tagsFilter?: string[], favoritesOnly?: boolean) => Promise<void>
+  clearSearch: () => void
 }
 
 export const useSessionsStore = create<SessionsState>((set) => ({
@@ -28,6 +37,9 @@ export const useSessionsStore = create<SessionsState>((set) => ({
   selectedSessionId: null,
   isLoading: false,
   error: null,
+  searchQuery: '',
+  searchResults: [],
+  isSearching: false,
 
   fetchSessions: async (projectId: string) => {
     set({ isLoading: true, error: null })
@@ -81,5 +93,24 @@ export const useSessionsStore = create<SessionsState>((set) => ({
     set((state) => ({
       sessions: [session, ...state.sessions],
     }))
+  },
+
+  searchSessions: async (query: string, tagsFilter?: string[], favoritesOnly?: boolean) => {
+    if (!query.trim()) {
+      set({ searchQuery: '', searchResults: [], isSearching: false })
+      return
+    }
+
+    set({ searchQuery: query, isSearching: true })
+    try {
+      const results = await sessionApi.search(query, tagsFilter, favoritesOnly)
+      set({ searchResults: results, isSearching: false })
+    } catch (error) {
+      set({ error: String(error), isSearching: false })
+    }
+  },
+
+  clearSearch: () => {
+    set({ searchQuery: '', searchResults: [], isSearching: false })
   },
 }))

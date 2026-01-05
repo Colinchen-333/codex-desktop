@@ -162,6 +162,12 @@ export interface GitDiffResponse {
   diff: string
 }
 
+export interface FileEntry {
+  path: string
+  name: string
+  isDir: boolean
+}
+
 // ==================== Config Types ====================
 
 export interface ConfigLayer {
@@ -205,6 +211,8 @@ export const projectApi = {
 
   getGitInfo: (path: string) => invoke<GitInfo>('get_project_git_info', { path }),
   getGitDiff: (path: string) => invoke<GitDiffResponse>('get_project_git_diff', { path }),
+  listFiles: (path: string, query?: string, limit?: number) =>
+    invoke<FileEntry[]>('list_project_files', { path, query, limit }),
 }
 
 // ==================== Session API ====================
@@ -233,6 +241,9 @@ export const sessionApi = {
 
   delete: (sessionId: string) =>
     invoke<void>('delete_session', { sessionId }),
+
+  search: (query: string, tagsFilter?: string[], favoritesOnly?: boolean) =>
+    invoke<SessionMetadata[]>('search_sessions', { query, tagsFilter, favoritesOnly }),
 }
 
 // ==================== Thread API ====================
@@ -341,4 +352,17 @@ export const configApi = {
 
   write: (key: string, value: unknown) =>
     invoke<void>('write_config', { key, value }),
+}
+
+// ==================== Allowlist API ====================
+
+export const allowlistApi = {
+  get: (projectId: string) =>
+    invoke<string[]>('get_allowlist', { projectId }),
+
+  add: (projectId: string, commandPattern: string) =>
+    invoke<void>('add_to_allowlist', { projectId, commandPattern }),
+
+  remove: (projectId: string, commandPattern: string) =>
+    invoke<void>('remove_from_allowlist', { projectId, commandPattern }),
 }

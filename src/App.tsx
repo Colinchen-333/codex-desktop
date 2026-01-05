@@ -50,6 +50,7 @@ function App() {
       onTurnCompleted: (event) => useThreadStore.getState().handleTurnCompleted(event),
       onTurnDiffUpdated: (event) => useThreadStore.getState().handleTurnDiffUpdated(event),
       onTurnPlanUpdated: (event) => useThreadStore.getState().handleTurnPlanUpdated(event),
+      onThreadCompacted: (event) => useThreadStore.getState().handleThreadCompacted(event),
       // Command execution output
       onCommandExecutionOutputDelta: (event) =>
         useThreadStore.getState().handleCommandExecutionOutputDelta(event),

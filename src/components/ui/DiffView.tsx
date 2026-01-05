@@ -1,5 +1,8 @@
 import { useState } from 'react'
+import { Check, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
+
+export type HunkAction = 'accept' | 'reject' | 'pending'
 
 export interface DiffLine {
   type: 'add' | 'remove' | 'context'
@@ -21,15 +24,29 @@ export interface FileDiff {
   kind: 'add' | 'modify' | 'delete' | 'rename'
   oldPath?: string
   hunks: DiffHunk[]
+  raw?: string
 }
 
 interface DiffViewProps {
   diff: FileDiff
   collapsed?: boolean
   onToggleCollapse?: () => void
+  /** Enable per-hunk accept/reject actions */
+  enableHunkActions?: boolean
+  /** Callback when a hunk is accepted/rejected */
+  onHunkAction?: (hunkIndex: number, action: HunkAction) => void
+  /** Current state of each hunk */
+  hunkStates?: HunkAction[]
 }
 
-export function DiffView({ diff, collapsed = false, onToggleCollapse }: DiffViewProps) {
+export function DiffView({
+  diff,
+  collapsed = false,
+  onToggleCollapse,
+  enableHunkActions = false,
+  onHunkAction,
+  hunkStates = [],
+}: DiffViewProps) {
   const [viewMode, setViewMode] = useState<'unified' | 'split'>('unified')
 
   const kindIcon = {
@@ -98,10 +115,24 @@ export function DiffView({ diff, collapsed = false, onToggleCollapse }: DiffView
       {/* Content */}
       {!collapsed && (
         <div className="overflow-x-auto">
-          {viewMode === 'unified' ? (
-            <UnifiedDiff hunks={diff.hunks} />
+          {diff.hunks.length === 0 && diff.raw ? (
+            <pre className="p-3 text-xs text-muted-foreground whitespace-pre-wrap font-mono">
+              {diff.raw}
+            </pre>
+          ) : viewMode === 'unified' ? (
+            <UnifiedDiff
+              hunks={diff.hunks}
+              enableHunkActions={enableHunkActions}
+              onHunkAction={onHunkAction}
+              hunkStates={hunkStates}
+            />
           ) : (
-            <SplitDiff hunks={diff.hunks} />
+            <SplitDiff
+              hunks={diff.hunks}
+              enableHunkActions={enableHunkActions}
+              onHunkAction={onHunkAction}
+              hunkStates={hunkStates}
+            />
           )}
         </div>
       )}
@@ -109,14 +140,60 @@ export function DiffView({ diff, collapsed = false, onToggleCollapse }: DiffView
   )
 }
 
-function UnifiedDiff({ hunks }: { hunks: DiffHunk[] }) {
+interface DiffComponentProps {
+  hunks: DiffHunk[]
+  enableHunkActions?: boolean
+  onHunkAction?: (hunkIndex: number, action: HunkAction) => void
+  hunkStates?: HunkAction[]
+}
+
+function UnifiedDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }: DiffComponentProps) {
   return (
     <div className="font-mono text-xs">
-      {hunks.map((hunk, hunkIndex) => (
-        <div key={hunkIndex}>
+      {hunks.map((hunk, hunkIndex) => {
+        const hunkState = hunkStates[hunkIndex] || 'pending'
+        return (
+        <div
+          key={hunkIndex}
+          className={cn(
+            hunkState === 'accept' && 'opacity-60',
+            hunkState === 'reject' && 'opacity-40 line-through'
+          )}
+        >
           {/* Hunk header */}
-          <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50">
-            @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@
+          <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50 flex items-center justify-between">
+            <span>@@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</span>
+            {enableHunkActions && onHunkAction && (
+              <div className="flex items-center gap-1">
+                {hunkState !== 'accept' && (
+                  <button
+                    onClick={() => onHunkAction(hunkIndex, 'accept')}
+                    className="p-1 rounded hover:bg-green-200 dark:hover:bg-green-900/50 text-green-600 dark:text-green-400"
+                    title="Accept this change"
+                  >
+                    <Check size={14} />
+                  </button>
+                )}
+                {hunkState !== 'reject' && (
+                  <button
+                    onClick={() => onHunkAction(hunkIndex, 'reject')}
+                    className="p-1 rounded hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400"
+                    title="Reject this change"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+                {hunkState !== 'pending' && (
+                  <button
+                    onClick={() => onHunkAction(hunkIndex, 'pending')}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80"
+                    title="Reset"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           {/* Lines */}
           {hunk.lines.map((line, lineIndex) => (
@@ -152,20 +229,30 @@ function UnifiedDiff({ hunks }: { hunks: DiffHunk[] }) {
             </div>
           ))}
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
 
-function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
+function SplitDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }: DiffComponentProps) {
   return (
     <div className="font-mono text-xs grid grid-cols-2">
-      {hunks.map((hunk, hunkIndex) => (
-        <div key={hunkIndex} className="contents">
+      {hunks.map((hunk, hunkIndex) => {
+        const hunkState = hunkStates[hunkIndex] || 'pending'
+        return (
+        <div
+          key={hunkIndex}
+          className={cn(
+            'contents',
+            hunkState === 'accept' && 'opacity-60',
+            hunkState === 'reject' && 'opacity-40'
+          )}
+        >
           {/* Left side (old) */}
           <div className="border-r border-border">
-            <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50">
-              -{hunk.oldStart},{hunk.oldLines}
+            <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50 flex items-center justify-between">
+              <span>-{hunk.oldStart},{hunk.oldLines}</span>
             </div>
             {hunk.lines
               .filter((l) => l.type !== 'add')
@@ -196,8 +283,39 @@ function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
           </div>
           {/* Right side (new) */}
           <div>
-            <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50">
-              +{hunk.newStart},{hunk.newLines}
+            <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50 flex items-center justify-between">
+              <span>+{hunk.newStart},{hunk.newLines}</span>
+              {enableHunkActions && onHunkAction && (
+                <div className="flex items-center gap-1">
+                  {hunkState !== 'accept' && (
+                    <button
+                      onClick={() => onHunkAction(hunkIndex, 'accept')}
+                      className="p-1 rounded hover:bg-green-200 dark:hover:bg-green-900/50 text-green-600 dark:text-green-400"
+                      title="Accept this change"
+                    >
+                      <Check size={14} />
+                    </button>
+                  )}
+                  {hunkState !== 'reject' && (
+                    <button
+                      onClick={() => onHunkAction(hunkIndex, 'reject')}
+                      className="p-1 rounded hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400"
+                      title="Reject this change"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                  {hunkState !== 'pending' && (
+                    <button
+                      onClick={() => onHunkAction(hunkIndex, 'pending')}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80"
+                      title="Reset"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             {hunk.lines
               .filter((l) => l.type !== 'remove')
@@ -224,7 +342,8 @@ function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
               ))}
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

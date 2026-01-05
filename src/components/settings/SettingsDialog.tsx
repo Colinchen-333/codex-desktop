@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
+import { Plus, Trash2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import { serverApi, type AccountInfo, type Model } from '../../lib/api'
+import { serverApi, allowlistApi, type AccountInfo } from '../../lib/api'
+import { useProjectsStore } from '../../stores/projects'
 import { useTheme } from '../../lib/theme'
 import {
   useSettingsStore,
@@ -19,7 +21,6 @@ interface SettingsDialogProps {
   onClose: () => void
 }
 
-type SettingsTab = 'general' | 'model' | 'safety' | 'account'
 
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
   const { settingsTab: activeTab, setSettingsTab } = useAppStore()
@@ -61,6 +62,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
               { id: 'general' as const, label: 'General', icon: '⚙️' },
               { id: 'model' as const, label: 'Model', icon: '🤖' },
               { id: 'safety' as const, label: 'Safety', icon: '🛡️' },
+              { id: 'allowlist' as const, label: 'Allowlist', icon: '✅' },
               { id: 'account' as const, label: 'Account', icon: '👤' },
             ].map((tab) => (
               <button
@@ -88,6 +90,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             {activeTab === 'safety' && (
               <SafetySettings settings={settings} updateSetting={updateSetting} />
             )}
+            {activeTab === 'allowlist' && <AllowlistSettings />}
             {activeTab === 'account' && (
               <AccountSettings
                 accountInfo={accountInfo}
@@ -530,6 +533,147 @@ function AccountSettings({
         <p className="mt-1 text-xs text-muted-foreground">
           This will clear all local settings and data
         </p>
+      </div>
+    </div>
+  )
+}
+
+// Allowlist Settings
+function AllowlistSettings() {
+  const { selectedProjectId, projects } = useProjectsStore()
+  const [commands, setCommands] = useState<string[]>([])
+  const [newCommand, setNewCommand] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const selectedProject = projects.find((p) => p.id === selectedProjectId)
+
+  // Fetch allowlist when project changes
+  const fetchAllowlist = useCallback(async () => {
+    if (!selectedProjectId) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      const list = await allowlistApi.get(selectedProjectId)
+      setCommands(list)
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setIsLoading(false)
+    }
+  }, [selectedProjectId])
+
+  useEffect(() => {
+    fetchAllowlist()
+  }, [fetchAllowlist])
+
+  const handleAdd = async () => {
+    if (!selectedProjectId || !newCommand.trim()) return
+    try {
+      await allowlistApi.add(selectedProjectId, newCommand.trim())
+      setNewCommand('')
+      await fetchAllowlist()
+    } catch (err) {
+      setError(String(err))
+    }
+  }
+
+  const handleRemove = async (command: string) => {
+    if (!selectedProjectId) return
+    try {
+      await allowlistApi.remove(selectedProjectId, command)
+      await fetchAllowlist()
+    } catch (err) {
+      setError(String(err))
+    }
+  }
+
+  if (!selectedProjectId) {
+    return (
+      <div className="space-y-6">
+        <h3 className="text-lg font-medium">Command Allowlist</h3>
+        <div className="text-muted-foreground text-sm">
+          Please select a project first to manage its command allowlist.
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-medium">Command Allowlist</h3>
+        <p className="text-sm text-muted-foreground mt-1">
+          Project: <span className="font-medium text-foreground">{selectedProject?.displayName || selectedProject?.path}</span>
+        </p>
+      </div>
+
+      <div>
+        <p className="text-sm text-muted-foreground mb-4">
+          Commands in the allowlist will be automatically approved without prompting.
+          Use patterns like <code className="bg-secondary px-1 rounded">npm *</code> or exact commands.
+        </p>
+
+        {/* Add new command */}
+        <div className="flex gap-2 mb-4">
+          <input
+            type="text"
+            value={newCommand}
+            onChange={(e) => setNewCommand(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+            placeholder="e.g., npm install, git status"
+            className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <button
+            onClick={handleAdd}
+            disabled={!newCommand.trim()}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-1"
+          >
+            <Plus size={16} />
+            Add
+          </button>
+        </div>
+
+        {/* Error display */}
+        {error && (
+          <div className="text-sm text-destructive mb-4">{error}</div>
+        )}
+
+        {/* Command list */}
+        {isLoading ? (
+          <div className="text-sm text-muted-foreground">Loading...</div>
+        ) : commands.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg">
+            No commands in allowlist. Add commands above.
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {commands.map((cmd) => (
+              <div
+                key={cmd}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2"
+              >
+                <code className="text-sm font-mono truncate flex-1">{cmd}</code>
+                <button
+                  onClick={() => handleRemove(cmd)}
+                  className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                  title="Remove from allowlist"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="text-xs text-muted-foreground">
+        <strong>Tips:</strong>
+        <ul className="list-disc list-inside mt-1 space-y-0.5">
+          <li>Use <code className="bg-secondary px-1 rounded">*</code> as a wildcard (e.g., <code className="bg-secondary px-1 rounded">npm *</code>)</li>
+          <li>Each project has its own allowlist</li>
+          <li>Commands are matched exactly or by pattern</li>
+        </ul>
       </div>
     </div>
   )
