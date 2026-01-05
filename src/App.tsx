@@ -6,6 +6,7 @@ import { OnboardingFlow, useNeedsOnboarding } from './components/onboarding/Onbo
 import { ToastProvider } from './components/ui/Toast'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { ConnectionStatus } from './components/ui/ConnectionStatus'
+import { KeyboardShortcuts } from './components/KeyboardShortcuts'
 import { useProjectsStore } from './stores/projects'
 import { useThreadStore } from './stores/thread'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
@@ -84,6 +85,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
+        <KeyboardShortcuts />
         <div className="flex h-screen w-screen overflow-hidden bg-background">
           {/* Left Sidebar */}
           <Sidebar />

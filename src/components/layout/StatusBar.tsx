@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { cn } from '../../lib/utils'
 import { serverApi, type ServerStatus, type AccountInfo } from '../../lib/api'
 import { SettingsDialog } from '../settings/SettingsDialog'
+import { useAppStore } from '../../stores/app'
 
 export function StatusBar() {
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
-  const [showSettings, setShowSettings] = useState(false)
+  const { settingsOpen, setSettingsOpen } = useAppStore()
 
   useEffect(() => {
     // Fetch status on mount
@@ -86,15 +87,15 @@ export function StatusBar() {
 
           <button
             className="text-muted-foreground hover:text-foreground"
-            onClick={() => setShowSettings(true)}
-            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings (⌘,)"
           >
             ⚙️
           </button>
         </div>
       </div>
 
-      <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} />
+      <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </>
   )
 }

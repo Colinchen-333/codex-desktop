@@ -3,11 +3,10 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { cn } from '../../lib/utils'
 import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
+import { useAppStore } from '../../stores/app'
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
 import { RenameDialog } from '../ui/RenameDialog'
 import { useToast } from '../ui/Toast'
-
-type Tab = 'projects' | 'sessions'
 
 // Helper function to format relative time
 function formatRelativeTime(timestamp: number): string {
@@ -26,7 +25,7 @@ function formatRelativeTime(timestamp: number): string {
 }
 
 export function Sidebar() {
-  const [activeTab, setActiveTab] = useState<Tab>('projects')
+  const { sidebarTab: activeTab, setSidebarTab: setActiveTab } = useAppStore()
   const { projects, selectedProjectId, selectProject, addProject, removeProject, updateProject } =
     useProjectsStore()
   const { sessions, selectedSessionId, selectSession, fetchSessions, updateSession, deleteSession, isLoading: sessionsLoading } =
