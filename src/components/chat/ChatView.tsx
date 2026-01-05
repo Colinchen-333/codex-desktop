@@ -1,12 +1,19 @@
-import { useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 import { cn } from '../../lib/utils'
 import { useThreadStore, type AnyThreadItem } from '../../stores/thread'
+import { useAppStore } from '../../stores/app'
 import { Markdown } from '../ui/Markdown'
 import { DiffView, parseDiff, type FileDiff } from '../ui/DiffView'
 
+// Maximum height for the textarea (in pixels)
+const MAX_TEXTAREA_HEIGHT = 200
+
 export function ChatView() {
   const { items, itemOrder, turnStatus, sendMessage, interrupt } = useThreadStore()
+  const { shouldFocusInput, clearFocusInput } = useAppStore()
   const [inputValue, setInputValue] = useState('')
+  const [attachedImages, setAttachedImages] = useState<string[]>([])
+  const [isDragging, setIsDragging] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -15,13 +22,43 @@ export function ChatView() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [itemOrder])
 
+  // Handle focus input trigger from keyboard shortcut
+  useEffect(() => {
+    if (shouldFocusInput) {
+      inputRef.current?.focus()
+      clearFocusInput()
+    }
+  }, [shouldFocusInput, clearFocusInput])
+
+  // Auto-resize textarea
+  const adjustTextareaHeight = useCallback(() => {
+    const textarea = inputRef.current
+    if (!textarea) return
+
+    // Reset height to auto to get the correct scrollHeight
+    textarea.style.height = 'auto'
+    // Set the height to scrollHeight, capped at MAX_TEXTAREA_HEIGHT
+    const newHeight = Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT)
+    textarea.style.height = `${newHeight}px`
+  }, [])
+
+  useEffect(() => {
+    adjustTextareaHeight()
+  }, [inputValue, adjustTextareaHeight])
+
   const handleSend = async () => {
     const text = inputValue.trim()
-    if (!text || turnStatus === 'running') return
+    if ((!text && attachedImages.length === 0) || turnStatus === 'running') return
 
     setInputValue('')
+    setAttachedImages([])
+    // Reset textarea height
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+    }
+
     try {
-      await sendMessage(text)
+      await sendMessage(text, attachedImages.length > 0 ? attachedImages : undefined)
     } catch (error) {
       console.error('Failed to send message:', error)
     }
@@ -33,6 +70,66 @@ export function ChatView() {
       handleSend()
     }
   }
+
+  // Handle image file
+  const handleImageFile = useCallback((file: File) => {
+    if (!file.type.startsWith('image/')) return
+
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const base64 = e.target?.result as string
+      setAttachedImages((prev) => [...prev, base64])
+    }
+    reader.readAsDataURL(file)
+  }, [])
+
+  // Handle paste event for images
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData.items
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault()
+          const file = item.getAsFile()
+          if (file) {
+            handleImageFile(file)
+          }
+          break
+        }
+      }
+    },
+    [handleImageFile]
+  )
+
+  // Handle drag and drop
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault()
+      setIsDragging(false)
+
+      const files = e.dataTransfer.files
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          handleImageFile(file)
+        }
+      }
+    },
+    [handleImageFile]
+  )
+
+  const removeImage = useCallback((index: number) => {
+    setAttachedImages((prev) => prev.filter((_, i) => i !== index))
+  }, [])
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -49,41 +146,84 @@ export function ChatView() {
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-border bg-card p-4">
+      <div
+        className={cn(
+          'border-t border-border bg-card p-4 transition-colors',
+          isDragging && 'bg-primary/5 border-primary'
+        )}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         <div className="mx-auto max-w-3xl">
-          <div className="flex gap-2">
-            <textarea
-              ref={inputRef}
-              className="min-h-[44px] flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm focus:border-primary focus:outline-none"
-              placeholder="Type your message..."
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-              disabled={turnStatus === 'running'}
-            />
+          {/* Attached Images Preview */}
+          {attachedImages.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {attachedImages.map((img, i) => (
+                <div key={i} className="relative group">
+                  <img
+                    src={img}
+                    alt={`Attached ${i + 1}`}
+                    className="h-16 w-16 rounded-lg object-cover border border-border"
+                  />
+                  <button
+                    className="absolute -right-1 -top-1 h-5 w-5 rounded-full bg-destructive text-destructive-foreground text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => removeImage(i)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2 items-end">
+            <div className="relative flex-1">
+              <textarea
+                ref={inputRef}
+                className={cn(
+                  'w-full min-h-[44px] max-h-[200px] resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm focus:border-primary focus:outline-none',
+                  isDragging && 'border-primary'
+                )}
+                placeholder={isDragging ? 'Drop image here...' : 'Type a message... (Paste or drop images)'}
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                disabled={turnStatus === 'running'}
+              />
+            </div>
             {turnStatus === 'running' ? (
               <button
-                className="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
+                className="h-[44px] rounded-lg bg-destructive px-4 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
                 onClick={interrupt}
               >
                 Stop
               </button>
             ) : (
               <button
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                className="h-[44px] rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 onClick={handleSend}
-                disabled={!inputValue.trim()}
+                disabled={!inputValue.trim() && attachedImages.length === 0}
+                title="Send message (Enter)"
               >
                 Send
               </button>
             )}
           </div>
-          {turnStatus === 'running' && (
-            <div className="mt-2 text-center text-xs text-muted-foreground">
-              Codex is thinking...
-            </div>
-          )}
+
+          <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              {turnStatus === 'running' ? (
+                'Codex is thinking...'
+              ) : (
+                <>Shift+Enter for new line • Paste or drag images</>
+              )}
+            </span>
+            {attachedImages.length > 0 && (
+              <span>{attachedImages.length} image(s) attached</span>
+            )}
+          </div>
         </div>
       </div>
     </div>
