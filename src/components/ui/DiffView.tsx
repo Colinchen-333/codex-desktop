@@ -115,7 +115,7 @@ function UnifiedDiff({ hunks }: { hunks: DiffHunk[] }) {
       {hunks.map((hunk, hunkIndex) => (
         <div key={hunkIndex}>
           {/* Hunk header */}
-          <div className="bg-blue-950/30 text-blue-400 px-3 py-1 border-y border-border/50">
+          <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50">
             @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@
           </div>
           {/* Lines */}
@@ -124,8 +124,8 @@ function UnifiedDiff({ hunks }: { hunks: DiffHunk[] }) {
               key={lineIndex}
               className={cn(
                 'flex',
-                line.type === 'add' && 'bg-green-950/30',
-                line.type === 'remove' && 'bg-red-950/30'
+                line.type === 'add' && 'bg-green-50 dark:bg-green-950/30',
+                line.type === 'remove' && 'bg-red-50 dark:bg-red-950/30'
               )}
             >
               {/* Line numbers */}
@@ -139,8 +139,8 @@ function UnifiedDiff({ hunks }: { hunks: DiffHunk[] }) {
               <div
                 className={cn(
                   'w-6 flex-shrink-0 text-center select-none',
-                  line.type === 'add' && 'text-green-500',
-                  line.type === 'remove' && 'text-red-500'
+                  line.type === 'add' && 'text-green-600 dark:text-green-500',
+                  line.type === 'remove' && 'text-red-600 dark:text-red-500'
                 )}
               >
                 {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
@@ -164,7 +164,7 @@ function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
         <div key={hunkIndex} className="contents">
           {/* Left side (old) */}
           <div className="border-r border-border">
-            <div className="bg-blue-950/30 text-blue-400 px-3 py-1 border-y border-border/50">
+            <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50">
               -{hunk.oldStart},{hunk.oldLines}
             </div>
             {hunk.lines
@@ -174,7 +174,7 @@ function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
                   key={lineIndex}
                   className={cn(
                     'flex',
-                    line.type === 'remove' && 'bg-red-950/30'
+                    line.type === 'remove' && 'bg-red-50 dark:bg-red-950/30'
                   )}
                 >
                   <div className="w-10 flex-shrink-0 text-right pr-2 text-muted-foreground select-none border-r border-border/30">
@@ -183,7 +183,7 @@ function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
                   <div
                     className={cn(
                       'w-6 flex-shrink-0 text-center select-none',
-                      line.type === 'remove' && 'text-red-500'
+                      line.type === 'remove' && 'text-red-600 dark:text-red-500'
                     )}
                   >
                     {line.type === 'remove' ? '-' : ' '}
@@ -196,7 +196,7 @@ function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
           </div>
           {/* Right side (new) */}
           <div>
-            <div className="bg-blue-950/30 text-blue-400 px-3 py-1 border-y border-border/50">
+            <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50">
               +{hunk.newStart},{hunk.newLines}
             </div>
             {hunk.lines
@@ -204,7 +204,7 @@ function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
               .map((line, lineIndex) => (
                 <div
                   key={lineIndex}
-                  className={cn('flex', line.type === 'add' && 'bg-green-950/30')}
+                  className={cn('flex', line.type === 'add' && 'bg-green-50 dark:bg-green-950/30')}
                 >
                   <div className="w-10 flex-shrink-0 text-right pr-2 text-muted-foreground select-none border-r border-border/30">
                     {line.newLineNumber || ''}
@@ -212,7 +212,7 @@ function SplitDiff({ hunks }: { hunks: DiffHunk[] }) {
                   <div
                     className={cn(
                       'w-6 flex-shrink-0 text-center select-none',
-                      line.type === 'add' && 'text-green-500'
+                      line.type === 'add' && 'text-green-600 dark:text-green-500'
                     )}
                   >
                     {line.type === 'add' ? '+' : ' '}
