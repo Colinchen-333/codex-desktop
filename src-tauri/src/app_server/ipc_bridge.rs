@@ -74,7 +74,8 @@ pub struct ThreadListParams {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadListResponse {
-    pub threads: Vec<ThreadSummary>,
+    /// List of threads (API returns 'data' field)
+    pub data: Vec<ThreadSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
@@ -143,12 +144,19 @@ pub enum ApprovalDecision {
     Decline,
 }
 
-/// Approval response parameters
+/// Approval response parameters (for notification fallback)
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalResponseParams {
     pub thread_id: String,
     pub item_id: String,
+    pub decision: ApprovalDecision,
+}
+
+/// Approval response result (for JSON-RPC response to server request)
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalResponseResult {
     pub decision: ApprovalDecision,
 }
 

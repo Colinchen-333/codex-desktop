@@ -25,9 +25,9 @@ struct JsonRpcRequest<T> {
     params: T,
 }
 
-/// JSON-RPC response structure (jsonrpc header is omitted in app-server protocol)
+/// JSON-RPC message structure (handles responses, notifications, and server requests)
 #[derive(Debug, serde::Deserialize)]
-struct JsonRpcResponse {
+struct JsonRpcMessage {
     id: Option<u64>,
     result: Option<JsonValue>,
     error: Option<JsonRpcError>,
@@ -211,7 +211,7 @@ impl AppServerProcess {
         pending_requests: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<JsonValue>>>>>,
         app_handle: &AppHandle,
     ) {
-        let response: JsonRpcResponse = match serde_json::from_str(line) {
+        let message: JsonRpcMessage = match serde_json::from_str(line) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("Failed to parse JSON-RPC message: {} - {}", e, line);
@@ -219,30 +219,51 @@ impl AppServerProcess {
             }
         };
 
-        // Check if this is a notification (no id) or a response
-        if let Some(id) = response.id {
-            // This is a response to a request
-            let mut pending = pending_requests.lock().await;
-            if let Some(sender) = pending.remove(&id) {
-                let result = if let Some(error) = response.error {
-                    Err(Error::AppServer(format!(
-                        "JSON-RPC error {}: {}",
-                        error.code, error.message
-                    )))
-                } else {
-                    Ok(response.result.unwrap_or(JsonValue::Null))
-                };
-                let _ = sender.send(result);
+        // Determine message type based on fields present
+        match (message.id, message.method.as_ref(), message.result.as_ref(), message.error.as_ref()) {
+            // Response to our request (has id, has result or error, no method)
+            (Some(id), None, _, _) => {
+                let mut pending = pending_requests.lock().await;
+                if let Some(sender) = pending.remove(&id) {
+                    let result = if let Some(error) = message.error {
+                        Err(Error::AppServer(format!(
+                            "JSON-RPC error {}: {}",
+                            error.code, error.message
+                        )))
+                    } else {
+                        Ok(message.result.unwrap_or(JsonValue::Null))
+                    };
+                    let _ = sender.send(result);
+                }
             }
-        } else if let Some(method) = response.method {
-            // This is a notification - emit as Tauri event
-            let event_name = method.replace('/', "-");
-            let params = response.params.unwrap_or(JsonValue::Null);
+            // Server-initiated request (has id AND method) - e.g., approval requests
+            (Some(id), Some(method), _, _) => {
+                let event_name = method.replace('/', "-");
+                // Include request ID in params so client can respond
+                let mut params = message.params.unwrap_or(JsonValue::Object(serde_json::Map::new()));
+                if let JsonValue::Object(ref mut map) = params {
+                    map.insert("_requestId".to_string(), JsonValue::Number(id.into()));
+                }
 
-            tracing::debug!("Emitting event: {} with params: {:?}", event_name, params);
+                tracing::debug!("Emitting server request: {} with params: {:?}", event_name, params);
 
-            if let Err(e) = app_handle.emit(&event_name, params) {
-                tracing::warn!("Failed to emit event {}: {}", event_name, e);
+                if let Err(e) = app_handle.emit(&event_name, params) {
+                    tracing::warn!("Failed to emit server request {}: {}", event_name, e);
+                }
+            }
+            // Notification (has method, no id)
+            (None, Some(method), _, _) => {
+                let event_name = method.replace('/', "-");
+                let params = message.params.unwrap_or(JsonValue::Null);
+
+                tracing::debug!("Emitting event: {} with params: {:?}", event_name, params);
+
+                if let Err(e) = app_handle.emit(&event_name, params) {
+                    tracing::warn!("Failed to emit event {}: {}", event_name, e);
+                }
+            }
+            _ => {
+                tracing::warn!("Unknown message type: {:?}", message);
             }
         }
     }
@@ -289,6 +310,35 @@ impl AppServerProcess {
             .map_err(|_| Error::AppServer("Response channel closed".to_string()))??;
 
         serde_json::from_value(result).map_err(|e| Error::Json(e))
+    }
+
+    /// Send a JSON-RPC response to a server-initiated request
+    pub async fn send_response<T: Serialize>(&mut self, request_id: u64, result: T) -> Result<()> {
+        #[derive(Serialize)]
+        struct JsonRpcResponseMsg<T> {
+            id: u64,
+            result: T,
+        }
+
+        let response = JsonRpcResponseMsg {
+            id: request_id,
+            result,
+        };
+
+        let mut json = serde_json::to_string(&response)?;
+        json.push('\n');
+
+        self.stdin
+            .write_all(json.as_bytes())
+            .await
+            .map_err(|e| Error::AppServer(format!("Failed to write to stdin: {}", e)))?;
+
+        self.stdin
+            .flush()
+            .await
+            .map_err(|e| Error::AppServer(format!("Failed to flush stdin: {}", e)))?;
+
+        Ok(())
     }
 
     /// Send a JSON-RPC notification (no response expected)

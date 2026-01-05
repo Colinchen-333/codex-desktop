@@ -5,7 +5,11 @@ use serde_json::Value as JsonValue;
 use std::io::Write;
 use tauri::State;
 
-use crate::app_server::ipc_bridge::*;
+use crate::app_server::ipc_bridge::{
+    ApprovalDecision, ApprovalResponseResult, ThreadListParams, ThreadListResponse,
+    ThreadResumeParams, ThreadResumeResponse, ThreadStartParams, ThreadStartResponse,
+    TurnInterruptParams, TurnStartParams, TurnStartResponse, UserInput,
+};
 use crate::database::SessionMetadata;
 use crate::state::AppState;
 use crate::{Error, Result};
@@ -129,12 +133,17 @@ pub async fn interrupt_turn(state: State<'_, AppState>, thread_id: String) -> Re
 }
 
 /// Respond to an approval request
+///
+/// request_id is the JSON-RPC request ID from the server's approval request.
+/// The server sends approval requests as JSON-RPC requests (with both id and method),
+/// so we respond with a proper JSON-RPC response containing the same id.
 #[tauri::command]
 pub async fn respond_to_approval(
     state: State<'_, AppState>,
-    thread_id: String,
-    item_id: String,
+    _thread_id: String,
+    _item_id: String,
     decision: String,
+    request_id: u64,
 ) -> Result<()> {
     let decision = match decision.as_str() {
         "accept" => ApprovalDecision::Accept,
@@ -143,20 +152,17 @@ pub async fn respond_to_approval(
         _ => return Err(crate::Error::Other(format!("Invalid decision: {}", decision))),
     };
 
-    let params = ApprovalResponseParams {
-        thread_id,
-        item_id,
-        decision,
-    };
+    let result = ApprovalResponseResult { decision };
 
     let mut server = state.app_server.write().await;
     let server = server
         .as_mut()
         .ok_or_else(|| crate::Error::AppServer("App server not running".to_string()))?;
 
-    // The approval response is typically sent as a JSON-RPC response, not a request
-    // For now, we'll use a notification-style approach
-    server.send_notification("approval/respond", params).await?;
+    // Send JSON-RPC response with the original request ID
+    server.send_response(request_id, result).await?;
+
+    tracing::info!("Responded to approval request {}", request_id);
 
     Ok(())
 }

@@ -27,6 +27,7 @@ export interface CommandApprovalRequestedEvent {
   command: string
   cwd: string
   commandActions: string[]
+  _requestId: number // JSON-RPC request ID for responding
 }
 
 export interface FileChangeApprovalRequestedEvent {
@@ -37,6 +38,7 @@ export interface FileChangeApprovalRequestedEvent {
     kind: 'add' | 'modify' | 'delete'
     diff: string
   }>
+  _requestId: number // JSON-RPC request ID for responding
 }
 
 export interface TurnCompletedEvent {

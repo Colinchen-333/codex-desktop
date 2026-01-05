@@ -91,6 +91,7 @@ export interface PendingApproval {
   itemId: string
   type: 'command' | 'fileChange'
   data: CommandApprovalRequestedEvent | FileChangeApprovalRequestedEvent
+  requestId: number // JSON-RPC request ID for responding
 }
 
 // ==================== Store State ====================
@@ -279,11 +280,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   respondToApproval: async (itemId, decision, snapshotId) => {
-    const { activeThread } = get()
+    const { activeThread, pendingApprovals } = get()
     if (!activeThread) return
 
+    // Find the pending approval to get the requestId
+    const pendingApproval = pendingApprovals.find((p) => p.itemId === itemId)
+    if (!pendingApproval) {
+      console.error('No pending approval found for itemId:', itemId)
+      return
+    }
+
     try {
-      await threadApi.respondToApproval(activeThread.id, itemId, decision)
+      await threadApi.respondToApproval(activeThread.id, itemId, decision, pendingApproval.requestId)
 
       // Update item status
       set((state) => {
@@ -455,7 +463,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         : [...state.itemOrder, event.itemId],
       pendingApprovals: [
         ...state.pendingApprovals,
-        { itemId: event.itemId, type: 'command', data: event },
+        { itemId: event.itemId, type: 'command', data: event, requestId: event._requestId },
       ],
     }))
   },
@@ -479,7 +487,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         : [...state.itemOrder, event.itemId],
       pendingApprovals: [
         ...state.pendingApprovals,
-        { itemId: event.itemId, type: 'fileChange', data: event },
+        { itemId: event.itemId, type: 'fileChange', data: event, requestId: event._requestId },
       ],
     }))
   },

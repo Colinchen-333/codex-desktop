@@ -178,9 +178,10 @@ export const threadApi = {
   respondToApproval: (
     threadId: string,
     itemId: string,
-    decision: 'accept' | 'acceptForSession' | 'decline'
+    decision: 'accept' | 'acceptForSession' | 'decline',
+    requestId: number
   ) =>
-    invoke<void>('respond_to_approval', { threadId, itemId, decision }),
+    invoke<void>('respond_to_approval', { threadId, itemId, decision, requestId }),
 }
 
 // ==================== Snapshot API ====================
