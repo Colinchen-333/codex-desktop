@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { cn } from '../../lib/utils'
 import { serverApi, type ServerStatus, type AccountInfo } from '../../lib/api'
+import { SettingsDialog } from '../settings/SettingsDialog'
 
 export function StatusBar() {
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
 
   useEffect(() => {
     // Fetch status on mount
@@ -45,42 +47,54 @@ export function StatusBar() {
   }
 
   return (
-    <div className="flex h-7 items-center justify-between border-t border-border bg-card px-3 text-xs">
-      {/* Left side - Server status */}
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <div
-            className={cn(
-              'h-2 w-2 rounded-full',
-              serverStatus?.isRunning ? 'bg-green-500' : 'bg-red-500'
-            )}
-          />
-          <span className="text-muted-foreground">
-            Engine: {serverStatus?.isRunning ? 'Running' : 'Stopped'}
-          </span>
+    <>
+      <div className="flex h-7 items-center justify-between border-t border-border bg-card px-3 text-xs">
+        {/* Left side - Server status */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <div
+              className={cn(
+                'h-2 w-2 rounded-full',
+                serverStatus?.isRunning ? 'bg-green-500' : 'bg-red-500'
+              )}
+            />
+            <span className="text-muted-foreground">
+              Engine: {serverStatus?.isRunning ? 'Running' : 'Stopped'}
+            </span>
+          </div>
+
+          {!serverStatus?.isRunning && (
+            <button
+              className="text-primary hover:underline"
+              onClick={handleRestartServer}
+            >
+              Restart
+            </button>
+          )}
         </div>
 
-        {!serverStatus?.isRunning && (
+        {/* Right side - Account info & Settings */}
+        <div className="flex items-center gap-4">
+          {accountInfo?.loggedIn ? (
+            <span className="text-muted-foreground">
+              {accountInfo.email || 'Logged in'}
+              {accountInfo.planType && ` (${accountInfo.planType})`}
+            </span>
+          ) : (
+            <span className="text-yellow-500">Not logged in</span>
+          )}
+
           <button
-            className="text-primary hover:underline"
-            onClick={handleRestartServer}
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => setShowSettings(true)}
+            title="Settings"
           >
-            Restart
+            ⚙️
           </button>
-        )}
+        </div>
       </div>
 
-      {/* Right side - Account info */}
-      <div className="flex items-center gap-4">
-        {accountInfo?.loggedIn ? (
-          <span className="text-muted-foreground">
-            {accountInfo.email || 'Logged in'}
-            {accountInfo.planType && ` (${accountInfo.planType})`}
-          </span>
-        ) : (
-          <span className="text-yellow-500">Not logged in</span>
-        )}
-      </div>
-    </div>
+      <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} />
+    </>
   )
 }

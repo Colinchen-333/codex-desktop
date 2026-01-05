@@ -1,13 +1,17 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Sidebar } from './components/layout/Sidebar'
 import { MainArea } from './components/layout/MainArea'
 import { StatusBar } from './components/layout/StatusBar'
+import { OnboardingFlow, useNeedsOnboarding } from './components/onboarding/OnboardingFlow'
+import { ToastProvider } from './components/ui/Toast'
 import { useProjectsStore } from './stores/projects'
 import { useThreadStore } from './stores/thread'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
 
 function App() {
   const fetchProjects = useProjectsStore((state) => state.fetchProjects)
+  const needsOnboarding = useNeedsOnboarding()
+  const [showOnboarding, setShowOnboarding] = useState(false)
   const {
     handleItemStarted,
     handleItemCompleted,
@@ -17,6 +21,11 @@ function App() {
     handleTurnCompleted,
     handleTurnFailed,
   } = useThreadStore()
+
+  // Check if onboarding is needed
+  useEffect(() => {
+    setShowOnboarding(needsOnboarding)
+  }, [needsOnboarding])
 
   // Fetch projects on mount
   useEffect(() => {
@@ -56,17 +65,33 @@ function App() {
     handleTurnFailed,
   ])
 
-  return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background">
-      {/* Left Sidebar */}
-      <Sidebar />
+  // Show onboarding flow if needed
+  if (showOnboarding) {
+    return (
+      <ToastProvider>
+        <OnboardingFlow
+          onComplete={() => {
+            setShowOnboarding(false)
+            fetchProjects()
+          }}
+        />
+      </ToastProvider>
+    )
+  }
 
-      {/* Main Content Area */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <MainArea />
-        <StatusBar />
+  return (
+    <ToastProvider>
+      <div className="flex h-screen w-screen overflow-hidden bg-background">
+        {/* Left Sidebar */}
+        <Sidebar />
+
+        {/* Main Content Area */}
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <MainArea />
+          <StatusBar />
+        </div>
       </div>
-    </div>
+    </ToastProvider>
   )
 }
 
