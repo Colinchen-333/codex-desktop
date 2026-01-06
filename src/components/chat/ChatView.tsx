@@ -44,6 +44,31 @@ function truncateOutput(output: string, maxLines: number = MAX_OUTPUT_LINES): { 
   return { text: truncatedText, truncated: true, omittedLines: lines.length - maxLines }
 }
 
+// Colorize diff output like CLI
+function ColorizedOutput({ text }: { text: string }) {
+  const lines = text.split('\n')
+  return (
+    <>
+      {lines.map((line, i) => {
+        let className = ''
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          className = 'text-green-600 dark:text-green-400'
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          className = 'text-red-600 dark:text-red-400'
+        } else if (line.startsWith('@@') || line.startsWith('diff --git')) {
+          className = 'text-cyan-600 dark:text-cyan-400'
+        }
+        return (
+          <span key={i} className={className}>
+            {line}
+            {i < lines.length - 1 && '\n'}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
 export function ChatView() {
   const { items, itemOrder, turnStatus, sendMessage, interrupt, addInfoItem } = useThreadStore()
   const { shouldFocusInput, clearFocusInput } = useAppStore()
@@ -867,11 +892,16 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
     reason?: string
     proposedExecpolicyAmendment?: { command: string[] } | null
   }
-  const { respondToApproval, activeThread } = useThreadStore()
+  const { respondToApproval, activeThread, sendMessage } = useThreadStore()
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [isExpanded, setIsExpanded] = useState(true)
   const [showFullOutput, setShowFullOutput] = useState(false)
+  const [approvalMode, setApprovalMode] = useState<'select' | 'explain' | 'feedback'>('select')
+  const [feedbackText, setFeedbackText] = useState('')
+  const [explanation, setExplanation] = useState('')
+  const [isExplaining, setIsExplaining] = useState(false)
   const outputRef = useRef<HTMLPreElement>(null)
+  const feedbackInputRef = useRef<HTMLInputElement>(null)
 
   // Format command for display
   const commandDisplay = Array.isArray(content.command)
@@ -898,6 +928,34 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
         execpolicyAmendment: content.proposedExecpolicyAmendment,
       })
     }
+  }
+
+  // Handle explain request - like CLI's 'x' option
+  const handleExplain = async () => {
+    setApprovalMode('explain')
+    setIsExplaining(true)
+    try {
+      // Generate explanation by sending a message to the AI
+      const cmd = commandDisplay
+      await sendMessage(`Please explain what this command does step by step, including any potential risks:\n\`\`\`\n${cmd}\n\`\`\``)
+      setExplanation('Explanation sent to AI. Check the response above.')
+    } catch {
+      setExplanation('Unable to generate explanation.')
+    } finally {
+      setIsExplaining(false)
+    }
+  }
+
+  // Handle feedback submission - like CLI's 'e' option
+  const handleFeedbackSubmit = () => {
+    if (feedbackText.trim()) {
+      respondToApproval(item.id, 'decline')
+      sendMessage(feedbackText.trim())
+    } else {
+      respondToApproval(item.id, 'decline')
+    }
+    setFeedbackText('')
+    setApprovalMode('select')
   }
 
   return (
@@ -1002,13 +1060,13 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
                 <pre
                   ref={outputRef}
                   className={cn(
-                    "max-h-60 overflow-auto rounded-lg p-3 font-mono text-xs scrollbar-thin scrollbar-thumb-border",
+                    "max-h-60 overflow-auto rounded-lg p-3 font-mono text-xs scrollbar-thin scrollbar-thumb-border whitespace-pre-wrap",
                     content.exitCode !== undefined && content.exitCode !== 0
                       ? "bg-red-50/50 dark:bg-red-900/10 text-red-800 dark:text-red-300"
                       : "bg-black/[0.03] dark:bg-white/[0.03] text-muted-foreground"
                   )}
                 >
-                  {outputContent || (content.isRunning ? '...' : '')}
+                  {outputContent ? <ColorizedOutput text={outputContent} /> : (content.isRunning ? '...' : '')}
                 </pre>
                 {/* Truncation indicator */}
                 {isOutputTruncated && !content.isRunning && (
@@ -1053,48 +1111,131 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
             {/* Approval UI */}
             {content.needsApproval && (
               <div className="mt-5 pt-3 border-t border-border/40">
-                {/* Primary Actions */}
-                <div className="flex gap-2">
-                  <button
-                    className="flex-1 rounded-lg bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
-                    onClick={() => handleApprove('accept')}
-                  >
-                    Run Once
-                  </button>
-                  <button
-                    className="flex-1 rounded-lg bg-secondary px-4 py-2.5 text-xs font-semibold text-secondary-foreground hover:bg-secondary/80 transition-colors"
-                    onClick={() => handleApprove('acceptForSession')}
-                  >
-                    Allow for Session
-                  </button>
-                  <button
-                    className="rounded-lg border border-border bg-background px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-colors"
-                    onClick={() => handleApprove('decline')}
-                  >
-                    Decline
-                  </button>
-                </div>
-
-                {/* Advanced Options Toggle */}
-                {content.proposedExecpolicyAmendment && (
-                  <button
-                    className="mt-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => setShowAdvanced(!showAdvanced)}
-                  >
-                    {showAdvanced ? '▼ Hide options' : '▶ More options'}
-                  </button>
-                )}
-
-                {/* Advanced Actions */}
-                {showAdvanced && content.proposedExecpolicyAmendment && (
-                  <div className="mt-2 flex gap-2 animate-in slide-in-from-top-2 duration-200">
+                {/* Explanation Mode - like CLI 'x' option */}
+                {approvalMode === 'explain' && (
+                  <div className="animate-in fade-in duration-200">
+                    <div className="mb-3 text-sm font-medium text-yellow-600 dark:text-yellow-400">
+                      Command Explanation:
+                    </div>
+                    {isExplaining ? (
+                      <div className="text-sm text-muted-foreground italic">Generating explanation...</div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground">{explanation}</div>
+                    )}
                     <button
-                      className="flex-1 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-[11px] font-medium text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
-                      onClick={() => handleApprove('acceptWithExecpolicyAmendment')}
+                      className="mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => setApprovalMode('select')}
                     >
-                      Always Allow (Persistent)
+                      ← Back to options
                     </button>
                   </div>
+                )}
+
+                {/* Feedback Mode - like CLI 'e' option */}
+                {approvalMode === 'feedback' && (
+                  <div className="animate-in fade-in duration-200">
+                    <div className="mb-2 text-sm">Give the model feedback (Enter to submit):</div>
+                    <div className="flex gap-2">
+                      <input
+                        ref={feedbackInputRef}
+                        type="text"
+                        value={feedbackText}
+                        onChange={(e) => setFeedbackText(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleFeedbackSubmit()}
+                        placeholder="Type a reason..."
+                        className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        autoFocus
+                      />
+                      <button
+                        className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        onClick={handleFeedbackSubmit}
+                      >
+                        Submit
+                      </button>
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Default: Decline and continue without feedback
+                    </div>
+                    <button
+                      className="mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => setApprovalMode('select')}
+                    >
+                      ← Back to options
+                    </button>
+                  </div>
+                )}
+
+                {/* Selection Mode - main approval options */}
+                {approvalMode === 'select' && (
+                  <>
+                    {/* Primary Actions */}
+                    <div className="flex gap-2">
+                      <button
+                        className="flex-1 rounded-lg bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
+                        onClick={() => handleApprove('accept')}
+                        title="Keyboard: Y"
+                      >
+                        Yes (y)
+                      </button>
+                      <button
+                        className="flex-1 rounded-lg bg-secondary px-4 py-2.5 text-xs font-semibold text-secondary-foreground hover:bg-secondary/80 transition-colors"
+                        onClick={() => handleApprove('acceptForSession')}
+                        title="Keyboard: A"
+                      >
+                        Always (a)
+                      </button>
+                      <button
+                        className="rounded-lg border border-border bg-background px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive transition-colors"
+                        onClick={() => handleApprove('decline')}
+                        title="Keyboard: N"
+                      >
+                        No (n)
+                      </button>
+                    </div>
+
+                    {/* Secondary Actions - like CLI */}
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-[11px] font-medium text-muted-foreground hover:bg-secondary transition-colors"
+                        onClick={handleExplain}
+                        title="Keyboard: X"
+                      >
+                        Explain (x)
+                      </button>
+                      <button
+                        className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-[11px] font-medium text-muted-foreground hover:bg-secondary transition-colors"
+                        onClick={() => {
+                          setApprovalMode('feedback')
+                          setTimeout(() => feedbackInputRef.current?.focus(), 100)
+                        }}
+                        title="Keyboard: E"
+                      >
+                        Edit/Feedback (e)
+                      </button>
+                    </div>
+
+                    {/* Advanced Options Toggle */}
+                    {content.proposedExecpolicyAmendment && (
+                      <button
+                        className="mt-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => setShowAdvanced(!showAdvanced)}
+                      >
+                        {showAdvanced ? '▼ Hide options' : '▶ More options'}
+                      </button>
+                    )}
+
+                    {/* Advanced Actions */}
+                    {showAdvanced && content.proposedExecpolicyAmendment && (
+                      <div className="mt-2 flex gap-2 animate-in slide-in-from-top-2 duration-200">
+                        <button
+                          className="flex-1 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-[11px] font-medium text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
+                          onClick={() => handleApprove('acceptWithExecpolicyAmendment')}
+                        >
+                          Always Allow (Persistent)
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
