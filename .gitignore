@@ -1,9 +1,10 @@
-# Dependencies
-node_modules/
+# Submodules - managed separately
+codex/
+codex-desktop/
 
-# Build outputs
-dist/
-src-tauri/target/
+# OS
+.DS_Store
+Thumbs.db
 
 # IDE
 .vscode/
@@ -11,21 +12,6 @@ src-tauri/target/
 *.swp
 *.swo
 
-# OS
-.DS_Store
-Thumbs.db
-
 # Logs
 *.log
 npm-debug.log*
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Tauri
-src-tauri/WixTools/
-
-# TypeScript
-*.tsbuildinfo

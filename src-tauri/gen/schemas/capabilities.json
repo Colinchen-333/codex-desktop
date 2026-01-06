@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Default capability for Codex Desktop","local":true,"windows":["main"],"permissions":["core:default","shell:allow-open","shell:allow-execute","dialog:allow-open","dialog:allow-save","dialog:allow-message","dialog:allow-ask","dialog:allow-confirm"]}}
