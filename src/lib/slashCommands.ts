@@ -1,11 +1,12 @@
 // Slash Commands Configuration
 // Based on Codex CLI slash commands
+// Uses Lucide icon names for consistent styling
 
 export interface SlashCommand {
   name: string
   description: string
   aliases?: string[]
-  icon?: string
+  icon: string // Lucide icon name
   category: 'general' | 'tools' | 'settings' | 'workflow'
 }
 
@@ -15,13 +16,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: 'model',
     description: 'Switch to a different model',
     category: 'settings',
-    icon: '🤖',
+    icon: 'cpu',
   },
   {
     name: 'approvals',
     description: 'Change approval policy and safety settings',
     category: 'settings',
-    icon: '✅',
+    icon: 'shield-check',
   },
 
   // Tools commands
@@ -29,61 +30,61 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: 'skills',
     description: 'List available skills and usage',
     category: 'tools',
-    icon: '🧰',
+    icon: 'wrench',
   },
   {
     name: 'review',
     description: 'Review current changes',
     category: 'workflow',
-    icon: '👀',
+    icon: 'eye',
   },
   {
     name: 'new',
     description: 'Start a new chat session',
     category: 'general',
-    icon: '🆕',
+    icon: 'plus-circle',
   },
   {
     name: 'resume',
     description: 'Resume a saved chat session',
     category: 'general',
-    icon: '🕘',
+    icon: 'history',
   },
   {
     name: 'init',
     description: 'Create an AGENTS.md guide',
     category: 'workflow',
-    icon: '🧭',
+    icon: 'compass',
   },
   {
     name: 'compact',
     description: 'Summarize and compact conversation context',
     category: 'general',
-    icon: '📦',
+    icon: 'package',
   },
   {
     name: 'diff',
     description: 'Show git diff (including untracked files)',
     category: 'tools',
-    icon: '🧾',
+    icon: 'git-compare',
   },
   {
     name: 'mention',
     description: 'Mention a file (insert @)',
     category: 'tools',
-    icon: '📌',
+    icon: 'at-sign',
   },
   {
     name: 'status',
     description: 'Show current session status',
     category: 'general',
-    icon: '📊',
+    icon: 'activity',
   },
   {
     name: 'mcp',
     description: 'List configured MCP tools',
     category: 'tools',
-    icon: '🔌',
+    icon: 'plug',
   },
 
   // General commands
@@ -91,38 +92,50 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: 'logout',
     description: 'Log out of Codex',
     category: 'general',
-    icon: '🚪',
+    icon: 'log-out',
   },
   {
     name: 'quit',
     description: 'Quit Codex Desktop',
     category: 'general',
-    icon: '🛑',
+    icon: 'power',
   },
   {
     name: 'exit',
     description: 'Quit Codex Desktop',
     category: 'general',
-    icon: '🛑',
+    icon: 'power',
   },
   // Workflow commands
   {
     name: 'feedback',
     description: 'Send feedback to maintainers',
     category: 'workflow',
-    icon: '💬',
+    icon: 'message-circle',
   },
   {
     name: 'rollout',
     description: 'Show rollout file path',
     category: 'workflow',
-    icon: '🧪',
+    icon: 'flask-conical',
   },
   {
     name: 'test-approval',
     description: 'Test approval request',
     category: 'workflow',
-    icon: '🧷',
+    icon: 'test-tube-2',
+  },
+  {
+    name: 'help',
+    description: 'Show available commands',
+    category: 'general',
+    icon: 'help-circle',
+  },
+  {
+    name: 'clear',
+    description: 'Clear the conversation',
+    category: 'general',
+    icon: 'trash-2',
   },
 ]
 
@@ -162,11 +175,11 @@ export function isCompleteCommand(input: string): SlashCommand | null {
 }
 
 /**
- * Get command categories
+ * Get command categories with icons
  */
-export const COMMAND_CATEGORIES: Record<SlashCommand['category'], string> = {
-  general: 'General',
-  tools: 'Tools',
-  settings: 'Settings',
-  workflow: 'Workflow',
+export const COMMAND_CATEGORIES: Record<SlashCommand['category'], { label: string; icon: string }> = {
+  general: { label: 'General', icon: 'layout-grid' },
+  tools: { label: 'Tools', icon: 'wrench' },
+  settings: { label: 'Settings', icon: 'settings' },
+  workflow: { label: 'Workflow', icon: 'git-branch' },
 }

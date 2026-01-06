@@ -1,5 +1,17 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import {
+  Plus,
+  Trash2,
+  Settings as SettingsIcon,
+  Cpu,
+  Shield,
+  ListChecks,
+  User,
+  Sun,
+  Moon,
+  Monitor,
+  ChevronRight,
+} from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { serverApi, allowlistApi, type AccountInfo } from '../../lib/api'
 import { useProjectsStore } from '../../stores/projects'
@@ -47,26 +59,35 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           </div>
           
           {[
-            { id: 'general' as const, label: 'General', icon: '⚙️' },
-            { id: 'model' as const, label: 'Model', icon: '🤖' },
-            { id: 'safety' as const, label: 'Safety', icon: '🛡️' },
-            { id: 'allowlist' as const, label: 'Allowlist', icon: '✅' },
-            { id: 'account' as const, label: 'Account', icon: '👤' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              className={cn(
-                'flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium transition-all',
-                activeTab === tab.id
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'
-              )}
-              onClick={() => setSettingsTab(tab.id)}
-            >
-              <span>{tab.icon}</span>
-              <span>{tab.label}</span>
-            </button>
-          ))}
+            { id: 'general' as const, label: 'General', icon: SettingsIcon },
+            { id: 'model' as const, label: 'Model', icon: Cpu },
+            { id: 'safety' as const, label: 'Safety', icon: Shield },
+            { id: 'allowlist' as const, label: 'Allowlist', icon: ListChecks },
+            { id: 'account' as const, label: 'Account', icon: User },
+          ].map((tab) => {
+            const Icon = tab.icon
+            return (
+              <button
+                key={tab.id}
+                className={cn(
+                  'group flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium transition-all',
+                  activeTab === tab.id
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'
+                )}
+                onClick={() => setSettingsTab(tab.id)}
+              >
+                <Icon size={18} className={cn(
+                  'transition-colors',
+                  activeTab === tab.id ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'
+                )} />
+                <span className="flex-1">{tab.label}</span>
+                {activeTab === tab.id && (
+                  <ChevronRight size={14} className="text-muted-foreground" />
+                )}
+              </button>
+            )
+          })}
         </div>
 
         {/* Content Area */}
@@ -120,24 +141,27 @@ function GeneralSettings() {
         <label className="mb-2 block text-sm font-medium">Theme</label>
         <div className="flex gap-2">
           {[
-            { value: 'light' as const, label: 'Light', icon: '☀️' },
-            { value: 'dark' as const, label: 'Dark', icon: '🌙' },
-            { value: 'system' as const, label: 'System', icon: '💻' },
-          ].map((option) => (
-            <button
-              key={option.value}
-              className={cn(
-                'flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-colors',
-                theme === option.value
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border hover:border-primary/50 hover:bg-accent'
-              )}
-              onClick={() => setTheme(option.value)}
-            >
-              <span>{option.icon}</span>
-              <span>{option.label}</span>
-            </button>
-          ))}
+            { value: 'light' as const, label: 'Light', icon: Sun },
+            { value: 'dark' as const, label: 'Dark', icon: Moon },
+            { value: 'system' as const, label: 'System', icon: Monitor },
+          ].map((option) => {
+            const Icon = option.icon
+            return (
+              <button
+                key={option.value}
+                className={cn(
+                  'flex flex-1 items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-all',
+                  theme === option.value
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border hover:border-primary/50 hover:bg-accent'
+                )}
+                onClick={() => setTheme(option.value)}
+              >
+                <Icon size={16} />
+                <span>{option.label}</span>
+              </button>
+            )
+          })}
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
           Choose your preferred color theme. System will automatically match your OS settings.
