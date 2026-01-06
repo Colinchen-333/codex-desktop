@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback, memo } from 'react'
-import { X, Paperclip, Image as ImageIcon, StopCircle, ArrowUp, Terminal, FileCode, Brain, Wrench, AlertCircle, ChevronDown, ChevronRight, ExternalLink, ListChecks, Circle, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
+import { X, Paperclip, Image as ImageIcon, StopCircle, ArrowUp, Terminal, FileCode, Brain, Wrench, AlertCircle, ChevronDown, ChevronRight, ExternalLink, ListChecks, Circle, CheckCircle2, XCircle, Loader2, Clock, Coins } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useThreadStore, type AnyThreadItem, type PlanStep } from '../../stores/thread'
 import { useProjectsStore } from '../../stores/projects'
@@ -183,7 +183,7 @@ export function ChatView() {
   const handleSend = async () => {
     const text = inputValue.trim()
     if (!text && attachedImages.length === 0) return
-    if (turnStatus === 'running' && !text.startsWith('/')) return
+    // Allow sending slash commands and queue messages while running
 
     setInputValue('')
     setAttachedImages([])
@@ -529,6 +529,9 @@ export function ChatView() {
       {/* Input Area */}
       <div className="p-4 bg-transparent" role="form" aria-label="Message composer">
         <div className="mx-auto max-w-3xl">
+          {/* CLI-style Working Status - Above Input */}
+          <WorkingStatusBar />
+
           <div
             className={cn(
               "relative rounded-3xl bg-card shadow-lg border border-border/50 p-2 transition-all duration-200",
@@ -603,48 +606,47 @@ export function ChatView() {
               <textarea
                 ref={inputRef}
                 className="flex-1 max-h-[200px] min-h-[44px] resize-none bg-transparent py-3 text-sm focus:outline-none placeholder:text-muted-foreground/70"
-                placeholder="Message Codex..."
+                placeholder={turnStatus === 'running' ? "Type to queue next message..." : "Message Codex..."}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                disabled={turnStatus === 'running'}
                 rows={1}
                 aria-label="Message input"
                 aria-describedby="input-hint"
               />
 
-              {turnStatus === 'running' ? (
-                <button
-                  className="mb-1 h-10 w-10 flex items-center justify-center rounded-full bg-secondary text-secondary-foreground hover:bg-destructive hover:text-destructive-foreground transition-all duration-200"
-                  onClick={interrupt}
-                  title="Stop generation"
-                  aria-label="Stop generation"
-                >
-                  <StopCircle size={20} aria-hidden="true" />
-                </button>
-              ) : (
+              {/* Send/Stop button - allow sending queue messages while running */}
+              <div className="flex items-center gap-1 mb-1">
+                {turnStatus === 'running' && (
+                  <button
+                    className="h-10 w-10 flex items-center justify-center rounded-full bg-secondary text-secondary-foreground hover:bg-destructive hover:text-destructive-foreground transition-all duration-200"
+                    onClick={interrupt}
+                    title="Stop generation (Esc)"
+                    aria-label="Stop generation"
+                  >
+                    <StopCircle size={20} aria-hidden="true" />
+                  </button>
+                )}
                 <button
                   className={cn(
-                    "mb-1 h-10 w-10 flex items-center justify-center rounded-full transition-all duration-200 shadow-sm",
+                    "h-10 w-10 flex items-center justify-center rounded-full transition-all duration-200 shadow-sm",
                     !inputValue.trim() && attachedImages.length === 0
                       ? "bg-secondary text-muted-foreground cursor-not-allowed opacity-50"
                       : "bg-primary text-primary-foreground hover:scale-105 hover:shadow-md"
                   )}
                   onClick={handleSend}
                   disabled={!inputValue.trim() && attachedImages.length === 0}
-                  title="Send message (Enter)"
-                  aria-label="Send message"
+                  title={turnStatus === 'running' ? "Queue message" : "Send message (Enter)"}
+                  aria-label={turnStatus === 'running' ? "Queue message" : "Send message"}
                 >
                   <ArrowUp size={20} aria-hidden="true" />
                 </button>
-              )}
+              </div>
             </div>
           </div>
-          
-          <div id="input-hint" className="mt-2 text-center text-[10px] text-muted-foreground/60 select-none">
-            Codex can make mistakes. Review code before applying.
-          </div>
+
+          <InputStatusHint />
         </div>
       </div>
     </div>
@@ -1723,6 +1725,77 @@ function PlanCard({ item }: { item: AnyThreadItem }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// CLI-style Working Status Bar - Shown above input when AI is working
+function WorkingStatusBar() {
+  const turnStatus = useThreadStore((state) => state.turnStatus)
+  const turnTiming = useThreadStore((state) => state.turnTiming)
+  const [elapsedMs, setElapsedMs] = useState(0)
+
+  // Real-time elapsed time update
+  useEffect(() => {
+    if (turnStatus !== 'running' || !turnTiming.startedAt) {
+      setElapsedMs(0)
+      return
+    }
+    const interval = setInterval(() => {
+      setElapsedMs(Date.now() - turnTiming.startedAt!)
+    }, 100)
+    return () => clearInterval(interval)
+  }, [turnStatus, turnTiming.startedAt])
+
+  if (turnStatus !== 'running') return null
+
+  const formatElapsed = (ms: number) => {
+    const secs = Math.floor(ms / 1000)
+    return `${secs}s`
+  }
+
+  return (
+    <div className="mb-2 px-4 py-2 rounded-2xl bg-secondary/50 border border-border/30 animate-in fade-in slide-in-from-bottom-2 duration-200">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {/* Spinning indicator */}
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+          </span>
+          {/* Status text with shimmer */}
+          <span className="text-sm font-medium shimmer-text">Working</span>
+          {/* Elapsed time */}
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Clock size={12} />
+            {formatElapsed(elapsedMs)}
+          </span>
+        </div>
+        {/* Interrupt hint */}
+        <span className="text-[10px] text-muted-foreground/70">
+          esc to interrupt
+        </span>
+      </div>
+    </div>
+  )
+}
+
+// Input Status Hint - Shows token usage and shortcuts
+function InputStatusHint() {
+  const tokenUsage = useThreadStore((state) => state.tokenUsage)
+  const contextWindow = tokenUsage.modelContextWindow || 200000
+  const remainingPercent = Math.round(100 - (tokenUsage.totalTokens / contextWindow) * 100)
+
+  return (
+    <div id="input-hint" className="mt-2 flex items-center justify-center gap-3 text-[10px] text-muted-foreground/60 select-none">
+      {tokenUsage.totalTokens > 0 && (
+        <span className="flex items-center gap-1.5">
+          <Coins size={10} />
+          {remainingPercent}% context left
+        </span>
+      )}
+      <span>•</span>
+      <span>? for shortcuts</span>
     </div>
   )
 }
