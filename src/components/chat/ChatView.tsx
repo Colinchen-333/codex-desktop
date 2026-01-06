@@ -353,7 +353,12 @@ export function ChatView() {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Don't send if slash command or file mention popup is open
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (showSlashCommands || showFileMention) {
+        // Let the popup handle the Enter key
+        return
+      }
       e.preventDefault()
       handleSend()
     }
@@ -418,9 +423,21 @@ export function ChatView() {
   )
 
   // Handle drag and drop
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // Check if files are being dragged (not just DOM elements)
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragging(true)
+    }
+  }, [])
+
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    setIsDragging(true)
+    e.stopPropagation()
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragging(true)
+    }
   }, [])
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
@@ -490,7 +507,10 @@ export function ChatView() {
       <div
         ref={scrollAreaRef}
         className="flex-1 overflow-y-auto p-4"
+        onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         onScroll={handleScroll}
         role="log"
         aria-label="Chat messages"

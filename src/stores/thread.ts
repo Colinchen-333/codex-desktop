@@ -946,20 +946,28 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     set((state) => {
       let isDuplicateUserMessage = false
       if (inProgressItem.type === 'userMessage') {
-        const lastUserId = [...state.itemOrder]
-          .reverse()
-          .find((id) => state.items[id]?.type === 'userMessage')
-        const lastUser = lastUserId
-          ? (state.items[lastUserId] as UserMessageItem)
-          : null
+        // Check if we already have a user message with the same text
+        // We compare only text because:
+        // 1. Local message uses base64 images
+        // 2. Server might return different image format (paths, URLs)
+        // Also check recent messages (last 5) to handle timing issues
+        const recentUserIds = [...state.itemOrder]
+          .slice(-10)
+          .filter((id) => state.items[id]?.type === 'userMessage')
         const nextUser = inProgressItem as UserMessageItem
-        if (
-          lastUser &&
-          lastUser.content.text === nextUser.content.text &&
-          JSON.stringify(lastUser.content.images || []) ===
-            JSON.stringify(nextUser.content.images || [])
-        ) {
-          isDuplicateUserMessage = true
+
+        for (const userId of recentUserIds) {
+          const existingUser = state.items[userId] as UserMessageItem
+          if (existingUser && existingUser.content.text === nextUser.content.text) {
+            // Same text - consider it duplicate
+            // Also check if images count matches (regardless of format)
+            const existingImagesCount = existingUser.content.images?.length || 0
+            const nextImagesCount = nextUser.content.images?.length || 0
+            if (existingImagesCount === nextImagesCount) {
+              isDuplicateUserMessage = true
+              break
+            }
+          }
         }
       }
 
