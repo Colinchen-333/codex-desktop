@@ -584,6 +584,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   error: null,
 
   startThread: async (projectId, cwd, model, sandboxMode, approvalPolicy) => {
+    // Clear delta buffer before starting new thread
+    deltaBuffer.agentMessages.clear()
+    deltaBuffer.commandOutputs.clear()
+    deltaBuffer.fileChangeOutputs.clear()
+    deltaBuffer.reasoningSummaries.clear()
+    deltaBuffer.reasoningContents.clear()
+    deltaBuffer.mcpProgress.clear()
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+
     set({ isLoading: true, error: null })
     try {
       const response = await threadApi.start(
@@ -593,13 +605,19 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         sandboxMode,
         approvalPolicy
       )
+      // Reset all state for the new thread
       set({
         activeThread: response.thread,
         items: {},
         itemOrder: [],
         turnStatus: 'idle',
+        currentTurnId: null,
         pendingApprovals: [],
+        snapshots: [],
+        tokenUsage: defaultTokenUsage,
+        turnTiming: defaultTurnTiming,
         isLoading: false,
+        error: null,
       })
     } catch (error) {
       set({ error: parseError(error), isLoading: false })
@@ -608,6 +626,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   resumeThread: async (threadId) => {
+    // Clear delta buffer before resuming thread
+    deltaBuffer.agentMessages.clear()
+    deltaBuffer.commandOutputs.clear()
+    deltaBuffer.fileChangeOutputs.clear()
+    deltaBuffer.reasoningSummaries.clear()
+    deltaBuffer.reasoningContents.clear()
+    deltaBuffer.mcpProgress.clear()
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+
     set({ isLoading: true, error: null })
     try {
       const response = await threadApi.resume(threadId)
@@ -630,8 +660,13 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         items,
         itemOrder,
         turnStatus: 'idle',
+        currentTurnId: null,
         pendingApprovals: [],
+        snapshots: [],
+        tokenUsage: defaultTokenUsage,
+        turnTiming: defaultTurnTiming,
         isLoading: false,
+        error: null,
       })
     } catch (error) {
       set({ error: parseError(error), isLoading: false })
@@ -671,13 +706,44 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   interrupt: async () => {
-    const { activeThread } = get()
-    if (!activeThread) return
+    const { activeThread, turnStatus } = get()
+    if (!activeThread) {
+      console.warn('[interrupt] No active thread')
+      return
+    }
+    if (turnStatus !== 'running') {
+      console.warn('[interrupt] Turn is not running, status:', turnStatus)
+      return
+    }
 
     try {
-      await threadApi.interrupt(activeThread.id)
+      // Immediately update UI to show interrupted state
       set({ turnStatus: 'interrupted' })
+
+      // Clear delta buffer
+      deltaBuffer.agentMessages.clear()
+      deltaBuffer.commandOutputs.clear()
+      deltaBuffer.fileChangeOutputs.clear()
+      deltaBuffer.reasoningSummaries.clear()
+      deltaBuffer.reasoningContents.clear()
+      deltaBuffer.mcpProgress.clear()
+      if (flushTimer) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
+
+      // Update turn timing
+      set((state) => ({
+        turnTiming: {
+          ...state.turnTiming,
+          completedAt: Date.now(),
+        },
+      }))
+
+      // Call the API to interrupt the backend
+      await threadApi.interrupt(activeThread.id)
     } catch (error) {
+      console.error('[interrupt] Failed to interrupt:', error)
       set({ error: parseError(error) })
     }
   },

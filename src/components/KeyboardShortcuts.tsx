@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { useKeyboardShortcuts, type KeyboardShortcut } from '../hooks/useKeyboardShortcuts'
 import { useAppStore } from '../stores/app'
 import { useProjectsStore } from '../stores/projects'
+import { useThreadStore } from '../stores/thread'
 import { useToast } from './ui/Toast'
 
 export function KeyboardShortcuts() {
@@ -62,11 +63,20 @@ export function KeyboardShortcuts() {
           }
         },
       },
-      // Close dialogs (Escape)
+      // Escape - Interrupt AI or close dialogs
       {
         key: 'Escape',
-        description: 'Close dialogs',
-        handler: () => setSettingsOpen(false),
+        description: 'Interrupt AI / Close dialogs',
+        handler: () => {
+          const { turnStatus, interrupt } = useThreadStore.getState()
+          // If AI is running, interrupt it
+          if (turnStatus === 'running') {
+            interrupt()
+          } else {
+            // Otherwise close settings dialog
+            setSettingsOpen(false)
+          }
+        },
       },
     ],
     [setSettingsOpen, setSidebarTab, triggerFocusInput, addProject, showToast]

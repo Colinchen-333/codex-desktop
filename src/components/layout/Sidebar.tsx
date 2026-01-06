@@ -13,8 +13,24 @@ import { useToast } from '../ui/Toast'
 
 // Helper function to format relative time
 function formatRelativeTime(timestamp: number): string {
+  // Handle invalid timestamps (0, null, or very old dates like 1970)
+  if (!timestamp || timestamp < 1000000000000) {
+    // If timestamp looks like seconds (between year 2001 and 2286), convert to ms
+    if (timestamp > 1000000000 && timestamp < 10000000000) {
+      timestamp = timestamp * 1000
+    } else if (timestamp < 1000000000) {
+      // Invalid or zero timestamp
+      return 'just now'
+    }
+  }
+
   const now = Date.now()
   const diff = now - timestamp
+
+  // If diff is negative or very large (future date or invalid), return 'just now'
+  if (diff < 0 || diff > 365 * 24 * 60 * 60 * 1000 * 10) {
+    return 'just now'
+  }
 
   const minutes = Math.floor(diff / 60000)
   const hours = Math.floor(diff / 3600000)
