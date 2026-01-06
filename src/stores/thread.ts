@@ -882,6 +882,20 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   flushDeltaBuffer: () => {
+    // Guard: Don't flush if there's no active thread
+    // This prevents applying buffered deltas to wrong thread after switch
+    const { activeThread } = get()
+    if (!activeThread) {
+      // Clear buffers without applying them
+      deltaBuffer.agentMessages.clear()
+      deltaBuffer.commandOutputs.clear()
+      deltaBuffer.fileChangeOutputs.clear()
+      deltaBuffer.reasoningSummaries.clear()
+      deltaBuffer.reasoningContents.clear()
+      deltaBuffer.mcpProgress.clear()
+      return
+    }
+
     const hasAgentMessages = deltaBuffer.agentMessages.size > 0
     const hasCommandOutputs = deltaBuffer.commandOutputs.size > 0
     const hasFileChangeOutputs = deltaBuffer.fileChangeOutputs.size > 0

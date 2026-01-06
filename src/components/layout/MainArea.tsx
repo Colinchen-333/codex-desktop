@@ -30,20 +30,28 @@ export function MainArea() {
 
   // Track if we're resuming to prevent duplicate calls
   const isResumingRef = useRef(false)
+  // Track the target session ID for microtask validation
+  const targetSessionIdRef = useRef<string | null>(null)
 
   // Resume thread when session is selected or switched
   useEffect(() => {
     // Skip if no session selected
     if (!selectedSessionId) {
       prevSessionIdRef.current = null
+      targetSessionIdRef.current = null
+      // Clear thread if we had one
+      if (activeThread) {
+        clearThread()
+      }
       return
     }
 
     // Check if session changed
     const sessionChanged = prevSessionIdRef.current !== selectedSessionId
     prevSessionIdRef.current = selectedSessionId
+    targetSessionIdRef.current = selectedSessionId
 
-    // Skip if already resuming
+    // Skip if already resuming the same session
     if (isResumingRef.current) {
       return
     }
@@ -54,16 +62,25 @@ export function MainArea() {
       // Use microtask to let event queue clear before resuming new thread
       // This prevents events from old thread being applied to new thread
       queueMicrotask(() => {
-        if (!isResumingRef.current) {
-          isResumingRef.current = true
-          resumeThread(selectedSessionId)
-            .catch((error) => {
-              console.error('Failed to resume session:', error)
-            })
-            .finally(() => {
-              isResumingRef.current = false
-            })
+        // Validate that the session hasn't changed again during the microtask delay
+        const currentTargetId = targetSessionIdRef.current
+        if (!currentTargetId || isResumingRef.current) {
+          return
         }
+        // Double-check we still want to resume this session
+        const currentSelectedId = useSessionsStore.getState().selectedSessionId
+        if (currentSelectedId !== currentTargetId) {
+          console.debug('[MainArea] Session changed during microtask, skipping resume')
+          return
+        }
+        isResumingRef.current = true
+        resumeThread(currentTargetId)
+          .catch((error) => {
+            console.error('Failed to resume session:', error)
+          })
+          .finally(() => {
+            isResumingRef.current = false
+          })
       })
       return
     }

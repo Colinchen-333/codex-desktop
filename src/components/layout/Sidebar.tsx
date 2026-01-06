@@ -72,6 +72,25 @@ export function Sidebar() {
     }
   }, [selectedProjectId, fetchSessions])
 
+  // Handle project selection with proper cleanup
+  const handleSelectProject = useCallback(
+    (projectId: string | null) => {
+      if (!projectId) return
+      // If selecting a different project, clean up all related state first
+      if (projectId !== selectedProjectId) {
+        // Clear session selection (this will trigger MainArea to clear thread)
+        selectSession(null)
+        // Clear thread state immediately to avoid race conditions
+        clearThread()
+      }
+      // Then select the new project
+      selectProject(projectId)
+      // Switch to sessions tab to show the new project's sessions
+      setActiveTab('sessions')
+    },
+    [selectedProjectId, selectProject, selectSession, clearThread, setActiveTab]
+  )
+
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [projectToRename, setProjectToRename] = useState<{
@@ -302,7 +321,7 @@ export function Sidebar() {
           <ProjectList
             projects={projects}
             selectedId={selectedProjectId}
-            onSelect={selectProject}
+            onSelect={handleSelectProject}
             onRename={handleRenameProject}
             onDelete={handleDeleteProject}
             onSettings={handleOpenProjectSettings}

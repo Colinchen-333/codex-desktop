@@ -29,6 +29,7 @@ import {
   Settings,
   GitBranch,
   Terminal,
+  Bug,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -56,6 +57,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'layout-grid': LayoutGrid,
   'settings': Settings,
   'git-branch': GitBranch,
+  'bug': Bug,
 }
 
 function getIcon(iconName: string): LucideIcon {
