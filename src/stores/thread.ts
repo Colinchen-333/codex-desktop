@@ -709,6 +709,9 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       throw new Error('No active thread')
     }
 
+    // Save thread ID to verify it doesn't change during send
+    const currentThreadId = activeThread.id
+
     // Add user message to items
     const userMessageId = `user-${Date.now()}`
     const userMessage: UserMessageItem = {
@@ -727,9 +730,22 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
     try {
       const response = await threadApi.sendMessage(activeThread.id, text, images)
+
+      // Verify thread didn't change during the API call
+      const { activeThread: currentActive } = get()
+      if (!currentActive || currentActive.id !== currentThreadId) {
+        console.warn('[sendMessage] Thread changed during send, response may be routed incorrectly')
+        // Don't update state if thread changed - the response will be ignored by event filters
+        return
+      }
+
       set({ currentTurnId: response.turn.id })
     } catch (error) {
-      set({ turnStatus: 'failed', error: String(error) })
+      // Only update error state if we're still on the same thread
+      const { activeThread: currentActive } = get()
+      if (currentActive?.id === currentThreadId) {
+        set({ turnStatus: 'failed', error: String(error) })
+      }
       throw error
     }
   },

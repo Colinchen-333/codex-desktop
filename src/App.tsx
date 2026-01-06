@@ -11,6 +11,25 @@ import { useProjectsStore } from './stores/projects'
 import { useThreadStore } from './stores/thread'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
 
+// Helper to create a thread-filtered event handler
+// This ensures events from other threads are ignored
+function withThreadFilter<T extends { threadId: string }>(
+  handler: (event: T) => void
+): (event: T) => void {
+  return (event: T) => {
+    const activeThread = useThreadStore.getState().activeThread
+    if (!activeThread) {
+      console.debug('[EventFilter] No active thread, ignoring event')
+      return
+    }
+    if (event.threadId !== activeThread.id) {
+      console.debug('[EventFilter] Thread mismatch, ignoring event:', event.threadId, 'vs', activeThread.id)
+      return
+    }
+    handler(event)
+  }
+}
+
 function App() {
   const fetchProjects = useProjectsStore((state) => state.fetchProjects)
   const needsOnboarding = useNeedsOnboarding()
@@ -41,38 +60,38 @@ function App() {
     let setupPromise: Promise<(() => void)[]> | null = null
 
     setupPromise = setupEventListeners({
-      // Item lifecycle
-      onItemStarted: (event) => useThreadStore.getState().handleItemStarted(event),
-      onItemCompleted: (event) => useThreadStore.getState().handleItemCompleted(event),
-      // Agent messages
-      onAgentMessageDelta: (event) => useThreadStore.getState().handleAgentMessageDelta(event),
-      // Approvals
-      onCommandApprovalRequested: (event) => useThreadStore.getState().handleCommandApprovalRequested(event),
-      onFileChangeApprovalRequested: (event) => useThreadStore.getState().handleFileChangeApprovalRequested(event),
-      // Turn lifecycle
-      onTurnStarted: (event) => useThreadStore.getState().handleTurnStarted(event),
-      onTurnCompleted: (event) => useThreadStore.getState().handleTurnCompleted(event),
-      onTurnDiffUpdated: (event) => useThreadStore.getState().handleTurnDiffUpdated(event),
-      onTurnPlanUpdated: (event) => useThreadStore.getState().handleTurnPlanUpdated(event),
-      onThreadCompacted: (event) => useThreadStore.getState().handleThreadCompacted(event),
-      // Command execution output
-      onCommandExecutionOutputDelta: (event) =>
-        useThreadStore.getState().handleCommandExecutionOutputDelta(event),
-      onFileChangeOutputDelta: (event) =>
-        useThreadStore.getState().handleFileChangeOutputDelta(event),
-      // Reasoning
-      onReasoningSummaryTextDelta: (event) =>
-        useThreadStore.getState().handleReasoningSummaryTextDelta(event),
-      onReasoningSummaryPartAdded: (event) =>
-        useThreadStore.getState().handleReasoningSummaryPartAdded(event),
-      onReasoningTextDelta: (event) => useThreadStore.getState().handleReasoningTextDelta(event),
-      // MCP Tools
-      onMcpToolCallProgress: (event) =>
-        useThreadStore.getState().handleMcpToolCallProgress(event),
-      // Token usage
-      onTokenUsage: (event) => useThreadStore.getState().handleTokenUsage(event),
-      // Errors
-      onStreamError: (event) => useThreadStore.getState().handleStreamError(event),
+      // Item lifecycle - filtered by threadId
+      onItemStarted: withThreadFilter((event) => useThreadStore.getState().handleItemStarted(event)),
+      onItemCompleted: withThreadFilter((event) => useThreadStore.getState().handleItemCompleted(event)),
+      // Agent messages - filtered by threadId
+      onAgentMessageDelta: withThreadFilter((event) => useThreadStore.getState().handleAgentMessageDelta(event)),
+      // Approvals - filtered by threadId
+      onCommandApprovalRequested: withThreadFilter((event) => useThreadStore.getState().handleCommandApprovalRequested(event)),
+      onFileChangeApprovalRequested: withThreadFilter((event) => useThreadStore.getState().handleFileChangeApprovalRequested(event)),
+      // Turn lifecycle - filtered by threadId
+      onTurnStarted: withThreadFilter((event) => useThreadStore.getState().handleTurnStarted(event)),
+      onTurnCompleted: withThreadFilter((event) => useThreadStore.getState().handleTurnCompleted(event)),
+      onTurnDiffUpdated: withThreadFilter((event) => useThreadStore.getState().handleTurnDiffUpdated(event)),
+      onTurnPlanUpdated: withThreadFilter((event) => useThreadStore.getState().handleTurnPlanUpdated(event)),
+      onThreadCompacted: withThreadFilter((event) => useThreadStore.getState().handleThreadCompacted(event)),
+      // Command execution output - filtered by threadId
+      onCommandExecutionOutputDelta: withThreadFilter((event) =>
+        useThreadStore.getState().handleCommandExecutionOutputDelta(event)),
+      onFileChangeOutputDelta: withThreadFilter((event) =>
+        useThreadStore.getState().handleFileChangeOutputDelta(event)),
+      // Reasoning - filtered by threadId
+      onReasoningSummaryTextDelta: withThreadFilter((event) =>
+        useThreadStore.getState().handleReasoningSummaryTextDelta(event)),
+      onReasoningSummaryPartAdded: withThreadFilter((event) =>
+        useThreadStore.getState().handleReasoningSummaryPartAdded(event)),
+      onReasoningTextDelta: withThreadFilter((event) => useThreadStore.getState().handleReasoningTextDelta(event)),
+      // MCP Tools - filtered by threadId
+      onMcpToolCallProgress: withThreadFilter((event) =>
+        useThreadStore.getState().handleMcpToolCallProgress(event)),
+      // Token usage - filtered by threadId
+      onTokenUsage: withThreadFilter((event) => useThreadStore.getState().handleTokenUsage(event)),
+      // Errors - filtered by threadId
+      onStreamError: withThreadFilter((event) => useThreadStore.getState().handleStreamError(event)),
       onServerDisconnected: () => {
         console.log('Server disconnected')
         // TODO: Show reconnection UI

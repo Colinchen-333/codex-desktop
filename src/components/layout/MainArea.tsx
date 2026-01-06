@@ -28,6 +28,9 @@ export function MainArea() {
     }
   }, [selectedProjectId, projects, fetchGitInfo])
 
+  // Track if we're resuming to prevent duplicate calls
+  const isResumingRef = useRef(false)
+
   // Resume thread when session is selected or switched
   useEffect(() => {
     // Skip if no session selected
@@ -40,16 +43,41 @@ export function MainArea() {
     const sessionChanged = prevSessionIdRef.current !== selectedSessionId
     prevSessionIdRef.current = selectedSessionId
 
+    // Skip if already resuming
+    if (isResumingRef.current) {
+      return
+    }
+
     // If session changed and we have an active thread for a different session, clear it first
     if (sessionChanged && activeThread && activeThread.id !== selectedSessionId) {
       clearThread()
+      // Use microtask to let event queue clear before resuming new thread
+      // This prevents events from old thread being applied to new thread
+      queueMicrotask(() => {
+        if (!isResumingRef.current) {
+          isResumingRef.current = true
+          resumeThread(selectedSessionId)
+            .catch((error) => {
+              console.error('Failed to resume session:', error)
+            })
+            .finally(() => {
+              isResumingRef.current = false
+            })
+        }
+      })
+      return
     }
 
-    // Resume the selected session if no active thread or if we just cleared it
-    if (!activeThread || sessionChanged) {
-      resumeThread(selectedSessionId).catch((error) => {
-        console.error('Failed to resume session:', error)
-      })
+    // Resume the selected session if no active thread
+    if (!activeThread) {
+      isResumingRef.current = true
+      resumeThread(selectedSessionId)
+        .catch((error) => {
+          console.error('Failed to resume session:', error)
+        })
+        .finally(() => {
+          isResumingRef.current = false
+        })
     }
   }, [selectedSessionId, activeThread, resumeThread, clearThread])
 
