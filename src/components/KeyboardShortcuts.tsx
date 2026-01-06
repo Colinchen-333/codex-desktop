@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useCallback } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useKeyboardShortcuts, type KeyboardShortcut } from '../hooks/useKeyboardShortcuts'
 import { useAppStore } from '../stores/app'
@@ -6,10 +6,44 @@ import { useProjectsStore } from '../stores/projects'
 import { useThreadStore } from '../stores/thread'
 import { useToast } from './ui/Toast'
 
+// Double-escape timeout (like CLI)
+const DOUBLE_ESCAPE_TIMEOUT_MS = 1500
+
 export function KeyboardShortcuts() {
-  const { setSettingsOpen, setSidebarTab, triggerFocusInput } = useAppStore()
+  const { setSettingsOpen, setSidebarTab, triggerFocusInput, setEscapePending } = useAppStore()
   const { addProject } = useProjectsStore()
   const { showToast } = useToast()
+  const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Handle double-escape like CLI
+  const handleEscape = useCallback(() => {
+    const { turnStatus, interrupt } = useThreadStore.getState()
+    const currentEscapePending = useAppStore.getState().escapePending
+
+    // If AI is running, require double-escape
+    if (turnStatus === 'running') {
+      if (currentEscapePending) {
+        // Second escape - actually interrupt
+        if (escapeTimerRef.current) {
+          clearTimeout(escapeTimerRef.current)
+          escapeTimerRef.current = null
+        }
+        setEscapePending(false)
+        interrupt()
+      } else {
+        // First escape - show pending state
+        setEscapePending(true)
+        escapeTimerRef.current = setTimeout(() => {
+          setEscapePending(false)
+          escapeTimerRef.current = null
+        }, DOUBLE_ESCAPE_TIMEOUT_MS)
+      }
+    } else {
+      // Not running - close dialogs
+      setSettingsOpen(false)
+      useAppStore.getState().setKeyboardShortcutsOpen(false)
+    }
+  }, [setSettingsOpen, setEscapePending])
 
   const shortcuts: KeyboardShortcut[] = useMemo(
     () => [
@@ -63,23 +97,14 @@ export function KeyboardShortcuts() {
           }
         },
       },
-      // Escape - Interrupt AI or close dialogs
+      // Escape - Double-press to interrupt AI (like CLI)
       {
         key: 'Escape',
         description: 'Interrupt AI / Close dialogs',
-        handler: () => {
-          const { turnStatus, interrupt } = useThreadStore.getState()
-          // If AI is running, interrupt it
-          if (turnStatus === 'running') {
-            interrupt()
-          } else {
-            // Otherwise close settings dialog
-            setSettingsOpen(false)
-          }
-        },
+        handler: handleEscape,
       },
     ],
-    [setSettingsOpen, setSidebarTab, triggerFocusInput, addProject, showToast]
+    [setSettingsOpen, setSidebarTab, triggerFocusInput, addProject, showToast, handleEscape]
   )
 
   useKeyboardShortcuts(shortcuts)

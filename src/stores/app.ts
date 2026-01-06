@@ -25,6 +25,10 @@ interface AppState {
   shouldFocusInput: boolean
   triggerFocusInput: () => void
   clearFocusInput: () => void
+
+  // Escape pending state (for double-escape interrupt like CLI)
+  escapePending: boolean
+  setEscapePending: (pending: boolean) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -50,4 +54,8 @@ export const useAppStore = create<AppState>((set) => ({
   shouldFocusInput: false,
   triggerFocusInput: () => set({ shouldFocusInput: true }),
   clearFocusInput: () => set({ shouldFocusInput: false }),
+
+  // Escape pending state (for double-escape interrupt like CLI)
+  escapePending: false,
+  setEscapePending: (pending) => set({ escapePending: pending }),
 }))

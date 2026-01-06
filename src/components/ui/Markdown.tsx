@@ -61,8 +61,9 @@ const LazyCodeBlock = memo(function LazyCodeBlock({ language, children }: { lang
       PreTag="div"
       customStyle={{
         margin: 0,
-        borderRadius: '0 0 0.5rem 0.5rem',
-        fontSize: '0.875rem',
+        borderRadius: 0,
+        fontSize: '0.8125rem',
+        padding: '0.75rem',
       }}
     >
       {children}
@@ -92,15 +93,10 @@ const markdownComponents = {
     const code = String(children).replace(/\n$/, '')
 
     return (
-      <div className="relative rounded-xl overflow-hidden my-3 border border-border/50 bg-card shadow-sm">
+      <div className="relative rounded-md overflow-hidden my-2 border border-border/40 bg-secondary/20">
         {match && (
-          <div className="bg-secondary/30 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/50 flex items-center gap-2">
-            <div className="flex gap-1.5">
-              <div className="w-2.5 h-2.5 rounded-full bg-red-400/20"></div>
-              <div className="w-2.5 h-2.5 rounded-full bg-yellow-400/20"></div>
-              <div className="w-2.5 h-2.5 rounded-full bg-green-400/20"></div>
-            </div>
-            <span className="ml-2 uppercase tracking-wider opacity-70">{language}</span>
+          <div className="bg-secondary/50 px-3 py-1 text-[10px] font-mono text-muted-foreground border-b border-border/40 uppercase tracking-wide">
+            {language}
           </div>
         )}
         <CodeBlock language={language}>{code}</CodeBlock>
@@ -145,14 +141,14 @@ const markdownComponents = {
   },
   blockquote({ children }: { children?: React.ReactNode }) {
     return (
-      <blockquote className="my-4 border-l-4 border-primary/20 bg-secondary/10 pl-4 py-1 pr-2 rounded-r-xl text-muted-foreground italic">
+      <blockquote className="my-3 border-l-2 border-muted-foreground/30 pl-3 py-0.5 text-muted-foreground">
         {children}
       </blockquote>
     )
   },
   table({ children }: { children?: React.ReactNode }) {
     return (
-      <div className="overflow-x-auto my-4 rounded-xl border border-border/50 shadow-sm">
+      <div className="overflow-x-auto my-3 rounded-md border border-border/40">
         <table className="min-w-full border-collapse">
           {children}
         </table>

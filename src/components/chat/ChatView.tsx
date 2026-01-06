@@ -565,7 +565,7 @@ export function ChatView() {
       {/* Drag Overlay */}
       {isDragging && (
         <div
-          className="absolute inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-primary/5 via-background/95 to-primary/10 backdrop-blur-md animate-in fade-in zoom-in-95 duration-300"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-primary/5 via-background/95 to-primary/10 backdrop-blur-md animate-in fade-in zoom-in-95 duration-150"
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
@@ -607,7 +607,7 @@ export function ChatView() {
         aria-label="Chat messages"
         aria-live="polite"
       >
-        <div className="mx-auto max-w-3xl space-y-6 pb-4">
+        <div className="mx-auto max-w-3xl space-y-3 pb-2">
           {itemOrder.map((id) => {
             const item = items[id]
             if (!item) return null
@@ -625,7 +625,7 @@ export function ChatView() {
 
           <div
             className={cn(
-              "relative rounded-3xl bg-card shadow-lg border border-border/50 p-2 transition-all duration-200",
+              "relative rounded-2xl bg-card shadow-lg border border-border/50 p-2 transition-all duration-75",
               isDragging && "scale-[1.02] ring-2 ring-primary ring-offset-2"
             )}
           >
@@ -648,7 +648,7 @@ export function ChatView() {
             {attachedImages.length > 0 && (
               <div className="flex flex-wrap gap-2 px-2 pt-2 pb-1">
                 {attachedImages.map((img, i) => (
-                  <div key={i} className="relative group animate-in zoom-in duration-200">
+                  <div key={i} className="relative group animate-in zoom-in duration-100">
                     <img
                       src={img}
                       alt={`Attached ${i + 1}`}
@@ -713,7 +713,7 @@ export function ChatView() {
               <div className="flex items-center gap-1 mb-1">
                 {turnStatus === 'running' && (
                   <button
-                    className="h-10 w-10 flex items-center justify-center rounded-full bg-secondary text-secondary-foreground hover:bg-destructive hover:text-destructive-foreground transition-all duration-200"
+                    className="h-10 w-10 flex items-center justify-center rounded-full bg-secondary text-secondary-foreground hover:bg-destructive hover:text-destructive-foreground transition-all duration-100"
                     onClick={interrupt}
                     title="Stop generation (Esc)"
                     aria-label="Stop generation"
@@ -723,7 +723,7 @@ export function ChatView() {
                 )}
                 <button
                   className={cn(
-                    "h-10 w-10 flex items-center justify-center rounded-full transition-all duration-200 shadow-sm",
+                    "h-10 w-10 flex items-center justify-center rounded-full transition-all duration-100 shadow-sm",
                     !inputValue.trim() && attachedImages.length === 0
                       ? "bg-secondary text-muted-foreground cursor-not-allowed opacity-50"
                       : "bg-primary text-primary-foreground hover:scale-105 hover:shadow-md"
@@ -827,7 +827,7 @@ const MessageItem = memo(
 function UserMessage({ item }: { item: AnyThreadItem }) {
   const content = item.content as { text: string; images?: string[] }
   return (
-    <div className="flex justify-end pl-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-end pl-12 animate-in slide-in-from-bottom-2 duration-150">
       <div className="group relative max-w-[85%]">
         <div className="rounded-2xl rounded-tr-sm bg-primary px-5 py-3.5 text-primary-foreground shadow-sm">
           {content.images && content.images.length > 0 && (
@@ -859,14 +859,12 @@ function UserMessage({ item }: { item: AnyThreadItem }) {
 function AgentMessage({ item }: { item: AnyThreadItem }) {
   const content = item.content as { text: string; isStreaming: boolean }
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
-      <div className="max-w-[90%] rounded-2xl rounded-tl-sm bg-card px-6 py-4 shadow-sm border border-border/40">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
+      <div className="max-w-[90%] rounded-xl rounded-tl-sm bg-card px-5 py-3 shadow-sm border border-border/40">
         <Markdown content={content.text} />
         {content.isStreaming && (
-          <div className="mt-2 flex items-center gap-1">
-            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary/40 [animation-delay:-0.3s]" />
-            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary/40 [animation-delay:-0.15s]" />
-            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary/40" />
+          <div className="mt-1.5 flex items-center gap-0.5">
+            <span className="h-1 w-1 rounded-full bg-primary/50 animate-pulse" />
           </div>
         )}
       </div>
@@ -959,7 +957,7 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
   }
 
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div
         className={cn(
           'w-full max-w-2xl overflow-hidden rounded-xl border bg-card shadow-sm transition-all',
@@ -1113,7 +1111,7 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
               <div className="mt-5 pt-3 border-t border-border/40">
                 {/* Explanation Mode - like CLI 'x' option */}
                 {approvalMode === 'explain' && (
-                  <div className="animate-in fade-in duration-200">
+                  <div className="animate-in fade-in duration-100">
                     <div className="mb-3 text-sm font-medium text-yellow-600 dark:text-yellow-400">
                       Command Explanation:
                     </div>
@@ -1133,7 +1131,7 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
 
                 {/* Feedback Mode - like CLI 'e' option */}
                 {approvalMode === 'feedback' && (
-                  <div className="animate-in fade-in duration-200">
+                  <div className="animate-in fade-in duration-100">
                     <div className="mb-2 text-sm">Give the model feedback (Enter to submit):</div>
                     <div className="flex gap-2">
                       <input
@@ -1226,7 +1224,7 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
 
                     {/* Advanced Actions */}
                     {showAdvanced && content.proposedExecpolicyAmendment && (
-                      <div className="mt-2 flex gap-2 animate-in slide-in-from-top-2 duration-200">
+                      <div className="mt-2 flex gap-2 animate-in slide-in-from-top-2 duration-100">
                         <button
                           className="flex-1 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-[11px] font-medium text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
                           onClick={() => handleApprove('acceptWithExecpolicyAmendment')}
@@ -1329,7 +1327,7 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
   }))
 
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div
         className={cn(
           'w-full max-w-3xl overflow-hidden rounded-xl border bg-card shadow-sm transition-all',
@@ -1448,7 +1446,7 @@ function ReasoningCard({ item }: { item: AnyThreadItem }) {
   const parsedSummaries = content.summary?.map(parseReasoningSummary) || []
 
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div className="w-full max-w-2xl overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm transition-all">
         {/* Header */}
         <div
@@ -1562,7 +1560,7 @@ function McpToolCard({ item }: { item: AnyThreadItem }) {
   )
 
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div
         className={cn(
           'w-full max-w-2xl overflow-hidden rounded-xl border bg-card shadow-sm transition-all',
@@ -1688,7 +1686,7 @@ function WebSearchCard({ item }: { item: AnyThreadItem }) {
   }
 
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div className="w-full max-w-2xl overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
         <div className="flex items-center justify-between border-b border-border/40 bg-secondary/30 px-4 py-2.5">
           <div className="flex items-center gap-2">
@@ -1733,7 +1731,7 @@ function WebSearchCard({ item }: { item: AnyThreadItem }) {
 function ReviewCard({ item }: { item: AnyThreadItem }) {
   const content = item.content as { phase: 'started' | 'completed'; text: string }
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div className="w-full max-w-3xl overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
         <div className="flex items-center justify-between border-b border-border/40 bg-secondary/30 px-4 py-2.5">
           <div className="flex items-center gap-2">
@@ -1761,7 +1759,7 @@ function ReviewCard({ item }: { item: AnyThreadItem }) {
 function InfoCard({ item }: { item: AnyThreadItem }) {
   const content = item.content as { title: string; details?: string }
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div className="w-full max-w-3xl overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
         <div className="flex items-center justify-between border-b border-border/40 bg-secondary/30 px-4 py-2.5">
           <div className="flex items-center gap-2">
@@ -1795,7 +1793,7 @@ function ErrorCard({ item }: { item: AnyThreadItem }) {
   }
 
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div className="w-full max-w-2xl overflow-hidden rounded-xl border border-l-4 border-l-red-500 border-y-border/50 border-r-border/50 bg-card shadow-sm">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border/40 bg-red-50/50 dark:bg-red-900/10 px-4 py-2.5">
@@ -1868,7 +1866,7 @@ function PlanCard({ item }: { item: AnyThreadItem }) {
   const progressPercent = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0
 
   return (
-    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-300">
+    <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div
         className={cn(
           'w-full max-w-2xl overflow-hidden rounded-xl border bg-card shadow-sm transition-all',
@@ -1905,7 +1903,7 @@ function PlanCard({ item }: { item: AnyThreadItem }) {
             <div className="w-20 h-1.5 bg-secondary rounded-full overflow-hidden">
               <div
                 className={cn(
-                  'h-full transition-all duration-300',
+                  'h-full transition-all duration-150',
                   content.isActive ? 'bg-blue-500' : 'bg-green-500'
                 )}
                 style={{ width: `${progressPercent}%` }}
@@ -1990,6 +1988,7 @@ function WorkingStatusBar() {
   const pendingApprovals = useThreadStore((state) => state.pendingApprovals)
   const items = useThreadStore((state) => state.items)
   const itemOrder = useThreadStore((state) => state.itemOrder)
+  const escapePending = useAppStore((state) => state.escapePending)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [tokenRate, setTokenRate] = useState(0)
   const prevTokensRef = useRef(0)
@@ -2052,7 +2051,7 @@ function WorkingStatusBar() {
   const pendingCount = pendingApprovals.length
 
   return (
-    <div className="mb-2 px-4 py-2 rounded-2xl bg-secondary/50 border border-border/30 animate-in fade-in slide-in-from-bottom-2 duration-200">
+    <div className="mb-2 px-4 py-2 rounded-2xl bg-secondary/50 border border-border/30 animate-in fade-in slide-in-from-bottom-2 duration-100">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {/* Spinning indicator */}
@@ -2088,9 +2087,9 @@ function WorkingStatusBar() {
             <Clock size={12} />
             {formatElapsed(elapsedMs)}
           </span>
-          {/* Interrupt hint */}
-          <span className="text-[10px] text-muted-foreground/70">
-            esc
+          {/* Interrupt hint - CLI-style double-escape */}
+          <span className={`text-[10px] transition-colors ${escapePending ? 'text-orange-500 font-medium' : 'text-muted-foreground/70'}`}>
+            {escapePending ? 'esc again to interrupt' : 'esc esc to interrupt'}
           </span>
         </div>
       </div>
