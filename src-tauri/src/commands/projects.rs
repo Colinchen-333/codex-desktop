@@ -419,3 +419,141 @@ fn fuzzy_match(target: &str, query: &str) -> bool {
     }
     true
 }
+
+/// Git branch entry
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    pub name: String,
+    pub is_current: bool,
+}
+
+/// Git commit entry
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommit {
+    pub sha: String,
+    pub short_sha: String,
+    pub title: String,
+    pub author: String,
+    pub date: String,
+}
+
+/// Get list of git branches for a project
+#[tauri::command]
+pub async fn get_git_branches(path: String) -> Result<Vec<GitBranch>> {
+    let project_path = Path::new(&path);
+    if !project_path.exists() {
+        return Err(crate::Error::InvalidPath(format!(
+            "Path does not exist: {}",
+            path
+        )));
+    }
+
+    if !inside_git_repo(project_path)? {
+        return Ok(Vec::new());
+    }
+
+    // Get all branches with current marker
+    let output = std::process::Command::new("git")
+        .args(["branch", "-a", "--format=%(HEAD) %(refname:short)"])
+        .current_dir(project_path)
+        .output()
+        .map_err(|err| crate::Error::Other(format!("Failed to run git: {}", err)))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut branches: Vec<GitBranch> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let is_current = line.starts_with('*');
+        let name = line.trim_start_matches('*').trim().to_string();
+
+        // Skip HEAD references and duplicates
+        if name.contains("HEAD") || name.is_empty() {
+            continue;
+        }
+
+        // For remote branches, extract just the branch name
+        let clean_name = if name.starts_with("origin/") {
+            name.strip_prefix("origin/").unwrap_or(&name).to_string()
+        } else {
+            name.clone()
+        };
+
+        if !seen.contains(&clean_name) {
+            seen.insert(clean_name.clone());
+            branches.push(GitBranch {
+                name: clean_name,
+                is_current,
+            });
+        }
+    }
+
+    // Sort: current branch first, then alphabetically
+    branches.sort_by(|a, b| {
+        match (a.is_current, b.is_current) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
+        }
+    });
+
+    Ok(branches)
+}
+
+/// Get list of recent git commits for a project
+#[tauri::command]
+pub async fn get_git_commits(path: String, limit: Option<u32>) -> Result<Vec<GitCommit>> {
+    let project_path = Path::new(&path);
+    if !project_path.exists() {
+        return Err(crate::Error::InvalidPath(format!(
+            "Path does not exist: {}",
+            path
+        )));
+    }
+
+    if !inside_git_repo(project_path)? {
+        return Ok(Vec::new());
+    }
+
+    let limit = limit.unwrap_or(20);
+    let format = "%H|%h|%s|%an|%ar";
+
+    let output = std::process::Command::new("git")
+        .args(["log", &format!("-{}", limit), &format!("--format={}", format)])
+        .current_dir(project_path)
+        .output()
+        .map_err(|err| crate::Error::Other(format!("Failed to run git: {}", err)))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut commits: Vec<GitCommit> = Vec::new();
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.splitn(5, '|').collect();
+        if parts.len() >= 5 {
+            commits.push(GitCommit {
+                sha: parts[0].to_string(),
+                short_sha: parts[1].to_string(),
+                title: parts[2].to_string(),
+                author: parts[3].to_string(),
+                date: parts[4].to_string(),
+            });
+        }
+    }
+
+    Ok(commits)
+}

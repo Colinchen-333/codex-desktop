@@ -51,6 +51,8 @@ pub fn run() {
             commands::projects::get_project_git_info,
             commands::projects::get_project_git_diff,
             commands::projects::list_project_files,
+            commands::projects::get_git_branches,
+            commands::projects::get_git_commits,
             // Session commands
             commands::sessions::list_sessions,
             commands::sessions::get_session,

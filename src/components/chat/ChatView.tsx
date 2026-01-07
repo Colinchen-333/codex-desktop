@@ -18,7 +18,8 @@ import { type SlashCommand } from '../../lib/slashCommands'
 import { type FileEntry } from '../../lib/api'
 import { executeCommand } from '../../lib/commandExecutor'
 import { useToast } from '../ui/Toast'
-import { serverApi, projectApi, type SkillInput } from '../../lib/api'
+import { serverApi, projectApi, type SkillInput, type ReviewTarget } from '../../lib/api'
+import { ReviewSelectorDialog } from '../dialogs/ReviewSelectorDialog'
 
 // Maximum height for the textarea (in pixels)
 const MAX_TEXTAREA_HEIGHT = 200
@@ -103,6 +104,7 @@ export function ChatView() {
   const [fileMentionQuery, setFileMentionQuery] = useState('')
   const [mentionStartPos, setMentionStartPos] = useState(-1)
   const [autoScroll, setAutoScroll] = useState(true)
+  const [showReviewSelector, setShowReviewSelector] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -405,13 +407,12 @@ export function ChatView() {
                 target = { type: 'custom', instructions: arg }
                 addInfoItem('Review', `Starting review with custom instructions...`)
               }
+              await serverApi.startReview(activeThread.id, target)
             } else {
-              // Default: uncommitted changes
-              target = { type: 'uncommittedChanges' }
-              addInfoItem('Review', 'Starting review of uncommitted changes...')
+              // No args: show interactive selector dialog
+              setShowReviewSelector(true)
+              return
             }
-
-            await serverApi.startReview(activeThread.id, target)
           },
           logout: async () => {
             await serverApi.logout()
@@ -681,6 +682,27 @@ export function ChatView() {
     setAttachedImages((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
+  // Handle review target selection from dialog
+  const handleReviewSelect = useCallback(
+    async (target: ReviewTarget) => {
+      if (!activeThread) return
+      const targetDesc =
+        target.type === 'uncommittedChanges'
+          ? 'uncommitted changes'
+          : target.type === 'baseBranch'
+            ? `branch: ${target.branch}`
+            : target.type === 'commit'
+              ? `commit: ${(target as { sha: string }).sha.slice(0, 7)}`
+              : 'custom instructions'
+      addInfoItem('Review', `Starting review of ${targetDesc}...`)
+      await serverApi.startReview(activeThread.id, target)
+    },
+    [activeThread, addInfoItem]
+  )
+
+  // Get current project for review selector
+  const currentProject = projects.find((p) => p.id === selectedProjectId)
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden relative">
       {/* Drag Overlay */}
@@ -864,6 +886,14 @@ export function ChatView() {
           <InputStatusHint />
         </div>
       </div>
+
+      {/* Review Selector Dialog */}
+      <ReviewSelectorDialog
+        isOpen={showReviewSelector}
+        onClose={() => setShowReviewSelector(false)}
+        onSelect={handleReviewSelect}
+        projectPath={currentProject?.path ?? ''}
+      />
     </div>
   )
 }

@@ -208,6 +208,19 @@ export interface FileEntry {
   isDir: boolean
 }
 
+export interface GitBranch {
+  name: string
+  isCurrent: boolean
+}
+
+export interface GitCommit {
+  sha: string
+  shortSha: string
+  title: string
+  author: string
+  date: string
+}
+
 // ==================== Config Types ====================
 
 export interface ConfigLayer {
@@ -253,6 +266,9 @@ export const projectApi = {
   getGitDiff: (path: string) => invoke<GitDiffResponse>('get_project_git_diff', { path }),
   listFiles: (path: string, query?: string, limit?: number) =>
     invoke<FileEntry[]>('list_project_files', { path, query, limit }),
+  getGitBranches: (path: string) => invoke<GitBranch[]>('get_git_branches', { path }),
+  getGitCommits: (path: string, limit?: number) =>
+    invoke<GitCommit[]>('get_git_commits', { path, limit }),
 }
 
 // ==================== Session API ====================
