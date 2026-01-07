@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback } from 'react'
+import { useMemo, useRef, useCallback, useEffect } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useKeyboardShortcuts, type KeyboardShortcut } from '../hooks/useKeyboardShortcuts'
 import { useAppStore } from '../stores/app'
@@ -14,6 +14,16 @@ export function KeyboardShortcuts() {
   const { addProject } = useProjectsStore()
   const { showToast } = useToast()
   const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Cleanup escape timer on unmount to prevent memory leak
+  useEffect(() => {
+    return () => {
+      if (escapeTimerRef.current) {
+        clearTimeout(escapeTimerRef.current)
+        escapeTimerRef.current = null
+      }
+    }
+  }, [])
 
   // Handle double-escape like CLI
   const handleEscape = useCallback(() => {

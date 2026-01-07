@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { cn } from '../../lib/utils'
 import { serverApi } from '../../lib/api'
@@ -8,35 +8,27 @@ export function ConnectionStatus() {
   const [isReconnecting, setIsReconnecting] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
 
-  useEffect(() => {
-    // Listen for server disconnection
-    const setupListener = async () => {
-      const unlisten = await listen('app-server-disconnected', () => {
-        setIsConnected(false)
-        attemptReconnect()
-      })
-      return unlisten
-    }
+  // Track if component is mounted to prevent state updates after unmount
+  const isMountedRef = useRef(true)
 
-    const unlistenPromise = setupListener()
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten())
-    }
-  }, [])
+  // Wrap attemptReconnect in useCallback to ensure stable reference
+  const attemptReconnect = useCallback(async () => {
+    if (!isMountedRef.current) return
 
-  const attemptReconnect = async () => {
     setIsReconnecting(true)
     let attempts = 0
     const maxAttempts = 5
 
-    while (attempts < maxAttempts) {
+    while (attempts < maxAttempts && isMountedRef.current) {
       try {
         await serverApi.restart()
         const status = await serverApi.getStatus()
         if (status.isRunning) {
-          setIsConnected(true)
-          setIsReconnecting(false)
-          setRetryCount(0)
+          if (isMountedRef.current) {
+            setIsConnected(true)
+            setIsReconnecting(false)
+            setRetryCount(0)
+          }
           return
         }
       } catch (error) {
@@ -44,12 +36,37 @@ export function ConnectionStatus() {
       }
 
       attempts++
-      setRetryCount(attempts)
+      if (isMountedRef.current) {
+        setRetryCount(attempts)
+      }
       await new Promise((resolve) => setTimeout(resolve, 2000 * attempts))
     }
 
-    setIsReconnecting(false)
-  }
+    if (isMountedRef.current) {
+      setIsReconnecting(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    isMountedRef.current = true
+
+    // Listen for server disconnection
+    const setupListener = async () => {
+      const unlisten = await listen('app-server-disconnected', () => {
+        if (isMountedRef.current) {
+          setIsConnected(false)
+          attemptReconnect()
+        }
+      })
+      return unlisten
+    }
+
+    const unlistenPromise = setupListener()
+    return () => {
+      isMountedRef.current = false
+      unlistenPromise.then((unlisten) => unlisten())
+    }
+  }, [attemptReconnect])
 
   if (isConnected) {
     return null

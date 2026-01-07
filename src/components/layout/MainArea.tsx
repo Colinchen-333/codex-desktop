@@ -10,6 +10,9 @@ import {
 import { ChatView } from '../chat/ChatView'
 import { parseError } from '../../lib/errorUtils'
 
+// Timeout for resume operations to prevent permanent blocking
+const RESUME_TIMEOUT_MS = 30000
+
 export function MainArea() {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId)
   const projects = useProjectsStore((state) => state.projects)
@@ -36,6 +39,18 @@ export function MainArea() {
   const isResumingRef = useRef(false)
   // Track the target session ID for microtask validation
   const targetSessionIdRef = useRef<string | null>(null)
+  // Timeout ref for auto-reset of isResumingRef
+  const resumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (resumeTimeoutRef.current) {
+        clearTimeout(resumeTimeoutRef.current)
+        resumeTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   // Resume thread when session is selected or switched
   useEffect(() => {
@@ -67,6 +82,38 @@ export function MainArea() {
       return
     }
 
+    // Helper function to start resume with timeout protection
+    const startResumeWithTimeout = (sessionId: string) => {
+      // Clear any existing timeout
+      if (resumeTimeoutRef.current) {
+        clearTimeout(resumeTimeoutRef.current)
+        resumeTimeoutRef.current = null
+      }
+
+      isResumingRef.current = true
+
+      // Set a timeout to auto-reset isResumingRef if resume gets stuck
+      resumeTimeoutRef.current = setTimeout(() => {
+        if (isResumingRef.current) {
+          console.warn('[MainArea] Resume operation timed out after 30s, resetting flag')
+          isResumingRef.current = false
+          resumeTimeoutRef.current = null
+        }
+      }, RESUME_TIMEOUT_MS)
+
+      resumeThread(sessionId)
+        .catch((error) => {
+          console.error('Failed to resume session:', error)
+        })
+        .finally(() => {
+          isResumingRef.current = false
+          if (resumeTimeoutRef.current) {
+            clearTimeout(resumeTimeoutRef.current)
+            resumeTimeoutRef.current = null
+          }
+        })
+    }
+
     // If we have a thread for a different session, clear and resume new one
     if (threadMismatch) {
       clearThread()
@@ -88,27 +135,14 @@ export function MainArea() {
           isResumingRef.current = false
           return
         }
-        resumeThread(currentTargetId)
-          .catch((error) => {
-            console.error('Failed to resume session:', error)
-          })
-          .finally(() => {
-            isResumingRef.current = false
-          })
+        startResumeWithTimeout(currentTargetId)
       })
       return
     }
 
     // Resume the selected session if no active thread
     if (!activeThread) {
-      isResumingRef.current = true
-      resumeThread(selectedSessionId)
-        .catch((error) => {
-          console.error('Failed to resume session:', error)
-        })
-        .finally(() => {
-          isResumingRef.current = false
-        })
+      startResumeWithTimeout(selectedSessionId)
     }
   }, [selectedSessionId, activeThread, resumeThread, clearThread])
 

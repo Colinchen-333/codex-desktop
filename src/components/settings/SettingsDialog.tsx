@@ -460,6 +460,16 @@ function AccountSettings({
   }, [])
 
   const handleLogin = async () => {
+    // Clear any existing polling to prevent race conditions from multiple clicks
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current)
+      pollTimeoutRef.current = null
+    }
+
     setIsLoggingIn(true)
     try {
       const response = await serverApi.startLogin('chatgpt')
@@ -470,18 +480,22 @@ function AccountSettings({
       }
       // Poll for login completion
       pollIntervalRef.current = setInterval(async () => {
-        const info = await serverApi.getAccountInfo()
-        if (info.account) {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current)
-            pollIntervalRef.current = null
+        try {
+          const info = await serverApi.getAccountInfo()
+          if (info.account) {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current)
+              pollIntervalRef.current = null
+            }
+            if (pollTimeoutRef.current) {
+              clearTimeout(pollTimeoutRef.current)
+              pollTimeoutRef.current = null
+            }
+            await onRefresh()
+            setIsLoggingIn(false)
           }
-          if (pollTimeoutRef.current) {
-            clearTimeout(pollTimeoutRef.current)
-            pollTimeoutRef.current = null
-          }
-          await onRefresh()
-          setIsLoggingIn(false)
+        } catch (pollError) {
+          console.error('Polling error:', pollError)
         }
       }, 2000)
       // Stop polling after 60 seconds

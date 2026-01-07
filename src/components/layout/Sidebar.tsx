@@ -125,10 +125,12 @@ export function Sidebar() {
       // Clear previous timeout
       if (searchTimeoutRef.current) {
         clearTimeout(searchTimeoutRef.current)
+        searchTimeoutRef.current = null
       }
 
       // Debounce search API call
       searchTimeoutRef.current = setTimeout(() => {
+        searchTimeoutRef.current = null
         if (query.trim()) {
           searchSessions(query)
         } else {
@@ -139,14 +141,23 @@ export function Sidebar() {
     [searchSessions, clearSearch]
   )
 
-  // Clear search when switching tabs or projects
+  // Clear search timeout on unmount and when switching tabs/projects
   useEffect(() => {
     return () => {
       if (searchTimeoutRef.current) {
         clearTimeout(searchTimeoutRef.current)
+        searchTimeoutRef.current = null
       }
     }
   }, [])
+
+  // Also clear timeout when activeTab changes to prevent stale callbacks
+  useEffect(() => {
+    if (activeTab !== 'sessions' && searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current)
+      searchTimeoutRef.current = null
+    }
+  }, [activeTab])
 
   // Determine which sessions to display
   const displaySessions = storeSearchQuery ? searchResults : sessions

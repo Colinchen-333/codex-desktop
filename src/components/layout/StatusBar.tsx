@@ -98,11 +98,16 @@ export function StatusBar() {
   }, [turnStatus])
 
   useEffect(() => {
+    // Track mounted state to prevent state updates after unmount
+    let isMounted = true
+
     // Fetch status on mount only (no polling - rely on events)
     const fetchStatus = async () => {
       try {
         const status = await serverApi.getStatus()
-        setServerStatus(status)
+        if (isMounted) {
+          setServerStatus(status)
+        }
       } catch (error) {
         console.error('Failed to fetch server status:', error)
       }
@@ -111,7 +116,9 @@ export function StatusBar() {
     const fetchAccount = async () => {
       try {
         const info = await serverApi.getAccountInfo()
-        setAccountInfo(info)
+        if (isMounted) {
+          setAccountInfo(info)
+        }
       } catch (error) {
         console.error('Failed to fetch account info:', error)
       }
@@ -122,7 +129,10 @@ export function StatusBar() {
 
     // Reduced polling to 60 seconds (status comes from events now)
     const interval = setInterval(fetchStatus, 60000)
-    return () => clearInterval(interval)
+    return () => {
+      isMounted = false
+      clearInterval(interval)
+    }
   }, [])
 
   // Fetch git info when project changes
@@ -132,20 +142,29 @@ export function StatusBar() {
       return
     }
 
+    let isMounted = true
+
     const fetchGitInfo = async () => {
       try {
         const info = await projectApi.getGitInfo(selectedProject.path)
-        setGitInfo(info)
+        if (isMounted) {
+          setGitInfo(info)
+        }
       } catch (error) {
         console.error('Failed to fetch git info:', error)
-        setGitInfo(null)
+        if (isMounted) {
+          setGitInfo(null)
+        }
       }
     }
 
     fetchGitInfo()
     // Poll git status every 30 seconds
     const interval = setInterval(fetchGitInfo, 30000)
-    return () => clearInterval(interval)
+    return () => {
+      isMounted = false
+      clearInterval(interval)
+    }
   }, [selectedProject?.path])
 
   // Listen for ? key to open keyboard shortcuts
