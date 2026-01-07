@@ -585,11 +585,14 @@ export function ChatView() {
 
     try {
       // Detect skill mentions in the text (pattern: $skillName)
-      const skillMentionPattern = /\$([a-zA-Z0-9_-]+)/g
+      // Only match $ at start of string or after whitespace to avoid false positives
+      // in URLs, code blocks, or variable references like ${var}
+      const skillMentionPattern = /(?:^|[\s(])(\$([a-zA-Z][a-zA-Z0-9_-]*))(?=[\s,.):]|$)/g
       const skillMentions: string[] = []
       let match
       while ((match = skillMentionPattern.exec(text)) !== null) {
-        skillMentions.push(match[1])
+        // match[2] is the skill name without $
+        skillMentions.push(match[2])
       }
 
       // Look up skill metadata if there are mentions
@@ -750,7 +753,9 @@ export function ChatView() {
   // Handle review target selection from dialog
   const handleReviewSelect = useCallback(
     async (target: ReviewTarget) => {
-      if (!activeThread) return
+      // Get fresh activeThread from store to avoid stale closure
+      const currentThread = useThreadStore.getState().activeThread
+      if (!currentThread) return
       const targetDesc =
         target.type === 'uncommittedChanges'
           ? 'uncommitted changes'
@@ -760,9 +765,9 @@ export function ChatView() {
               ? `commit: ${(target as { sha: string }).sha.slice(0, 7)}`
               : 'custom instructions'
       addInfoItem('Review', `Starting review of ${targetDesc}...`)
-      await serverApi.startReview(activeThread.id, target)
+      await serverApi.startReview(currentThread.id, target)
     },
-    [activeThread, addInfoItem]
+    [addInfoItem]
   )
 
   // Get current project for review selector

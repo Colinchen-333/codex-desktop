@@ -778,10 +778,11 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
     // Track queued message if turn is already running
     const isQueued = turnStatus === 'running'
-    if (isQueued) {
+    const queuedMsgId = isQueued ? `queued-${Date.now()}` : null
+    if (isQueued && queuedMsgId) {
       console.log('[sendMessage] Turn already running, tracking queued message')
       const queuedMsg: QueuedMessage = {
-        id: `queued-${Date.now()}`,
+        id: queuedMsgId,
         text,
         images,
         queuedAt: Date.now(),
@@ -809,9 +810,9 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       items: { ...state.items, [userMessageId]: userMessage },
       itemOrder: [...state.itemOrder, userMessageId],
       turnStatus: 'running',
-      // Remove from queue once it's actually being sent
-      queuedMessages: isQueued
-        ? state.queuedMessages.filter((m) => m.text !== text)
+      // Remove from queue by ID once it's actually being sent
+      queuedMessages: queuedMsgId
+        ? state.queuedMessages.filter((m) => m.id !== queuedMsgId)
         : state.queuedMessages,
     }))
 

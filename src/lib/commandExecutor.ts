@@ -2,6 +2,7 @@
 // Handles execution of slash commands with proper context
 
 import { SLASH_COMMANDS, type SlashCommand } from './slashCommands'
+import { normalizeApprovalPolicy } from './normalize'
 
 export interface CommandContext {
   clearThread: () => void
@@ -209,14 +210,14 @@ export async function executeCommand(
   if (command.name === 'approvals') {
     if (args.length > 0 && context.setApprovalOverride) {
       // /approvals <policy> - set approval policy override for this session
-      const policyArg = args[0].toLowerCase()
-      const validPolicies = ['never', 'on-request', 'on-failure', 'unless-trusted']
-      if (validPolicies.includes(policyArg)) {
-        context.setApprovalOverride(policyArg)
-        context.addInfoItem?.('Approval Override', `Approval policy set to "${policyArg}" for this session`)
+      const policyArg = args[0]
+      const normalized = normalizeApprovalPolicy(policyArg)
+      if (normalized) {
+        context.setApprovalOverride(normalized)
+        context.addInfoItem?.('Approval Override', `Approval policy set to "${normalized}" for this session`)
         return { handled: true }
       }
-      context.showToast?.(`Invalid policy: ${policyArg}. Valid: ${validPolicies.join(', ')}`, 'error')
+      context.showToast?.(`Invalid policy: ${policyArg}. Valid: never, on-request, on-failure, unless-trusted`, 'error')
       return { handled: true }
     }
     // No args - open settings
