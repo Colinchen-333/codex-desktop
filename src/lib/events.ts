@@ -245,22 +245,22 @@ export type EventHandlers = {
 
 // ==================== Setup Event Listeners ====================
 
-// Helper to add listener if handler exists
-async function addListener<T>(
-  eventName: string,
-  handler: ((event: T) => void) | undefined,
-  unlisteners: UnlistenFn[]
-) {
-  if (handler) {
-    console.log(`[Events] Setting up listener for: ${eventName}`)
-    const unlisten = await listen<T>(eventName, (event) => {
-      console.log(`[Events] Received raw event: ${eventName}`, event.payload)
-      handler(event.payload)
-    })
-    unlisteners.push(unlisten)
-    console.log(`[Events] Listener registered for: ${eventName}`)
-  }
-}
+// Helper to add listener if handler exists (reserved for alternative implementation)
+// async function addListener<T>(
+//   eventName: string,
+//   handler: ((event: T) => void) | undefined,
+//   unlisteners: UnlistenFn[]
+// ) {
+//   if (handler) {
+//     console.log(`[Events] Setting up listener for: ${eventName}`)
+//     const unlisten = await listen<T>(eventName, (event) => {
+//       console.log(`[Events] Received raw event: ${eventName}`, event.payload)
+//       handler(event.payload)
+//     })
+//     unlisteners.push(unlisten)
+//     console.log(`[Events] Listener registered for: ${eventName}`)
+//   }
+// }
 
 export async function setupEventListeners(
   handlers: EventHandlers

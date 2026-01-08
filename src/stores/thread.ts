@@ -31,6 +31,15 @@ import type {
   RateLimitExceededEvent,
 } from '../lib/events'
 
+// ==================== Constants ====================
+
+const MAX_PARALLEL_SESSIONS = 5
+const FLUSH_INTERVAL_MS = 50 // 20 FPS
+const MAX_BUFFER_SIZE = 500_000 // 500KB - force flush to prevent memory issues
+const TURN_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - generous timeout for long operations
+const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes - generous timeout for user decisions
+const APPROVAL_CLEANUP_INTERVAL_MS = 60 * 1000 // Check every minute
+
 // ==================== Operation Sequence Tracking ====================
 // Prevents race conditions when switching threads during async operations
 
@@ -43,13 +52,10 @@ function getCurrentOperationSequence(): number {
 }
 
 // ==================== Delta Batching for Smooth Streaming ====================
-// Accumulates delta updates and flushes at ~20 FPS to reduce re-renders
+// Per-thread delta buffers to accumulate delta updates
 
 interface DeltaBuffer {
-  // Track which thread ID and turn ID the current buffer is for
-  threadId: string | null
   turnId: string | null
-  // Track operation sequence to invalidate buffer on thread switch
   operationSeq: number
   agentMessages: Map<string, string> // itemId -> accumulated text
   commandOutputs: Map<string, string> // itemId -> accumulated output
@@ -59,239 +65,223 @@ interface DeltaBuffer {
   mcpProgress: Map<string, string[]> // itemId -> accumulated progress messages
 }
 
-const deltaBuffer: DeltaBuffer = {
-  threadId: null,
-  turnId: null,
-  operationSeq: 0,
-  agentMessages: new Map(),
-  commandOutputs: new Map(),
-  fileChangeOutputs: new Map(),
-  reasoningSummaries: new Map(),
-  reasoningContents: new Map(),
-  mcpProgress: new Map(),
-}
+// Per-thread delta buffers
+const deltaBuffers: Map<string, DeltaBuffer> = new Map()
 
-// Helper to clear delta buffer and reset thread/turn tracking
-function clearDeltaBuffer() {
-  deltaBuffer.threadId = null
-  deltaBuffer.turnId = null
-  deltaBuffer.operationSeq = getCurrentOperationSequence()
-  deltaBuffer.agentMessages.clear()
-  deltaBuffer.commandOutputs.clear()
-  deltaBuffer.fileChangeOutputs.clear()
-  deltaBuffer.reasoningSummaries.clear()
-  deltaBuffer.reasoningContents.clear()
-  deltaBuffer.mcpProgress.clear()
-  if (flushTimer) {
-    clearTimeout(flushTimer)
-    flushTimer = null
-  }
-}
+// Per-thread flush timers
+const flushTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
 
-let flushTimer: ReturnType<typeof setTimeout> | null = null
-const FLUSH_INTERVAL_MS = 50 // 20 FPS
-const MAX_BUFFER_SIZE = 500_000 // 500KB - force flush to prevent memory issues
+// Per-thread turn timeout timers
+const turnTimeoutTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
 
-// Turn timeout - reset turn if no completion received within timeout
-let turnTimeoutTimer: ReturnType<typeof setTimeout> | null = null
-const TURN_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - generous timeout for long operations
-
-// Approval timeout - clean up stale approvals that were never responded to
-const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes - generous timeout for user decisions
+// Global approval cleanup timer
 let approvalCleanupTimer: ReturnType<typeof setInterval> | null = null
-const APPROVAL_CLEANUP_INTERVAL_MS = 60 * 1000 // Check every minute
 
-function clearTurnTimeout() {
-  if (turnTimeoutTimer) {
-    clearTimeout(turnTimeoutTimer)
-    turnTimeoutTimer = null
+function createEmptyDeltaBuffer(): DeltaBuffer {
+  return {
+    turnId: null,
+    operationSeq: getCurrentOperationSequence(),
+    agentMessages: new Map(),
+    commandOutputs: new Map(),
+    fileChangeOutputs: new Map(),
+    reasoningSummaries: new Map(),
+    reasoningContents: new Map(),
+    mcpProgress: new Map(),
   }
 }
+
+function getDeltaBuffer(threadId: string): DeltaBuffer {
+  let buffer = deltaBuffers.get(threadId)
+  if (!buffer) {
+    buffer = createEmptyDeltaBuffer()
+    deltaBuffers.set(threadId, buffer)
+  }
+  return buffer
+}
+
+function clearDeltaBuffer(threadId: string) {
+  const buffer = deltaBuffers.get(threadId)
+  if (buffer) {
+    buffer.turnId = null
+    buffer.operationSeq = getCurrentOperationSequence()
+    buffer.agentMessages.clear()
+    buffer.commandOutputs.clear()
+    buffer.fileChangeOutputs.clear()
+    buffer.reasoningSummaries.clear()
+    buffer.reasoningContents.clear()
+    buffer.mcpProgress.clear()
+  }
+  const timer = flushTimers.get(threadId)
+  if (timer) {
+    clearTimeout(timer)
+    flushTimers.delete(threadId)
+  }
+}
+
+// Reserved for future use - clears all delta buffers
+// function clearAllDeltaBuffers() {
+//   deltaBuffers.forEach((_, threadId) => clearDeltaBuffer(threadId))
+//   deltaBuffers.clear()
+// }
+
+function clearTurnTimeout(threadId: string) {
+  const timer = turnTimeoutTimers.get(threadId)
+  if (timer) {
+    clearTimeout(timer)
+    turnTimeoutTimers.delete(threadId)
+  }
+}
+
+// Reserved for future use - clears all turn timeouts
+// function clearAllTurnTimeouts() {
+//   turnTimeoutTimers.forEach((timer) => clearTimeout(timer))
+//   turnTimeoutTimers.clear()
+// }
+
+// Calculate buffer size for overflow detection
+function getBufferSize(buffer: DeltaBuffer): number {
+  let size = 0
+  buffer.agentMessages.forEach((text) => { size += text.length })
+  buffer.commandOutputs.forEach((text) => { size += text.length })
+  buffer.fileChangeOutputs.forEach((text) => { size += text.length })
+  buffer.reasoningSummaries.forEach((arr) => {
+    arr.forEach((item) => { size += item.text.length })
+  })
+  buffer.reasoningContents.forEach((arr) => {
+    arr.forEach((item) => { size += item.text.length })
+  })
+  buffer.mcpProgress.forEach((arr) => {
+    arr.forEach((msg) => { size += msg.length })
+  })
+  return size
+}
+
+// Schedule a flush for a specific thread
+function scheduleFlush(threadId: string, flushFn: () => void, immediate = false) {
+  const buffer = getDeltaBuffer(threadId)
+
+  // Check for buffer overflow - force flush if too large
+  if (getBufferSize(buffer) > MAX_BUFFER_SIZE) {
+    const timer = flushTimers.get(threadId)
+    if (timer) {
+      clearTimeout(timer)
+      flushTimers.delete(threadId)
+    }
+    flushFn()
+    return
+  }
+
+  const existingTimer = flushTimers.get(threadId)
+  if (immediate && !existingTimer) {
+    // First delta: flush immediately for instant first-character display
+    flushFn()
+    return
+  }
+  if (!existingTimer) {
+    const timer = setTimeout(() => {
+      flushTimers.delete(threadId)
+      flushFn()
+    }, FLUSH_INTERVAL_MS)
+    flushTimers.set(threadId, timer)
+  }
+}
+
+// Full turn cleanup for a specific thread
+function performFullTurnCleanup(threadId: string) {
+  clearDeltaBuffer(threadId)
+  clearTurnTimeout(threadId)
+}
+
+// ==================== Approval Cleanup ====================
 
 // Clean up stale pending approvals that have exceeded the timeout
-// Uses a single setState call to avoid race conditions
-// Also sends cancel responses to the backend for timed-out approvals
 async function cleanupStaleApprovals() {
   const now = Date.now()
   const state = useThreadStore.getState()
-  const { pendingApprovals, activeThread, items } = state
+  const { threads } = state
 
-  if (pendingApprovals.length === 0) return
-
-  // Find stale approvals (exceeded timeout) that belong to the active thread
-  const staleApprovals = pendingApprovals.filter(
-    (approval) =>
-      now - approval.createdAt > APPROVAL_TIMEOUT_MS &&
-      activeThread &&
-      approval.threadId === activeThread.id
-  )
-
-  // Send cancel responses to backend for stale approvals
-  // This is fire-and-forget to avoid blocking the cleanup
-  if (staleApprovals.length > 0 && activeThread) {
-    console.warn(
-      '[cleanupStaleApprovals] Cancelling',
-      staleApprovals.length,
-      'timed-out approvals:',
-      staleApprovals.map((a) => a.itemId)
-    )
-
-    // Send cancel for each stale approval (don't await - fire and forget)
-    staleApprovals.forEach((approval) => {
-      threadApi
-        .respondToApproval(activeThread.id, approval.itemId, 'cancel', approval.requestId)
-        .catch((err) => {
-          console.warn('[cleanupStaleApprovals] Failed to cancel approval:', approval.itemId, err)
-        })
-    })
-  }
-
-  // Now update the state
-  useThreadStore.setState((state) => {
-    const { pendingApprovals, activeThread, items } = state
-
-    if (pendingApprovals.length === 0) return state
-
-    // Find all stale approvals (exceeded timeout)
-    const allStaleApprovals = pendingApprovals.filter(
+  // Process each thread's approvals
+  Object.entries(threads).forEach(([threadId, threadState]) => {
+    const staleApprovals = threadState.pendingApprovals.filter(
       (approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS
     )
 
-    // Update items for stale approvals
-    const updatedItems = { ...items }
-    if (allStaleApprovals.length > 0) {
-      allStaleApprovals.forEach((approval) => {
-        const item = updatedItems[approval.itemId]
-        if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
-          const content = item.content as Record<string, unknown>
-          updatedItems[approval.itemId] = {
-            ...item,
-            status: 'failed',
-            content: {
-              ...content,
-              needsApproval: false,
-              approved: false,
-              reason: 'Approval request timed out',
-            },
-          } as AnyThreadItem
-        }
+    // Send cancel responses to backend for stale approvals
+    if (staleApprovals.length > 0) {
+      console.warn(
+        '[cleanupStaleApprovals] Cancelling',
+        staleApprovals.length,
+        'timed-out approvals for thread:',
+        threadId,
+        staleApprovals.map((a) => a.itemId)
+      )
+
+      staleApprovals.forEach((approval) => {
+        threadApi
+          .respondToApproval(threadId, approval.itemId, 'cancel', approval.requestId)
+          .catch((err) => {
+            console.warn('[cleanupStaleApprovals] Failed to cancel approval:', approval.itemId, err)
+          })
       })
     }
+  })
 
-    // Filter out stale and orphaned approvals in one pass
-    const validApprovals = pendingApprovals.filter((approval) => {
-      // Remove if timed out
-      if (now - approval.createdAt > APPROVAL_TIMEOUT_MS) {
-        return false
+  // Update state to remove stale approvals
+  useThreadStore.setState((state) => {
+    const updatedThreads = { ...state.threads }
+    let hasChanges = false
+
+    Object.entries(updatedThreads).forEach(([threadId, threadState]) => {
+      const validApprovals = threadState.pendingApprovals.filter(
+        (approval) => now - approval.createdAt <= APPROVAL_TIMEOUT_MS
+      )
+
+      if (validApprovals.length !== threadState.pendingApprovals.length) {
+        hasChanges = true
+        const updatedItems = { ...threadState.items }
+
+        // Update items for stale approvals
+        threadState.pendingApprovals
+          .filter((approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS)
+          .forEach((approval) => {
+            const item = updatedItems[approval.itemId]
+            if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
+              const content = item.content as Record<string, unknown>
+              updatedItems[approval.itemId] = {
+                ...item,
+                status: 'failed',
+                content: {
+                  ...content,
+                  needsApproval: false,
+                  approved: false,
+                  reason: 'Approval request timed out',
+                },
+              } as AnyThreadItem
+            }
+          })
+
+        updatedThreads[threadId] = {
+          ...threadState,
+          items: updatedItems,
+          pendingApprovals: validApprovals,
+        }
       }
-      // Remove if orphaned (belongs to different thread)
-      if (activeThread && approval.threadId !== activeThread.id) {
-        return false
-      }
-      return true
     })
 
-    // Log orphaned approvals being removed
-    const orphanedCount = pendingApprovals.filter(
-      (approval) =>
-        activeThread &&
-        approval.threadId !== activeThread.id &&
-        now - approval.createdAt <= APPROVAL_TIMEOUT_MS
-    ).length
-    if (orphanedCount > 0) {
-      console.warn(
-        '[cleanupStaleApprovals] Removing',
-        orphanedCount,
-        'orphaned approvals from different threads'
-      )
-    }
-
-    // Only update if there were changes
-    if (validApprovals.length === pendingApprovals.length && allStaleApprovals.length === 0) {
-      return state
-    }
-
-    return {
-      items: updatedItems,
-      pendingApprovals: validApprovals,
-    }
+    return hasChanges ? { threads: updatedThreads } : state
   })
 }
 
-// Start the approval cleanup timer
 function startApprovalCleanupTimer() {
   if (approvalCleanupTimer === null) {
     approvalCleanupTimer = setInterval(cleanupStaleApprovals, APPROVAL_CLEANUP_INTERVAL_MS)
   }
 }
 
-// Stop the approval cleanup timer
 function stopApprovalCleanupTimer() {
   if (approvalCleanupTimer !== null) {
     clearInterval(approvalCleanupTimer)
     approvalCleanupTimer = null
-  }
-}
-
-// Full turn cleanup - called when turn ends abnormally (timeout, disconnect, etc.)
-function performFullTurnCleanup() {
-  clearDeltaBuffer()
-  clearTurnTimeout()
-}
-
-// Calculate current buffer size for overflow detection
-function getBufferSize(): number {
-  let size = 0
-  deltaBuffer.agentMessages.forEach((text) => { size += text.length })
-  deltaBuffer.commandOutputs.forEach((text) => { size += text.length })
-  deltaBuffer.fileChangeOutputs.forEach((text) => { size += text.length })
-  deltaBuffer.reasoningSummaries.forEach((arr) => {
-    arr.forEach((item) => { size += item.text.length })
-  })
-  deltaBuffer.reasoningContents.forEach((arr) => {
-    arr.forEach((item) => { size += item.text.length })
-  })
-  deltaBuffer.mcpProgress.forEach((arr) => {
-    arr.forEach((msg) => { size += msg.length })
-  })
-  return size
-}
-
-// Schedule a flush - immediate=true for first delta to reduce perceived latency
-function scheduleFlush(flushFn: () => void, immediate = false) {
-  // Capture current threadId to prevent race condition
-  // If thread changes before flush executes, we skip the flush
-  const capturedThreadId = deltaBuffer.threadId
-
-  const wrappedFlush = () => {
-    // Validate threadId hasn't changed before executing flush
-    if (deltaBuffer.threadId !== capturedThreadId) {
-      console.log('[scheduleFlush] Thread changed, skipping flush. Captured:', capturedThreadId, 'Current:', deltaBuffer.threadId)
-      return
-    }
-    flushFn()
-  }
-
-  // Check for buffer overflow - force flush if too large
-  if (getBufferSize() > MAX_BUFFER_SIZE) {
-    if (flushTimer) {
-      clearTimeout(flushTimer)
-      flushTimer = null
-    }
-    wrappedFlush()
-    return
-  }
-
-  if (immediate && flushTimer === null) {
-    // First delta: flush immediately for instant first-character display
-    wrappedFlush()
-    return
-  }
-  if (flushTimer === null) {
-    flushTimer = setTimeout(() => {
-      flushTimer = null
-      wrappedFlush()
-    }, FLUSH_INTERVAL_MS)
   }
 }
 
@@ -470,38 +460,36 @@ export type TurnStatus = 'idle' | 'running' | 'completed' | 'failed' | 'interrup
 
 export interface PendingApproval {
   itemId: string
-  threadId: string // Thread ID this approval belongs to
+  threadId: string
   type: 'command' | 'fileChange'
   data: CommandApprovalRequestedEvent | FileChangeApprovalRequestedEvent
-  requestId: number // JSON-RPC request ID for responding
-  createdAt: number // Timestamp when approval was requested (for timeout tracking)
+  requestId: number
+  createdAt: number
 }
 
-// ==================== Store State ====================
+// ==================== Token Usage & Turn Timing ====================
 
-// Token usage statistics
 export interface TokenUsage {
   inputTokens: number
   cachedInputTokens: number
   outputTokens: number
   totalTokens: number
-  modelContextWindow: number | null // Dynamic context window from server
+  modelContextWindow: number | null
 }
 
-// Turn timing for elapsed display
 export interface TurnTiming {
   startedAt: number | null
   completedAt: number | null
 }
 
-// Session-level overrides (like CLI's /model, /approvals)
+// ==================== Session Overrides & Queued Messages ====================
+
 export interface SessionOverrides {
   model?: string
   approvalPolicy?: string
   sandboxPolicy?: string
 }
 
-// Queued message when turn is running
 export interface QueuedMessage {
   id: string
   text: string
@@ -509,20 +497,46 @@ export interface QueuedMessage {
   queuedAt: number
 }
 
-interface ThreadState {
-  activeThread: ThreadInfo | null
-  // Using Record instead of Map for better serialization and Zustand devtools compatibility
+// ==================== Single Thread State ====================
+
+export interface SingleThreadState {
+  thread: ThreadInfo
   items: Record<string, AnyThreadItem>
   itemOrder: string[]
   turnStatus: TurnStatus
   currentTurnId: string | null
   pendingApprovals: PendingApproval[]
-  snapshots: Snapshot[]
   tokenUsage: TokenUsage
   turnTiming: TurnTiming
   sessionOverrides: SessionOverrides
   queuedMessages: QueuedMessage[]
+  error: string | null
+}
+
+// ==================== Multi Thread Store State ====================
+
+interface ThreadState {
+  // Multi-thread state
+  threads: Record<string, SingleThreadState>
+  focusedThreadId: string | null
+  maxSessions: number
+
+  // Global state
+  snapshots: Snapshot[]
   isLoading: boolean
+  globalError: string | null
+
+  // Backward-compatible getters (computed from focusedThreadId)
+  activeThread: ThreadInfo | null
+  items: Record<string, AnyThreadItem>
+  itemOrder: string[]
+  turnStatus: TurnStatus
+  currentTurnId: string | null
+  pendingApprovals: PendingApproval[]
+  tokenUsage: TokenUsage
+  turnTiming: TurnTiming
+  sessionOverrides: SessionOverrides
+  queuedMessages: QueuedMessage[]
   error: string | null
 
   // Actions
@@ -543,9 +557,15 @@ interface ThreadState {
   ) => Promise<void>
   clearThread: () => void
   addInfoItem: (title: string, details?: string) => void
-  flushDeltaBuffer: () => void
+  flushDeltaBuffer: (threadId?: string) => void
   setSessionOverride: (key: keyof SessionOverrides, value: string | undefined) => void
   clearSessionOverrides: () => void
+
+  // Multi-session actions
+  switchThread: (threadId: string) => void
+  closeThread: (threadId: string) => void
+  getActiveThreadIds: () => string[]
+  canAddSession: () => boolean
 
   // Event handlers
   handleThreadStarted: (event: ThreadStartedEvent) => void
@@ -576,7 +596,8 @@ interface ThreadState {
   fetchSnapshots: () => Promise<void>
 }
 
-// Helper to map item types from server to our types
+// ==================== Helper Functions ====================
+
 function mapItemType(type: string): ThreadItemType {
   const typeMap: Record<string, ThreadItemType> = {
     userMessage: 'userMessage',
@@ -802,7 +823,6 @@ function toThreadItem(item: { id: string; type: string } & Record<string, unknow
         },
       }
     default:
-      // Handle unknown item types as info items
       return {
         ...base,
         type: 'info' as const,
@@ -814,7 +834,8 @@ function toThreadItem(item: { id: string; type: string } & Record<string, unknow
   }
 }
 
-// Default token usage
+// ==================== Default Values ====================
+
 const defaultTokenUsage: TokenUsage = {
   inputTokens: 0,
   cachedInputTokens: 0,
@@ -828,31 +849,181 @@ const defaultTurnTiming: TurnTiming = {
   completedAt: null,
 }
 
+function createEmptyThreadState(thread: ThreadInfo): SingleThreadState {
+  return {
+    thread,
+    items: {},
+    itemOrder: [],
+    turnStatus: 'idle',
+    currentTurnId: null,
+    pendingApprovals: [],
+    tokenUsage: defaultTokenUsage,
+    turnTiming: defaultTurnTiming,
+    sessionOverrides: {},
+    queuedMessages: [],
+    error: null,
+  }
+}
+
+// Helper to get thread state or return undefined (reserved for future use)
+// function getThreadState(state: ThreadState, threadId: string): SingleThreadState | undefined {
+//   return state.threads[threadId]
+// }
+
+// Helper to get focused thread state
+function getFocusedThreadState(state: ThreadState): SingleThreadState | undefined {
+  if (!state.focusedThreadId) return undefined
+  return state.threads[state.focusedThreadId]
+}
+
+// ==================== Store ====================
+
 export const useThreadStore = create<ThreadState>((set, get) => ({
-  activeThread: null,
-  items: {},
-  itemOrder: [],
-  turnStatus: 'idle',
-  currentTurnId: null,
-  pendingApprovals: [],
+  // Multi-thread state
+  threads: {},
+  focusedThreadId: null,
+  maxSessions: MAX_PARALLEL_SESSIONS,
+
+  // Global state
   snapshots: [],
-  tokenUsage: defaultTokenUsage,
-  turnTiming: defaultTurnTiming,
-  sessionOverrides: {},
-  queuedMessages: [],
   isLoading: false,
-  error: null,
+  globalError: null,
+
+  // Backward-compatible getters
+  get activeThread() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.thread ?? null
+  },
+
+  get items() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.items ?? {}
+  },
+
+  get itemOrder() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.itemOrder ?? []
+  },
+
+  get turnStatus() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.turnStatus ?? 'idle'
+  },
+
+  get currentTurnId() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.currentTurnId ?? null
+  },
+
+  get pendingApprovals() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.pendingApprovals ?? []
+  },
+
+  get tokenUsage() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.tokenUsage ?? defaultTokenUsage
+  },
+
+  get turnTiming() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.turnTiming ?? defaultTurnTiming
+  },
+
+  get sessionOverrides() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.sessionOverrides ?? {}
+  },
+
+  get queuedMessages() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.queuedMessages ?? []
+  },
+
+  get error() {
+    const state = get()
+    const focusedState = getFocusedThreadState(state)
+    return focusedState?.error ?? state.globalError
+  },
+
+  // ==================== Multi-Session Actions ====================
+
+  switchThread: (threadId) => {
+    const { threads } = get()
+    if (!threads[threadId]) {
+      console.warn('[switchThread] Thread not found:', threadId)
+      return
+    }
+    set({ focusedThreadId: threadId })
+  },
+
+  closeThread: (threadId) => {
+    const { threads, focusedThreadId } = get()
+    if (!threads[threadId]) {
+      console.warn('[closeThread] Thread not found:', threadId)
+      return
+    }
+
+    // Clean up thread-specific resources
+    clearDeltaBuffer(threadId)
+    clearTurnTimeout(threadId)
+    deltaBuffers.delete(threadId)
+
+    // Remove thread from state
+    const updatedThreads = { ...threads }
+    delete updatedThreads[threadId]
+
+    // Update focused thread if the closed one was focused
+    let newFocusedId = focusedThreadId
+    if (focusedThreadId === threadId) {
+      const remainingIds = Object.keys(updatedThreads)
+      newFocusedId = remainingIds.length > 0 ? remainingIds[0] : null
+    }
+
+    set({
+      threads: updatedThreads,
+      focusedThreadId: newFocusedId,
+    })
+
+    // Stop approval cleanup if no threads left
+    if (Object.keys(updatedThreads).length === 0) {
+      stopApprovalCleanupTimer()
+    }
+  },
+
+  getActiveThreadIds: () => {
+    return Object.keys(get().threads)
+  },
+
+  canAddSession: () => {
+    const { threads, maxSessions } = get()
+    return Object.keys(threads).length < maxSessions
+  },
+
+  // ==================== Thread Lifecycle ====================
 
   startThread: async (projectId, cwd, model, sandboxMode, approvalPolicy) => {
-    // Get operation sequence to detect if another operation starts during this one
-    const opSeq = getNextOperationSequence()
+    const { threads, maxSessions } = get()
 
-    // Clear delta buffer before starting new thread
-    clearDeltaBuffer()
-    // Start approval cleanup timer
+    // Check if we can add another session
+    if (Object.keys(threads).length >= maxSessions) {
+      throw new Error(`Maximum number of parallel sessions (${maxSessions}) reached. Please close a session first.`)
+    }
+
+    const opSeq = getNextOperationSequence()
     startApprovalCleanupTimer()
 
-    set({ isLoading: true, error: null })
+    set({ isLoading: true, globalError: null })
     try {
       const safeModel = model?.trim() || undefined
       const safeSandboxMode = normalizeSandboxMode(sandboxMode)
@@ -866,30 +1037,26 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         safeApprovalPolicy
       )
 
-      // Verify no other operation started during this async call
       if (getCurrentOperationSequence() !== opSeq) {
         console.warn('[startThread] Another operation started, discarding result')
         return
       }
 
-      // Reset all state for the new thread
-      set({
-        activeThread: response.thread,
-        items: {},
-        itemOrder: [],
-        turnStatus: 'idle',
-        currentTurnId: null,
-        pendingApprovals: [],
-        snapshots: [],
-        tokenUsage: defaultTokenUsage,
-        turnTiming: defaultTurnTiming,
+      const threadId = response.thread.id
+      const newThreadState = createEmptyThreadState(response.thread)
+
+      set((state) => ({
+        threads: {
+          ...state.threads,
+          [threadId]: newThreadState,
+        },
+        focusedThreadId: threadId,
         isLoading: false,
-        error: null,
-      })
+        globalError: null,
+      }))
     } catch (error) {
-      // Only update error state if this is still the current operation
       if (getCurrentOperationSequence() === opSeq) {
-        set({ error: parseError(error), isLoading: false })
+        set({ globalError: parseError(error), isLoading: false })
       }
       throw error
     }
@@ -898,28 +1065,32 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   resumeThread: async (threadId) => {
     console.log('[resumeThread] Starting resume with threadId:', threadId)
 
-    // Get operation sequence to detect if another operation starts during this one
-    const opSeq = getNextOperationSequence()
+    const { threads, maxSessions } = get()
 
-    // Clear delta buffer before resuming thread
-    clearDeltaBuffer()
-    // Start approval cleanup timer
+    // If thread already exists in our store, just switch to it
+    if (threads[threadId]) {
+      set({ focusedThreadId: threadId })
+      return
+    }
+
+    // Check if we can add another session
+    if (Object.keys(threads).length >= maxSessions) {
+      throw new Error(`Maximum number of parallel sessions (${maxSessions}) reached. Please close a session first.`)
+    }
+
+    const opSeq = getNextOperationSequence()
     startApprovalCleanupTimer()
 
-    set({ isLoading: true, error: null })
+    set({ isLoading: true, globalError: null })
     try {
       const response = await threadApi.resume(threadId)
 
-      // Verify no other operation started during this async call
       if (getCurrentOperationSequence() !== opSeq) {
         console.warn('[resumeThread] Another operation started, discarding result for threadId:', threadId)
         return
       }
 
       console.log('[resumeThread] Resume response - thread.id:', response.thread.id, 'requested threadId:', threadId)
-      if (response.thread.id !== threadId) {
-        console.warn('[resumeThread] Thread ID mismatch! Requested:', threadId, 'Got:', response.thread.id)
-      }
 
       // Convert items from response to our format
       const items: Record<string, AnyThreadItem> = {}
@@ -940,30 +1111,37 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         itemOrder.push(threadItem.id)
       }
 
-      set({
-        activeThread: response.thread,
+      const newThreadState: SingleThreadState = {
+        thread: response.thread,
         items,
         itemOrder,
         turnStatus: 'idle',
         currentTurnId: null,
         pendingApprovals: [],
-        snapshots: [],
         tokenUsage: defaultTokenUsage,
         turnTiming: defaultTurnTiming,
-        isLoading: false,
+        sessionOverrides: {},
+        queuedMessages: [],
         error: null,
-      })
+      }
+
+      set((state) => ({
+        threads: {
+          ...state.threads,
+          [response.thread.id]: newThreadState,
+        },
+        focusedThreadId: response.thread.id,
+        isLoading: false,
+        globalError: null,
+      }))
 
       console.log('[resumeThread] Resume completed, activeThread.id:', response.thread.id)
     } catch (error) {
       console.error('[resumeThread] Resume failed:', error)
-      // Only update error state if this is still the current operation
       if (getCurrentOperationSequence() === opSeq) {
         set({
-          error: parseError(error),
+          globalError: parseError(error),
           isLoading: false,
-          pendingApprovals: [], // Clean up any stale approvals
-          turnStatus: 'idle',
         })
       }
       throw error
@@ -971,13 +1149,16 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   sendMessage: async (text, images, skills) => {
-    const { activeThread, turnStatus } = get()
-    if (!activeThread) {
+    const { focusedThreadId, threads } = get()
+    if (!focusedThreadId || !threads[focusedThreadId]) {
       throw new Error('No active thread')
     }
 
+    const threadState = threads[focusedThreadId]
+    const threadId = focusedThreadId
+
     // Track queued message if turn is already running
-    const isQueued = turnStatus === 'running'
+    const isQueued = threadState.turnStatus === 'running'
     const queuedMsgId = isQueued ? `queued-${Date.now()}` : null
     if (isQueued && queuedMsgId) {
       console.log('[sendMessage] Turn already running, tracking queued message')
@@ -987,16 +1168,24 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         images,
         queuedAt: Date.now(),
       }
-      set((state) => ({
-        queuedMessages: [...state.queuedMessages, queuedMsg],
-      }))
+      set((state) => {
+        const threadState = state.threads[threadId]
+        if (!threadState) return state
+        return {
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...threadState,
+              queuedMessages: [...threadState.queuedMessages, queuedMsg],
+            },
+          },
+        }
+      })
     }
 
-    // Save thread ID to verify it doesn't change during send
-    const currentThreadId = activeThread.id
-    console.log('[sendMessage] Sending message to thread:', currentThreadId)
+    console.log('[sendMessage] Sending message to thread:', threadId)
 
-    // Add user message to items (use random suffix to avoid collision on rapid sends)
+    // Add user message to items
     const userMessageId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     const userMessage: UserMessageItem = {
       id: userMessageId,
@@ -1006,19 +1195,30 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       createdAt: Date.now(),
     }
 
-    set((state) => ({
-      items: { ...state.items, [userMessageId]: userMessage },
-      itemOrder: [...state.itemOrder, userMessageId],
-      turnStatus: 'running',
-      // Remove from queue by ID once it's actually being sent
-      queuedMessages: queuedMsgId
-        ? state.queuedMessages.filter((m) => m.id !== queuedMsgId)
-        : state.queuedMessages,
-    }))
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: { ...threadState.items, [userMessageId]: userMessage },
+            itemOrder: [...threadState.itemOrder, userMessageId],
+            turnStatus: 'running',
+            queuedMessages: queuedMsgId
+              ? threadState.queuedMessages.filter((m) => m.id !== queuedMsgId)
+              : threadState.queuedMessages,
+          },
+        },
+      }
+    })
 
     try {
       const { settings } = useSettingsStore.getState()
-      const { sessionOverrides } = get()
+      const currentThreadState = get().threads[threadId]
+      if (!currentThreadState) throw new Error('Thread not found')
+
       const effort = normalizeReasoningEffort(settings.reasoningEffort)
       const summary = normalizeReasoningSummary(settings.reasoningSummary)
       const options: {
@@ -1030,65 +1230,61 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       } = {}
       if (effort) options.effort = effort
       if (summary) options.summary = summary
-      // Apply session overrides (from /model, /approvals commands)
-      if (sessionOverrides.model) options.model = sessionOverrides.model
-      if (sessionOverrides.approvalPolicy)
-        options.approvalPolicy = sessionOverrides.approvalPolicy
-      if (sessionOverrides.sandboxPolicy)
-        options.sandboxPolicy = sessionOverrides.sandboxPolicy
+      if (currentThreadState.sessionOverrides.model) options.model = currentThreadState.sessionOverrides.model
+      if (currentThreadState.sessionOverrides.approvalPolicy)
+        options.approvalPolicy = currentThreadState.sessionOverrides.approvalPolicy
+      if (currentThreadState.sessionOverrides.sandboxPolicy)
+        options.sandboxPolicy = currentThreadState.sessionOverrides.sandboxPolicy
 
       const response = await threadApi.sendMessage(
-        activeThread.id,
+        threadId,
         text,
         images,
         skills,
         Object.keys(options).length ? options : undefined
       )
 
-      // Verify thread didn't change during the API call
-      const { activeThread: currentActive } = get()
-      if (!currentActive || currentActive.id !== currentThreadId) {
-        console.warn('[sendMessage] Thread changed during send, removing orphaned user message')
-        // Remove the orphaned user message since it was for a different thread
-        set((state) => {
-          const remainingItems = { ...state.items }
-          delete remainingItems[userMessageId]
-          return {
-            items: remainingItems,
-            itemOrder: state.itemOrder.filter((id) => id !== userMessageId),
-            turnStatus: 'idle',
-          }
-        })
+      // Verify thread still exists
+      const { threads: currentThreads } = get()
+      if (!currentThreads[threadId]) {
+        console.warn('[sendMessage] Thread closed during send, discarding result')
         return
       }
 
-      set({ currentTurnId: response.turn.id })
+      set((state) => {
+        const threadState = state.threads[threadId]
+        if (!threadState) return state
+        return {
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...threadState,
+              currentTurnId: response.turn.id,
+            },
+          },
+        }
+      })
     } catch (error) {
-      // Clear turn timeout since the turn failed before starting
-      clearTurnTimeout()
+      clearTurnTimeout(threadId)
 
-      // Only update error state if we're still on the same thread
-      const { activeThread: currentActive } = get()
-      if (currentActive?.id === currentThreadId) {
-        // Complete rollback: remove user message and set failed status
+      const { threads: currentThreads } = get()
+      if (currentThreads[threadId]) {
         set((state) => {
-          const newItems = { ...state.items }
+          const threadState = state.threads[threadId]
+          if (!threadState) return state
+          const newItems = { ...threadState.items }
           delete newItems[userMessageId]
           return {
-            items: newItems,
-            itemOrder: state.itemOrder.filter((id) => id !== userMessageId),
-            turnStatus: 'failed',
-            error: String(error),
-          }
-        })
-      } else {
-        // Remove orphaned user message if thread changed
-        set((state) => {
-          const newItems = { ...state.items }
-          delete newItems[userMessageId]
-          return {
-            items: newItems,
-            itemOrder: state.itemOrder.filter((id) => id !== userMessageId),
+            threads: {
+              ...state.threads,
+              [threadId]: {
+                ...threadState,
+                items: newItems,
+                itemOrder: threadState.itemOrder.filter((id) => id !== userMessageId),
+                turnStatus: 'failed',
+                error: String(error),
+              },
+            },
           }
         })
       }
@@ -1097,74 +1293,114 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   interrupt: async () => {
-    const { activeThread, turnStatus } = get()
-    if (!activeThread) {
+    const { focusedThreadId, threads } = get()
+    if (!focusedThreadId || !threads[focusedThreadId]) {
       console.warn('[interrupt] No active thread')
       return
     }
-    if (turnStatus !== 'running') {
-      console.warn('[interrupt] Turn is not running, status:', turnStatus)
+
+    const threadState = threads[focusedThreadId]
+    if (threadState.turnStatus !== 'running') {
+      console.warn('[interrupt] Turn is not running, status:', threadState.turnStatus)
       return
     }
 
-    const threadId = activeThread.id
+    const threadId = focusedThreadId
     try {
-      // Immediately update UI to show interrupted state
-      set({ turnStatus: 'interrupted' })
+      set((state) => {
+        const threadState = state.threads[threadId]
+        if (!threadState) return state
+        return {
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...threadState,
+              turnStatus: 'interrupted',
+            },
+          },
+        }
+      })
 
-      // Full cleanup including delta buffer and turn timeout
-      performFullTurnCleanup()
+      performFullTurnCleanup(threadId)
 
-      // Update turn timing and clear pending state
-      set((state) => ({
-        currentTurnId: null,
-        pendingApprovals: [],
-        queuedMessages: [],
-        turnTiming: {
-          ...state.turnTiming,
-          completedAt: Date.now(),
-        },
-      }))
+      set((state) => {
+        const threadState = state.threads[threadId]
+        if (!threadState) return state
+        return {
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...threadState,
+              currentTurnId: null,
+              pendingApprovals: [],
+              queuedMessages: [],
+              turnTiming: {
+                ...threadState.turnTiming,
+                completedAt: Date.now(),
+              },
+            },
+          },
+        }
+      })
 
-      // Call the API to interrupt the backend
       await threadApi.interrupt(threadId)
     } catch (error) {
       console.error('[interrupt] Failed to interrupt:', error)
-      // Only update error state if we're still on the same thread
-      const { activeThread: currentActive } = get()
-      if (currentActive?.id === threadId) {
-        set({ error: parseError(error) })
+      const { threads: currentThreads } = get()
+      if (currentThreads[threadId]) {
+        set((state) => {
+          const threadState = state.threads[threadId]
+          if (!threadState) return state
+          return {
+            threads: {
+              ...state.threads,
+              [threadId]: {
+                ...threadState,
+                error: parseError(error),
+              },
+            },
+          }
+        })
       }
     }
   },
 
   respondToApproval: async (itemId, decision, options) => {
-    const { activeThread, pendingApprovals } = get()
-    if (!activeThread) return
+    const { focusedThreadId, threads } = get()
+    if (!focusedThreadId || !threads[focusedThreadId]) return
 
-    // Find the pending approval to get the requestId
-    const pendingApproval = pendingApprovals.find((p) => p.itemId === itemId)
+    const threadState = threads[focusedThreadId]
+    const threadId = focusedThreadId
+
+    const pendingApproval = threadState.pendingApprovals.find((p) => p.itemId === itemId)
     if (!pendingApproval) {
       console.error('No pending approval found for itemId:', itemId)
       return
     }
 
-    // CRITICAL: Validate that the approval belongs to the current active thread
-    if (pendingApproval.threadId !== activeThread.id) {
+    if (pendingApproval.threadId !== threadId) {
       console.error(
         '[respondToApproval] Thread mismatch - approval.threadId:',
         pendingApproval.threadId,
-        'activeThread.id:',
-        activeThread.id
+        'threadId:',
+        threadId
       )
-      // Remove the stale approval
-      set((state) => ({
-        pendingApprovals: state.pendingApprovals.filter((p) => p.itemId !== itemId),
-      }))
+      set((state) => {
+        const threadState = state.threads[threadId]
+        if (!threadState) return state
+        return {
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...threadState,
+              pendingApprovals: threadState.pendingApprovals.filter((p) => p.itemId !== itemId),
+            },
+          },
+        }
+      })
       return
     }
 
-    const threadId = activeThread.id
     try {
       await threadApi.respondToApproval(
         threadId,
@@ -1174,26 +1410,25 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         options?.execpolicyAmendment
       )
 
-      // Validate thread hasn't changed during API call
-      const { activeThread: currentActive } = get()
-      if (!currentActive || currentActive.id !== threadId) {
-        console.warn('[respondToApproval] Thread changed, discarding state update')
+      const { threads: currentThreads } = get()
+      if (!currentThreads[threadId]) {
+        console.warn('[respondToApproval] Thread closed, discarding state update')
         return
       }
 
-      // Update item status
       set((state) => {
-        const item = state.items[itemId]
+        const threadState = state.threads[threadId]
+        if (!threadState) return state
+
+        const item = threadState.items[itemId]
         if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
           const content = item.content as Record<string, unknown>
           const isApproved = decision !== 'decline'
 
-          // For file changes, also set applied and snapshotId
           const extraFields =
             item.type === 'fileChange' && isApproved
               ? {
                   applied: true,
-                  // Use the provided snapshotId (created before applying)
                   snapshotId: options?.snapshotId,
                 }
               : {}
@@ -1209,69 +1444,75 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           } as AnyThreadItem
 
           return {
-            items: { ...state.items, [itemId]: updatedItem },
-            pendingApprovals: state.pendingApprovals.filter((p) => p.itemId !== itemId),
+            threads: {
+              ...state.threads,
+              [threadId]: {
+                ...threadState,
+                items: { ...threadState.items, [itemId]: updatedItem },
+                pendingApprovals: threadState.pendingApprovals.filter((p) => p.itemId !== itemId),
+              },
+            },
           }
         }
 
         return {
-          pendingApprovals: state.pendingApprovals.filter((p) => p.itemId !== itemId),
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...threadState,
+              pendingApprovals: threadState.pendingApprovals.filter((p) => p.itemId !== itemId),
+            },
+          },
         }
       })
     } catch (error) {
-      // Only update error state if we're still on the same thread
-      const { activeThread: currentActive } = get()
-      if (currentActive?.id === threadId) {
-        set({ error: parseError(error) })
+      const { threads: currentThreads } = get()
+      if (currentThreads[threadId]) {
+        set((state) => {
+          const threadState = state.threads[threadId]
+          if (!threadState) return state
+          return {
+            threads: {
+              ...state.threads,
+              [threadId]: {
+                ...threadState,
+                error: parseError(error),
+              },
+            },
+          }
+        })
       }
       throw error
     }
   },
 
   clearThread: () => {
-    // Clear the delta buffer, turn timeout, and approval cleanup timer
-    clearDeltaBuffer()
-    clearTurnTimeout()
-    stopApprovalCleanupTimer()
-
-    set({
-      activeThread: null,
-      items: {},
-      itemOrder: [],
-      turnStatus: 'idle',
-      currentTurnId: null,
-      pendingApprovals: [],
-      snapshots: [],
-      sessionOverrides: {},
-      queuedMessages: [],
-      error: null,
-    })
+    const { focusedThreadId } = get()
+    if (focusedThreadId) {
+      get().closeThread(focusedThreadId)
+    }
   },
 
-  flushDeltaBuffer: () => {
-    // Guard: Don't flush if there's no active thread
-    // This prevents applying buffered deltas to wrong thread after switch
-    const { activeThread } = get()
-    if (!activeThread) {
-      // Clear buffers without applying them
-      clearDeltaBuffer()
+  flushDeltaBuffer: (threadId?: string) => {
+    const targetThreadId = threadId ?? get().focusedThreadId
+    if (!targetThreadId) return
+
+    const { threads } = get()
+    const threadState = threads[targetThreadId]
+    if (!threadState) {
+      clearDeltaBuffer(targetThreadId)
       return
     }
 
-    // Guard: Don't flush if the buffer's thread ID doesn't match the active thread
-    // This prevents applying deltas from a previous thread to the current thread
-    if (deltaBuffer.threadId !== null && deltaBuffer.threadId !== activeThread.id) {
-      console.warn('[flushDeltaBuffer] Thread ID mismatch, clearing buffer. Buffer:', deltaBuffer.threadId, 'Active:', activeThread.id)
-      clearDeltaBuffer()
-      return
-    }
+    const buffer = deltaBuffers.get(targetThreadId)
+    if (!buffer) return
 
-    const hasAgentMessages = deltaBuffer.agentMessages.size > 0
-    const hasCommandOutputs = deltaBuffer.commandOutputs.size > 0
-    const hasFileChangeOutputs = deltaBuffer.fileChangeOutputs.size > 0
-    const hasReasoningSummaries = deltaBuffer.reasoningSummaries.size > 0
-    const hasReasoningContents = deltaBuffer.reasoningContents.size > 0
-    const hasMcpProgress = deltaBuffer.mcpProgress.size > 0
+    const hasAgentMessages = buffer.agentMessages.size > 0
+    const hasCommandOutputs = buffer.commandOutputs.size > 0
+    const hasFileChangeOutputs = buffer.fileChangeOutputs.size > 0
+    const hasReasoningSummaries = buffer.reasoningSummaries.size > 0
+    const hasReasoningContents = buffer.reasoningContents.size > 0
+    const hasMcpProgress = buffer.mcpProgress.size > 0
 
     if (
       !hasAgentMessages &&
@@ -1285,11 +1526,14 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     }
 
     set((state) => {
-      const updatedItems = { ...state.items }
-      let newItemOrder = state.itemOrder
+      const threadState = state.threads[targetThreadId]
+      if (!threadState) return state
+
+      const updatedItems = { ...threadState.items }
+      let newItemOrder = threadState.itemOrder
 
       // Apply agent message deltas
-      deltaBuffer.agentMessages.forEach((text, itemId) => {
+      buffer.agentMessages.forEach((text, itemId) => {
         const existing = updatedItems[itemId] as AgentMessageItem | undefined
         if (existing && existing.type === 'agentMessage') {
           updatedItems[itemId] = {
@@ -1315,7 +1559,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       })
 
       // Apply command output deltas
-      deltaBuffer.commandOutputs.forEach((output, itemId) => {
+      buffer.commandOutputs.forEach((output, itemId) => {
         const existing = updatedItems[itemId] as CommandExecutionItem | undefined
         if (existing && existing.type === 'commandExecution') {
           updatedItems[itemId] = {
@@ -1330,7 +1574,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       })
 
       // Apply file change output deltas
-      deltaBuffer.fileChangeOutputs.forEach((output, itemId) => {
+      buffer.fileChangeOutputs.forEach((output, itemId) => {
         const existing = updatedItems[itemId] as FileChangeItem | undefined
         if (existing && existing.type === 'fileChange') {
           updatedItems[itemId] = {
@@ -1344,12 +1588,11 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       })
 
       // Apply reasoning summary deltas
-      deltaBuffer.reasoningSummaries.forEach((updates, itemId) => {
+      buffer.reasoningSummaries.forEach((updates, itemId) => {
         const existing = updatedItems[itemId] as ReasoningItem | undefined
         if (existing && existing.type === 'reasoning') {
           const summary = [...existing.content.summary]
           updates.forEach(({ index, text }) => {
-            // Ensure array has sufficient length to avoid sparse array
             while (summary.length <= index) {
               summary.push('')
             }
@@ -1362,7 +1605,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         } else {
           const summary: string[] = []
           updates.forEach(({ index, text }) => {
-            // Ensure array has sufficient length to avoid sparse array
             while (summary.length <= index) {
               summary.push('')
             }
@@ -1383,12 +1625,11 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       })
 
       // Apply reasoning content deltas
-      deltaBuffer.reasoningContents.forEach((updates, itemId) => {
+      buffer.reasoningContents.forEach((updates, itemId) => {
         const existing = updatedItems[itemId] as ReasoningItem | undefined
         if (existing && existing.type === 'reasoning') {
           const fullContent = existing.content.fullContent ? [...existing.content.fullContent] : []
           updates.forEach(({ index, text }) => {
-            // Ensure array has sufficient length to avoid sparse array
             while (fullContent.length <= index) {
               fullContent.push('')
             }
@@ -1402,7 +1643,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       })
 
       // Apply MCP progress
-      deltaBuffer.mcpProgress.forEach((messages, itemId) => {
+      buffer.mcpProgress.forEach((messages, itemId) => {
         const existing = updatedItems[itemId] as McpToolItem | undefined
         if (existing && existing.type === 'mcpTool') {
           updatedItems[itemId] = {
@@ -1417,18 +1658,30 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       })
 
       // Clear buffers after applying
-      deltaBuffer.agentMessages.clear()
-      deltaBuffer.commandOutputs.clear()
-      deltaBuffer.fileChangeOutputs.clear()
-      deltaBuffer.reasoningSummaries.clear()
-      deltaBuffer.reasoningContents.clear()
-      deltaBuffer.mcpProgress.clear()
+      buffer.agentMessages.clear()
+      buffer.commandOutputs.clear()
+      buffer.fileChangeOutputs.clear()
+      buffer.reasoningSummaries.clear()
+      buffer.reasoningContents.clear()
+      buffer.mcpProgress.clear()
 
-      return { items: updatedItems, itemOrder: newItemOrder }
+      return {
+        threads: {
+          ...state.threads,
+          [targetThreadId]: {
+            ...threadState,
+            items: updatedItems,
+            itemOrder: newItemOrder,
+          },
+        },
+      }
     })
   },
 
   addInfoItem: (title, details) => {
+    const { focusedThreadId } = get()
+    if (!focusedThreadId) return
+
     const infoItem: InfoItem = {
       id: `info-${Date.now()}`,
       type: 'info',
@@ -1436,63 +1689,99 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       content: { title, details },
       createdAt: Date.now(),
     }
-    set((state) => ({
-      items: { ...state.items, [infoItem.id]: infoItem },
-      itemOrder: [...state.itemOrder, infoItem.id],
-    }))
+
+    set((state) => {
+      const threadState = state.threads[focusedThreadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [focusedThreadId]: {
+            ...threadState,
+            items: { ...threadState.items, [infoItem.id]: infoItem },
+            itemOrder: [...threadState.itemOrder, infoItem.id],
+          },
+        },
+      }
+    })
   },
 
   setSessionOverride: (key, value) => {
-    set((state) => ({
-      sessionOverrides: {
-        ...state.sessionOverrides,
-        [key]: value,
-      },
-    }))
+    const { focusedThreadId } = get()
+    if (!focusedThreadId) return
+
+    set((state) => {
+      const threadState = state.threads[focusedThreadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [focusedThreadId]: {
+            ...threadState,
+            sessionOverrides: {
+              ...threadState.sessionOverrides,
+              [key]: value,
+            },
+          },
+        },
+      }
+    })
   },
 
   clearSessionOverrides: () => {
-    set({ sessionOverrides: {} })
+    const { focusedThreadId } = get()
+    if (!focusedThreadId) return
+
+    set((state) => {
+      const threadState = state.threads[focusedThreadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [focusedThreadId]: {
+            ...threadState,
+            sessionOverrides: {},
+          },
+        },
+      }
+    })
   },
 
-  // Event Handlers
+  // ==================== Event Handlers ====================
+  // All event handlers now route by threadId from the event
+
   handleThreadStarted: (event) => {
-    const { activeThread } = get()
     const threadInfo = event.thread
+    const threadId = threadInfo.id
 
-    // Only update if this is the active thread (or no thread is active yet)
-    if (activeThread && activeThread.id !== threadInfo.id) {
-      console.log('[handleThreadStarted] Ignoring event for different thread:', threadInfo.id)
-      return
-    }
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) {
+        // Thread not in our store yet, will be added by startThread/resumeThread
+        return state
+      }
 
-    console.log('[handleThreadStarted] Thread started event received:', threadInfo.id)
-
-    // Update thread info with any new data from server
-    set((state) => ({
-      activeThread: state.activeThread
-        ? {
-            ...state.activeThread,
-            model: threadInfo.model ?? state.activeThread.model,
-            modelProvider: threadInfo.modelProvider ?? state.activeThread.modelProvider,
-            preview: threadInfo.preview ?? state.activeThread.preview,
-            cliVersion: threadInfo.cliVersion ?? state.activeThread.cliVersion,
-            gitInfo: threadInfo.gitInfo ?? state.activeThread.gitInfo,
-          }
-        : {
-            id: threadInfo.id,
-            cwd: threadInfo.cwd,
-            model: threadInfo.model ?? undefined,
-            modelProvider: threadInfo.modelProvider ?? undefined,
-            preview: threadInfo.preview ?? undefined,
-            createdAt: threadInfo.createdAt ?? undefined,
-            cliVersion: threadInfo.cliVersion ?? undefined,
-            gitInfo: threadInfo.gitInfo ?? undefined,
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            thread: {
+              ...threadState.thread,
+              model: threadInfo.model ?? threadState.thread.model,
+              modelProvider: threadInfo.modelProvider ?? threadState.thread.modelProvider,
+              preview: threadInfo.preview ?? threadState.thread.preview,
+              cliVersion: threadInfo.cliVersion ?? threadState.thread.cliVersion,
+              gitInfo: threadInfo.gitInfo ?? threadState.thread.gitInfo,
+            },
           },
-    }))
+        },
+      }
+    })
   },
 
   handleItemStarted: (event) => {
+    const threadId = event.threadId
     const item = toThreadItem(event.item)
     const inProgressItem = {
       ...item,
@@ -1500,36 +1789,34 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     } as AnyThreadItem
 
     set((state) => {
-      // Check if item already exists (e.g., ItemCompleted arrived first due to race)
-      const existing = state.items[item.id]
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+
+      const existing = threadState.items[item.id]
       if (existing) {
-        // Item already exists - don't overwrite with inProgress version
-        // Just ensure it's in itemOrder
         return {
-          items: state.items,
-          itemOrder: state.itemOrder.includes(item.id)
-            ? state.itemOrder
-            : [...state.itemOrder, item.id],
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...threadState,
+              itemOrder: threadState.itemOrder.includes(item.id)
+                ? threadState.itemOrder
+                : [...threadState.itemOrder, item.id],
+            },
+          },
         }
       }
 
       let isDuplicateUserMessage = false
       if (inProgressItem.type === 'userMessage') {
-        // Check if we already have a user message with the same text
-        // We compare only text because:
-        // 1. Local message uses base64 images
-        // 2. Server might return different image format (paths, URLs)
-        // Also check recent messages (last 5) to handle timing issues
-        const recentUserIds = [...state.itemOrder]
+        const recentUserIds = [...threadState.itemOrder]
           .slice(-10)
-          .filter((id) => state.items[id]?.type === 'userMessage')
+          .filter((id) => threadState.items[id]?.type === 'userMessage')
         const nextUser = inProgressItem as UserMessageItem
 
         for (const userId of recentUserIds) {
-          const existingUser = state.items[userId] as UserMessageItem
+          const existingUser = threadState.items[userId] as UserMessageItem
           if (existingUser && existingUser.content.text === nextUser.content.text) {
-            // Same text - consider it duplicate
-            // Also check if images count matches (regardless of format)
             const existingImagesCount = existingUser.content.images?.length || 0
             const nextImagesCount = nextUser.content.images?.length || 0
             if (existingImagesCount === nextImagesCount) {
@@ -1541,35 +1828,44 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       }
 
       return {
-        items: isDuplicateUserMessage
-          ? state.items
-          : { ...state.items, [item.id]: inProgressItem },
-        itemOrder: isDuplicateUserMessage ? state.itemOrder : [...state.itemOrder, item.id],
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: isDuplicateUserMessage
+              ? threadState.items
+              : { ...threadState.items, [item.id]: inProgressItem },
+            itemOrder: isDuplicateUserMessage
+              ? threadState.itemOrder
+              : [...threadState.itemOrder, item.id],
+          },
+        },
       }
     })
   },
 
   handleItemCompleted: (event) => {
-    set((state) => {
-      const nextItem = toThreadItem(event.item)
-      const existing = state.items[nextItem.id]
+    const threadId = event.threadId
 
-      // Check for duplicate user message by content (not just ID)
-      // This handles the case where we already added a local user message
-      // and the server sends back the same message with a different ID
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+
+      const nextItem = toThreadItem(event.item)
+      const existing = threadState.items[nextItem.id]
+
       if (nextItem.type === 'userMessage') {
         const nextUser = nextItem as UserMessageItem
-        const recentUserIds = [...state.itemOrder]
+        const recentUserIds = [...threadState.itemOrder]
           .slice(-10)
-          .filter((id) => state.items[id]?.type === 'userMessage')
+          .filter((id) => threadState.items[id]?.type === 'userMessage')
 
         for (const userId of recentUserIds) {
-          const existingUser = state.items[userId] as UserMessageItem
+          const existingUser = threadState.items[userId] as UserMessageItem
           if (existingUser && existingUser.content.text === nextUser.content.text) {
             const existingImagesCount = existingUser.content.images?.length || 0
             const nextImagesCount = nextUser.content.images?.length || 0
             if (existingImagesCount === nextImagesCount) {
-              // This is a duplicate, don't add it
               return state
             }
           }
@@ -1591,52 +1887,57 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
             output: existingContent.output ?? nextContent.output,
           },
         } as AnyThreadItem
-        return { items: { ...state.items, [nextItem.id]: updatedItem } }
-      } else {
         return {
-          items: { ...state.items, [nextItem.id]: nextItem },
-          itemOrder: state.itemOrder.includes(nextItem.id)
-            ? state.itemOrder
-            : [...state.itemOrder, nextItem.id],
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...threadState,
+              items: { ...threadState.items, [nextItem.id]: updatedItem },
+            },
+          },
         }
+      }
+
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: { ...threadState.items, [nextItem.id]: nextItem },
+            itemOrder: threadState.itemOrder.includes(nextItem.id)
+              ? threadState.itemOrder
+              : [...threadState.itemOrder, nextItem.id],
+          },
+        },
       }
     })
   },
 
   handleAgentMessageDelta: (event) => {
-    // Validate event belongs to current active thread
-    const { activeThread } = get()
-    if (!activeThread || activeThread.id !== event.threadId) {
-      // Silently ignore deltas from other threads
-      return
-    }
+    const threadId = event.threadId
+    const { threads } = get()
+    if (!threads[threadId]) return
 
-    // Log first delta to confirm events are arriving
-    const current = deltaBuffer.agentMessages.get(event.itemId) || ''
-    const isFirstDelta = current === '' // First character should show immediately
+    const buffer = getDeltaBuffer(threadId)
+    const current = buffer.agentMessages.get(event.itemId) || ''
+    const isFirstDelta = current === ''
+
     if (isFirstDelta) {
-      console.log('[handleAgentMessageDelta] First delta for item:', event.itemId, 'threadId:', event.threadId)
+      console.log('[handleAgentMessageDelta] First delta for item:', event.itemId, 'threadId:', threadId)
     }
 
-    // Track the thread ID for this buffer - if it changes, we should clear
-    if (deltaBuffer.threadId === null) {
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    } else if (deltaBuffer.threadId !== event.threadId) {
-      console.warn('[handleAgentMessageDelta] Thread ID changed, clearing buffer. Old:', deltaBuffer.threadId, 'New:', event.threadId)
-      clearDeltaBuffer()
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    }
-
-    // Buffer the delta instead of updating state immediately
-    deltaBuffer.agentMessages.set(event.itemId, current + event.delta)
-    scheduleFlush(() => get().flushDeltaBuffer(), isFirstDelta)
+    buffer.agentMessages.set(event.itemId, current + event.delta)
+    scheduleFlush(threadId, () => get().flushDeltaBuffer(threadId), isFirstDelta)
   },
 
   handleCommandApprovalRequested: (event) => {
+    const threadId = event.threadId
+
     set((state) => {
-      const existing = state.items[event.itemId]
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+
+      const existing = threadState.items[event.itemId]
       const updatedItem = {
         ...(existing || {
           id: event.itemId,
@@ -1656,29 +1957,41 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           proposedExecpolicyAmendment: event.proposedExecpolicyAmendment,
         },
       } as AnyThreadItem
+
       return {
-        items: { ...state.items, [event.itemId]: updatedItem },
-        itemOrder: state.itemOrder.includes(event.itemId)
-          ? state.itemOrder
-          : [...state.itemOrder, event.itemId],
-        pendingApprovals: [
-          ...state.pendingApprovals,
-          {
-            itemId: event.itemId,
-            threadId: event.threadId, // Track which thread this approval belongs to
-            type: 'command',
-            data: event,
-            requestId: event._requestId,
-            createdAt: Date.now(), // Track when approval was requested for timeout
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: { ...threadState.items, [event.itemId]: updatedItem },
+            itemOrder: threadState.itemOrder.includes(event.itemId)
+              ? threadState.itemOrder
+              : [...threadState.itemOrder, event.itemId],
+            pendingApprovals: [
+              ...threadState.pendingApprovals,
+              {
+                itemId: event.itemId,
+                threadId: event.threadId,
+                type: 'command',
+                data: event,
+                requestId: event._requestId,
+                createdAt: Date.now(),
+              },
+            ],
           },
-        ],
+        },
       }
     })
   },
 
   handleFileChangeApprovalRequested: (event) => {
+    const threadId = event.threadId
+
     set((state) => {
-      const existing = state.items[event.itemId]
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+
+      const existing = threadState.items[event.itemId]
       const updatedItem = {
         ...(existing || {
           id: event.itemId,
@@ -1695,79 +2008,106 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           reason: event.reason,
         },
       } as AnyThreadItem
+
       return {
-        items: { ...state.items, [event.itemId]: updatedItem },
-        itemOrder: state.itemOrder.includes(event.itemId)
-          ? state.itemOrder
-          : [...state.itemOrder, event.itemId],
-        pendingApprovals: [
-          ...state.pendingApprovals,
-          {
-            itemId: event.itemId,
-            threadId: event.threadId, // Track which thread this approval belongs to
-            type: 'fileChange',
-            data: event,
-            requestId: event._requestId,
-            createdAt: Date.now(), // Track when approval was requested for timeout
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: { ...threadState.items, [event.itemId]: updatedItem },
+            itemOrder: threadState.itemOrder.includes(event.itemId)
+              ? threadState.itemOrder
+              : [...threadState.itemOrder, event.itemId],
+            pendingApprovals: [
+              ...threadState.pendingApprovals,
+              {
+                itemId: event.itemId,
+                threadId: event.threadId,
+                type: 'fileChange',
+                data: event,
+                requestId: event._requestId,
+                createdAt: Date.now(),
+              },
+            ],
           },
-        ],
+        },
       }
     })
   },
 
   handleTurnStarted: (event) => {
-    console.log('[handleTurnStarted] Turn started - threadId:', event.threadId, 'turnId:', event.turn.id)
+    const threadId = event.threadId
+    console.log('[handleTurnStarted] Turn started - threadId:', threadId, 'turnId:', event.turn.id)
 
-    // Clear any existing turn timeout
-    clearTurnTimeout()
+    clearTurnTimeout(threadId)
 
-    // Set turn timeout to recover from server crashes
+    // Set turn timeout for this specific thread
     const turnId = event.turn.id
-    turnTimeoutTimer = setTimeout(() => {
-      const { currentTurnId, turnStatus } = useThreadStore.getState()
-      if (currentTurnId === turnId && turnStatus === 'running') {
+    const timeoutTimer = setTimeout(() => {
+      const state = useThreadStore.getState()
+      const threadState = state.threads[threadId]
+      if (threadState?.currentTurnId === turnId && threadState?.turnStatus === 'running') {
         console.error('[handleTurnStarted] Turn timeout - no completion received for turnId:', turnId)
-        // Full cleanup on timeout
-        performFullTurnCleanup()
-        useThreadStore.setState((state) => ({
-          turnStatus: 'failed',
-          error: 'Turn timed out - server may have disconnected',
-          currentTurnId: null,
-          pendingApprovals: [],
-          queuedMessages: [],
-          turnTiming: {
-            ...state.turnTiming,
-            completedAt: Date.now(),
-          },
-        }))
+        performFullTurnCleanup(threadId)
+        useThreadStore.setState((state) => {
+          const threadState = state.threads[threadId]
+          if (!threadState) return state
+          return {
+            threads: {
+              ...state.threads,
+              [threadId]: {
+                ...threadState,
+                turnStatus: 'failed',
+                error: 'Turn timed out - server may have disconnected',
+                currentTurnId: null,
+                pendingApprovals: [],
+                queuedMessages: [],
+                turnTiming: {
+                  ...threadState.turnTiming,
+                  completedAt: Date.now(),
+                },
+              },
+            },
+          }
+        })
       }
     }, TURN_TIMEOUT_MS)
+    turnTimeoutTimers.set(threadId, timeoutTimer)
 
-    set({
-      turnStatus: 'running',
-      currentTurnId: event.turn.id,
-      error: null,
-      turnTiming: {
-        startedAt: Date.now(),
-        completedAt: null,
-      },
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            turnStatus: 'running',
+            currentTurnId: event.turn.id,
+            error: null,
+            turnTiming: {
+              startedAt: Date.now(),
+              completedAt: null,
+            },
+          },
+        },
+      }
     })
   },
 
   handleTurnCompleted: (event) => {
-    // Clear turn timeout since we received completion
-    clearTurnTimeout()
+    const threadId = event.threadId
+    clearTurnTimeout(threadId)
 
     // Flush any pending deltas before completing the turn
-    get().flushDeltaBuffer()
-    if (flushTimer) {
-      clearTimeout(flushTimer)
-      flushTimer = null
+    get().flushDeltaBuffer(threadId)
+    const timer = flushTimers.get(threadId)
+    if (timer) {
+      clearTimeout(timer)
+      flushTimers.delete(threadId)
     }
 
     const status = event.turn.status
-
-    // Validate turn status before mapping
     const validStatuses = ['completed', 'failed', 'interrupted']
     if (!validStatuses.includes(status)) {
       console.warn(`[handleTurnCompleted] Unexpected turn status: ${status}, treating as completed`)
@@ -1781,8 +2121,10 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         : 'completed'
 
     set((state) => {
-      // Mark all streaming items as complete
-      const updatedItems = { ...state.items }
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+
+      const updatedItems = { ...threadState.items }
       Object.entries(updatedItems).forEach(([id, item]) => {
         if (item.type === 'agentMessage' && (item as AgentMessageItem).content.isStreaming) {
           updatedItems[id] = {
@@ -1797,20 +2139,28 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       })
 
       return {
-        items: updatedItems,
-        turnStatus: nextTurnStatus,
-        currentTurnId: null,
-        error: event.turn.error?.message || null,
-        pendingApprovals: [],
-        queuedMessages: [], // Clear queued messages when turn completes
-        turnTiming: {
-          ...state.turnTiming,
-          completedAt: Date.now(),
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: updatedItems,
+            turnStatus: nextTurnStatus,
+            currentTurnId: null,
+            error: event.turn.error?.message || null,
+            pendingApprovals: [],
+            queuedMessages: [],
+            turnTiming: {
+              ...threadState.turnTiming,
+              completedAt: Date.now(),
+            },
+          },
         },
       }
     })
   },
+
   handleTurnDiffUpdated: (event) => {
+    const threadId = event.threadId
     const infoItem: InfoItem = {
       id: `diff-${event.turnId}`,
       type: 'info',
@@ -1822,16 +2172,27 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       createdAt: Date.now(),
     }
 
-    set((state) => ({
-      items: { ...state.items, [infoItem.id]: infoItem },
-      itemOrder: state.itemOrder.includes(infoItem.id)
-        ? state.itemOrder
-        : [...state.itemOrder, infoItem.id],
-    }))
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: { ...threadState.items, [infoItem.id]: infoItem },
+            itemOrder: threadState.itemOrder.includes(infoItem.id)
+              ? threadState.itemOrder
+              : [...threadState.itemOrder, infoItem.id],
+          },
+        },
+      }
+    })
   },
 
   handleTurnPlanUpdated: (event) => {
-    // Map step status from event to PlanStep status
+    const threadId = event.threadId
+
     const mapStepStatus = (status: string): PlanStep['status'] => {
       switch (status.toLowerCase()) {
         case 'completed':
@@ -1854,7 +2215,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       status: mapStepStatus(step.status),
     }))
 
-    // Check if any step is in progress
     const isActive = steps.some((s) => s.status === 'in_progress' || s.status === 'pending')
 
     const planItem: PlanItem = {
@@ -1869,15 +2229,26 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       createdAt: Date.now(),
     }
 
-    set((state) => ({
-      items: { ...state.items, [planItem.id]: planItem },
-      itemOrder: state.itemOrder.includes(planItem.id)
-        ? state.itemOrder
-        : [...state.itemOrder, planItem.id],
-    }))
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: { ...threadState.items, [planItem.id]: planItem },
+            itemOrder: threadState.itemOrder.includes(planItem.id)
+              ? threadState.itemOrder
+              : [...threadState.itemOrder, planItem.id],
+          },
+        },
+      }
+    })
   },
 
   handleThreadCompacted: (event) => {
+    const threadId = event.threadId
     const infoItem: InfoItem = {
       id: `compact-${event.turnId}`,
       type: 'info',
@@ -1889,76 +2260,56 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       createdAt: Date.now(),
     }
 
-    set((state) => ({
-      items: { ...state.items, [infoItem.id]: infoItem },
-      itemOrder: state.itemOrder.includes(infoItem.id)
-        ? state.itemOrder
-        : [...state.itemOrder, infoItem.id],
-    }))
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: { ...threadState.items, [infoItem.id]: infoItem },
+            itemOrder: threadState.itemOrder.includes(infoItem.id)
+              ? threadState.itemOrder
+              : [...threadState.itemOrder, infoItem.id],
+          },
+        },
+      }
+    })
   },
 
   handleCommandExecutionOutputDelta: (event) => {
-    // Validate event belongs to current active thread
-    const { activeThread } = get()
-    if (!activeThread || activeThread.id !== event.threadId) return
+    const threadId = event.threadId
+    const { threads } = get()
+    if (!threads[threadId]) return
 
-    // Track the thread ID for this buffer
-    if (deltaBuffer.threadId === null) {
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    } else if (deltaBuffer.threadId !== event.threadId) {
-      clearDeltaBuffer()
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    }
-
-    // Buffer the delta instead of updating state immediately
-    const current = deltaBuffer.commandOutputs.get(event.itemId) || ''
+    const buffer = getDeltaBuffer(threadId)
+    const current = buffer.commandOutputs.get(event.itemId) || ''
     const isFirstDelta = current === ''
-    deltaBuffer.commandOutputs.set(event.itemId, current + event.delta)
-    scheduleFlush(() => get().flushDeltaBuffer(), isFirstDelta)
+    buffer.commandOutputs.set(event.itemId, current + event.delta)
+    scheduleFlush(threadId, () => get().flushDeltaBuffer(threadId), isFirstDelta)
   },
 
   handleFileChangeOutputDelta: (event) => {
-    // Validate event belongs to current active thread
-    const { activeThread } = get()
-    if (!activeThread || activeThread.id !== event.threadId) return
+    const threadId = event.threadId
+    const { threads } = get()
+    if (!threads[threadId]) return
 
-    // Track the thread ID for this buffer
-    if (deltaBuffer.threadId === null) {
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    } else if (deltaBuffer.threadId !== event.threadId) {
-      clearDeltaBuffer()
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    }
-
-    // Buffer the delta instead of updating state immediately
-    const current = deltaBuffer.fileChangeOutputs.get(event.itemId) || ''
+    const buffer = getDeltaBuffer(threadId)
+    const current = buffer.fileChangeOutputs.get(event.itemId) || ''
     const isFirstDelta = current === ''
-    deltaBuffer.fileChangeOutputs.set(event.itemId, current + event.delta)
-    scheduleFlush(() => get().flushDeltaBuffer(), isFirstDelta)
+    buffer.fileChangeOutputs.set(event.itemId, current + event.delta)
+    scheduleFlush(threadId, () => get().flushDeltaBuffer(threadId), isFirstDelta)
   },
 
   handleReasoningSummaryTextDelta: (event) => {
-    // Validate event belongs to current active thread
-    const { activeThread } = get()
-    if (!activeThread || activeThread.id !== event.threadId) return
+    const threadId = event.threadId
+    const { threads } = get()
+    if (!threads[threadId]) return
 
-    // Track the thread ID for this buffer
-    if (deltaBuffer.threadId === null) {
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    } else if (deltaBuffer.threadId !== event.threadId) {
-      clearDeltaBuffer()
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    }
-
-    // Buffer the delta instead of updating state immediately
+    const buffer = getDeltaBuffer(threadId)
     const index = event.summaryIndex ?? 0
-    const updates = deltaBuffer.reasoningSummaries.get(event.itemId) || []
+    const updates = buffer.reasoningSummaries.get(event.itemId) || []
     const isFirstDelta = updates.length === 0
     const existingIdx = updates.findIndex((u) => u.index === index)
     if (existingIdx >= 0) {
@@ -1966,33 +2317,22 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     } else {
       updates.push({ index, text: event.delta })
     }
-    deltaBuffer.reasoningSummaries.set(event.itemId, updates)
-    scheduleFlush(() => get().flushDeltaBuffer(), isFirstDelta)
+    buffer.reasoningSummaries.set(event.itemId, updates)
+    scheduleFlush(threadId, () => get().flushDeltaBuffer(threadId), isFirstDelta)
   },
 
   handleReasoningSummaryPartAdded: () => {
     // This just initializes a slot, the actual text comes from TextDelta
-    // No state update needed - the slot will be created when text arrives
   },
 
   handleReasoningTextDelta: (event) => {
-    // Validate event belongs to current active thread
-    const { activeThread } = get()
-    if (!activeThread || activeThread.id !== event.threadId) return
+    const threadId = event.threadId
+    const { threads } = get()
+    if (!threads[threadId]) return
 
-    // Track the thread ID for this buffer
-    if (deltaBuffer.threadId === null) {
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    } else if (deltaBuffer.threadId !== event.threadId) {
-      clearDeltaBuffer()
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    }
-
-    // Buffer the delta instead of updating state immediately
+    const buffer = getDeltaBuffer(threadId)
     const index = event.contentIndex ?? 0
-    const updates = deltaBuffer.reasoningContents.get(event.itemId) || []
+    const updates = buffer.reasoningContents.get(event.itemId) || []
     const isFirstDelta = updates.length === 0
     const existingIdx = updates.findIndex((u) => u.index === index)
     if (existingIdx >= 0) {
@@ -2000,63 +2340,63 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     } else {
       updates.push({ index, text: event.delta })
     }
-    deltaBuffer.reasoningContents.set(event.itemId, updates)
-    scheduleFlush(() => get().flushDeltaBuffer(), isFirstDelta)
+    buffer.reasoningContents.set(event.itemId, updates)
+    scheduleFlush(threadId, () => get().flushDeltaBuffer(threadId), isFirstDelta)
   },
 
   handleMcpToolCallProgress: (event) => {
-    // Validate event belongs to current active thread
-    const { activeThread } = get()
-    if (!activeThread || activeThread.id !== event.threadId) return
+    const threadId = event.threadId
+    const { threads } = get()
+    if (!threads[threadId]) return
 
-    // Track the thread ID for this buffer
-    if (deltaBuffer.threadId === null) {
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    } else if (deltaBuffer.threadId !== event.threadId) {
-      clearDeltaBuffer()
-      deltaBuffer.threadId = event.threadId
-      deltaBuffer.operationSeq = getCurrentOperationSequence()
-    }
-
-    // Buffer the progress message instead of updating state immediately
-    const messages = deltaBuffer.mcpProgress.get(event.itemId) || []
+    const buffer = getDeltaBuffer(threadId)
+    const messages = buffer.mcpProgress.get(event.itemId) || []
     const isFirstMessage = messages.length === 0
     messages.push(event.message)
-    deltaBuffer.mcpProgress.set(event.itemId, messages)
-    scheduleFlush(() => get().flushDeltaBuffer(), isFirstMessage)
+    buffer.mcpProgress.set(event.itemId, messages)
+    scheduleFlush(threadId, () => get().flushDeltaBuffer(threadId), isFirstMessage)
   },
 
-  // Token Usage Handler
   handleTokenUsage: (event) => {
+    const threadId = event.threadId
+
     set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+
       const totals = event.tokenUsage?.total
-      const fallbackInput = state.tokenUsage.inputTokens
-      const fallbackCached = state.tokenUsage.cachedInputTokens
-      const fallbackOutput = state.tokenUsage.outputTokens
+      const fallbackInput = threadState.tokenUsage.inputTokens
+      const fallbackCached = threadState.tokenUsage.cachedInputTokens
+      const fallbackOutput = threadState.tokenUsage.outputTokens
 
       const newInput = totals?.inputTokens ?? fallbackInput
       const newCached = totals?.cachedInputTokens ?? fallbackCached
       const newOutput = totals?.outputTokens ?? fallbackOutput
       const totalTokens = totals?.totalTokens ?? newInput + newOutput
 
-      // Get context window from event (dynamic based on model)
-      const modelContextWindow = event.tokenUsage?.modelContextWindow ?? state.tokenUsage.modelContextWindow
+      const modelContextWindow = event.tokenUsage?.modelContextWindow ?? threadState.tokenUsage.modelContextWindow
 
       return {
-        tokenUsage: {
-          inputTokens: newInput,
-          cachedInputTokens: newCached,
-          outputTokens: newOutput,
-          totalTokens,
-          modelContextWindow,
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            tokenUsage: {
+              inputTokens: newInput,
+              cachedInputTokens: newCached,
+              outputTokens: newOutput,
+              totalTokens,
+              modelContextWindow,
+            },
+          },
         },
       }
     })
   },
 
-  // Stream Error Handler
   handleStreamError: (event) => {
+    const threadId = event.threadId
+
     const errorInfo =
       event.error.codexErrorInfo && typeof event.error.codexErrorInfo === 'object'
         ? JSON.stringify(event.error.codexErrorInfo)
@@ -2073,86 +2413,114 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       createdAt: Date.now(),
     }
 
-    set((state) => ({
-      items: { ...state.items, [errorItem.id]: errorItem },
-      itemOrder: [...state.itemOrder, errorItem.id],
-      error: event.error.message,
-      turnStatus: event.willRetry ? state.turnStatus : 'failed',
-    }))
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            items: { ...threadState.items, [errorItem.id]: errorItem },
+            itemOrder: [...threadState.itemOrder, errorItem.id],
+            error: event.error.message,
+            turnStatus: event.willRetry ? threadState.turnStatus : 'failed',
+          },
+        },
+      }
+    })
   },
 
-  // Rate Limit Exceeded Handler
   handleRateLimitExceeded: (event) => {
-    const { activeThread } = get()
-    if (!activeThread || activeThread.id !== event.threadId) return
+    const threadId = event.threadId
+    const { threads } = get()
+    if (!threads[threadId]) return
 
     console.warn('[handleRateLimitExceeded] Rate limit exceeded:', event)
 
-    // Perform full cleanup
-    performFullTurnCleanup()
+    performFullTurnCleanup(threadId)
 
-    // Set error state with retry information if available
     const errorMessage = event.retryAfterMs
       ? `Rate limit exceeded. Retry after ${Math.ceil(event.retryAfterMs / 1000)} seconds.`
       : 'Rate limit exceeded. Please wait before sending more messages.'
 
-    // Complete state cleanup (consistent with handleTurnCompleted and handleServerDisconnected)
-    set((state) => ({
-      turnStatus: 'failed',
-      error: errorMessage,
-      currentTurnId: null,
-      pendingApprovals: [],
-      queuedMessages: [],
-      turnTiming: {
-        ...state.turnTiming,
-        completedAt: Date.now(),
-      },
-    }))
-  },
-
-  // Server Disconnected Handler
-  handleServerDisconnected: () => {
-    const { turnStatus } = get()
-    console.warn('[handleServerDisconnected] Server disconnected, turnStatus:', turnStatus)
-
-    // Perform full cleanup
-    performFullTurnCleanup()
-
-    // If a turn was running, mark it as failed
-    if (turnStatus === 'running') {
-      set((state) => ({
-        turnStatus: 'failed',
-        error: 'Server disconnected. Please try again.',
-        currentTurnId: null,
-        pendingApprovals: [],
-        queuedMessages: [],
-        turnTiming: {
-          ...state.turnTiming,
-          completedAt: Date.now(),
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            turnStatus: 'failed',
+            error: errorMessage,
+            currentTurnId: null,
+            pendingApprovals: [],
+            queuedMessages: [],
+            turnTiming: {
+              ...threadState.turnTiming,
+              completedAt: Date.now(),
+            },
+          },
         },
-      }))
-    } else {
-      // Even if not running, set an error to inform the user
-      set({
-        error: 'Server disconnected. Connection will be restored automatically.',
-      })
-    }
+      }
+    })
   },
 
-  // Snapshot Actions
+  handleServerDisconnected: () => {
+    console.warn('[handleServerDisconnected] Server disconnected')
+
+    // Clean up all threads
+    const { threads } = get()
+    Object.keys(threads).forEach((threadId) => {
+      performFullTurnCleanup(threadId)
+    })
+
+    set((state) => {
+      const updatedThreads = { ...state.threads }
+      Object.keys(updatedThreads).forEach((threadId) => {
+        const threadState = updatedThreads[threadId]
+        if (threadState.turnStatus === 'running') {
+          updatedThreads[threadId] = {
+            ...threadState,
+            turnStatus: 'failed',
+            error: 'Server disconnected. Please try again.',
+            currentTurnId: null,
+            pendingApprovals: [],
+            queuedMessages: [],
+            turnTiming: {
+              ...threadState.turnTiming,
+              completedAt: Date.now(),
+            },
+          }
+        } else {
+          updatedThreads[threadId] = {
+            ...threadState,
+            error: 'Server disconnected. Connection will be restored automatically.',
+          }
+        }
+      })
+      return {
+        threads: updatedThreads,
+        globalError: 'Server disconnected. Connection will be restored automatically.',
+      }
+    })
+  },
+
+  // ==================== Snapshot Actions ====================
+
   createSnapshot: async (projectPath) => {
-    const { activeThread } = get()
-    if (!activeThread) {
+    const { focusedThreadId, threads } = get()
+    if (!focusedThreadId || !threads[focusedThreadId]) {
       throw new Error('No active thread')
     }
 
-    const threadId = activeThread.id
+    const threadId = focusedThreadId
     const snapshot = await snapshotApi.create(threadId, projectPath)
 
-    // Validate thread hasn't changed during API call
-    const { activeThread: currentActive } = get()
-    if (!currentActive || currentActive.id !== threadId) {
-      console.warn('[createSnapshot] Thread changed, discarding snapshot update')
+    const { threads: currentThreads } = get()
+    if (!currentThreads[threadId]) {
+      console.warn('[createSnapshot] Thread closed, discarding snapshot update')
       return snapshot
     }
 
@@ -2167,17 +2535,16 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   fetchSnapshots: async () => {
-    const { activeThread } = get()
-    if (!activeThread) return
+    const { focusedThreadId, threads } = get()
+    if (!focusedThreadId || !threads[focusedThreadId]) return
 
-    const threadId = activeThread.id
+    const threadId = focusedThreadId
     try {
       const snapshots = await snapshotApi.list(threadId)
 
-      // Validate thread hasn't changed during API call
-      const { activeThread: currentActive } = get()
-      if (!currentActive || currentActive.id !== threadId) {
-        console.warn('[fetchSnapshots] Thread changed, discarding snapshot list')
+      const { threads: currentThreads } = get()
+      if (!currentThreads[threadId]) {
+        console.warn('[fetchSnapshots] Thread closed, discarding snapshot list')
         return
       }
 

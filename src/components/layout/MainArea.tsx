@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'react'
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useProjectsStore } from '../../stores/projects'
 import { useThreadStore } from '../../stores/thread'
 import { useSessionsStore } from '../../stores/sessions'
@@ -8,6 +8,7 @@ import {
   getEffectiveWorkingDirectory,
 } from '../../stores/settings'
 import { ChatView } from '../chat/ChatView'
+import { SessionTabs } from '../sessions/SessionTabs'
 import { parseError } from '../../lib/errorUtils'
 
 // Timeout for resume operations to prevent permanent blocking
@@ -17,8 +18,13 @@ export function MainArea() {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId)
   const projects = useProjectsStore((state) => state.projects)
   const fetchGitInfo = useProjectsStore((state) => state.fetchGitInfo)
+  
+  // Multi-session state
+  const threads = useThreadStore((state) => state.threads)
+  const focusedThreadId = useThreadStore((state) => state.focusedThreadId)
   const activeThread = useThreadStore((state) => state.activeThread)
-  const clearThread = useThreadStore((state) => state.clearThread)
+  const canAddSession = useThreadStore((state) => state.canAddSession)
+  
   const selectedSessionId = useSessionsStore((state) => state.selectedSessionId)
   const resumeThread = useThreadStore((state) => state.resumeThread)
 
@@ -56,15 +62,19 @@ export function MainArea() {
   useEffect(() => {
     // Skip if no session selected
     if (!selectedSessionId) {
-      // Only clear thread if we're transitioning FROM a selected session TO no selection
-      // This prevents clearing a newly created thread before its session ID is set
-      const wasSelected = prevSessionIdRef.current !== null
       prevSessionIdRef.current = null
       targetSessionIdRef.current = null
-      // Clear thread only if we had a previously selected session
-      if (wasSelected && activeThread) {
-        clearThread()
+      return
+    }
+
+    // Check if this session is already loaded in threads
+    if (threads[selectedSessionId]) {
+      // Session already loaded, just switch to it
+      if (focusedThreadId !== selectedSessionId) {
+        useThreadStore.getState().switchThread(selectedSessionId)
       }
+      prevSessionIdRef.current = selectedSessionId
+      targetSessionIdRef.current = selectedSessionId
       return
     }
 
@@ -72,13 +82,14 @@ export function MainArea() {
     prevSessionIdRef.current = selectedSessionId
     targetSessionIdRef.current = selectedSessionId
 
-    // Check if activeThread doesn't match selected session
-    const threadMismatch = activeThread && activeThread.id !== selectedSessionId
-
-    // Skip if already resuming - but update target for when resume completes
+    // Skip if already resuming
     if (isResumingRef.current) {
-      // Target is already updated above, so when current resume finishes,
-      // the effect will re-run if activeThread changes
+      return
+    }
+
+    // Check if we can add more sessions
+    if (!canAddSession()) {
+      console.warn('[MainArea] Maximum sessions reached, cannot resume:', selectedSessionId)
       return
     }
 
@@ -114,50 +125,43 @@ export function MainArea() {
         })
     }
 
-    // If we have a thread for a different session, clear and resume new one
-    if (threadMismatch) {
-      clearThread()
-      // CRITICAL: Set flag BEFORE queueMicrotask to prevent race with overlapping calls
-      isResumingRef.current = true
-      // Use microtask to let event queue clear before resuming new thread
-      // This prevents events from old thread being applied to new thread
-      queueMicrotask(() => {
-        // Validate that the session hasn't changed again during the microtask delay
-        const currentTargetId = targetSessionIdRef.current
-        if (!currentTargetId) {
-          isResumingRef.current = false
-          return
-        }
-        // Double-check we still want to resume this session
-        const currentSelectedId = useSessionsStore.getState().selectedSessionId
-        if (currentSelectedId !== currentTargetId) {
-          console.debug('[MainArea] Session changed during microtask, skipping resume')
-          isResumingRef.current = false
-          return
-        }
-        startResumeWithTimeout(currentTargetId)
-      })
-      return
-    }
+    // Resume the selected session
+    startResumeWithTimeout(selectedSessionId)
+  }, [selectedSessionId, threads, focusedThreadId, canAddSession, resumeThread])
 
-    // Resume the selected session if no active thread
-    if (!activeThread) {
-      startResumeWithTimeout(selectedSessionId)
-    }
-  }, [selectedSessionId, activeThread, resumeThread, clearThread])
+  // Callback for creating a new session from SessionTabs
+  const handleNewSession = useCallback(() => {
+    // This will trigger StartSessionView to appear
+    // by not having an active thread for the selected project
+  }, [])
 
   // No project selected - show welcome
   if (!selectedProjectId) {
     return <WelcomeView />
   }
 
-  // Project selected but no active thread - show start session prompt
-  if (!activeThread) {
+  // Check if we have any active threads
+  const hasActiveThreads = Object.keys(threads).length > 0
+
+  // Show start session view if no active threads
+  if (!hasActiveThreads) {
     return <StartSessionView projectId={selectedProjectId} />
   }
 
-  // Active thread - show chat
-  return <ChatView />
+  // Active threads exist - show chat with tabs
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      {/* Session Tabs */}
+      <SessionTabs onNewSession={handleNewSession} />
+      
+      {/* Chat View or Start Session */}
+      {activeThread ? (
+        <ChatView />
+      ) : (
+        <StartSessionView projectId={selectedProjectId} />
+      )}
+    </div>
+  )
 }
 
 // Welcome View when no project is selected
@@ -194,13 +198,17 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
   const gitInfo = useProjectsStore((state) => state.gitInfo)
   const startThread = useThreadStore((state) => state.startThread)
   const isLoading = useThreadStore((state) => state.isLoading)
-  const threadError = useThreadStore((state) => state.error)
+  const globalError = useThreadStore((state) => state.globalError)
+  const canAddSession = useThreadStore((state) => state.canAddSession)
+  const maxSessions = useThreadStore((state) => state.maxSessions)
+  const threads = useThreadStore((state) => state.threads)
   const settings = useSettingsStore((state) => state.settings)
   const [localError, setLocalError] = useState<string | null>(null)
   const [serverReady, setServerReady] = useState<boolean | null>(null)
 
   const project = projects.find((p) => p.id === projectId)
   const info = gitInfo[projectId]
+  const currentSessionCount = Object.keys(threads).length
 
   // Compute effective settings for display (merged with project overrides)
   const effectiveSettings = useMemo(
@@ -232,6 +240,12 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
   const handleStartSession = async () => {
     setLocalError(null)
 
+    // Check if we can add more sessions
+    if (!canAddSession()) {
+      setLocalError(`Maximum number of parallel sessions (${maxSessions}) reached. Please close a session first.`)
+      return
+    }
+
     // Get effective working directory (may be overridden in project settings)
     const effectiveCwd = getEffectiveWorkingDirectory(project.path, project.settingsJson)
 
@@ -259,7 +273,7 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
     }
   }
 
-  const displayError = localError || threadError
+  const displayError = localError || globalError
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center p-8">
@@ -298,7 +312,7 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
         {displayError && (
           <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-left">
             <div className="flex items-start gap-2">
-              <span className="text-destructive">⚠️</span>
+              <span className="text-destructive">Warning</span>
               <div className="flex-1">
                 <p className="text-sm font-medium text-destructive">Failed to start session</p>
                 <p className="mt-1 text-xs text-destructive/80 break-words">{displayError}</p>
@@ -318,7 +332,7 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
         <button
           className="w-full rounded-lg bg-primary px-6 py-3 font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
           onClick={handleStartSession}
-          disabled={isLoading}
+          disabled={isLoading || !canAddSession()}
         >
           {isLoading && (
             <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
@@ -341,11 +355,21 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
           {isLoading ? 'Starting Session...' : 'Start New Session'}
         </button>
 
+        {/* Session count warning */}
+        {!canAddSession() && (
+          <div className="mt-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-3">
+            <div className="flex items-center gap-2 text-xs text-yellow-600 dark:text-yellow-400">
+              <span>Warning</span>
+              <span>Maximum sessions ({maxSessions}) reached. Close a session to start a new one.</span>
+            </div>
+          </div>
+        )}
+
         {/* Server Status Warning */}
         {serverReady === false && (
           <div className="mt-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-3">
             <div className="flex items-center gap-2 text-xs text-yellow-600 dark:text-yellow-400">
-              <span>⚠️</span>
+              <span>Warning</span>
               <span>Codex engine is not running. It will start automatically when you begin a session.</span>
             </div>
           </div>
@@ -354,8 +378,10 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
         {/* Model Info */}
         <div className="mt-4 text-xs text-muted-foreground">
           Model: <span className="font-medium">{effectiveSettings.model || 'default'}</span>
-          {' • '}
+          {' | '}
           Sandbox: <span className="font-medium">{effectiveSettings.sandboxMode}</span>
+          {' | '}
+          Sessions: <span className="font-medium">{currentSessionCount}/{maxSessions}</span>
           {project?.settingsJson && (
             <span className="text-blue-500 ml-2">(project settings active)</span>
           )}

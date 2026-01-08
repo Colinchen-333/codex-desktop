@@ -12,25 +12,6 @@ import { useProjectsStore } from './stores/projects'
 import { useThreadStore } from './stores/thread'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
 
-// Helper to create a thread-filtered event handler
-// This ensures events from other threads are ignored
-function withThreadFilter<T extends { threadId: string }>(
-  handler: (event: T) => void
-): (event: T) => void {
-  return (event: T) => {
-    const state = useThreadStore.getState()
-    const activeThread = state.activeThread
-
-    if (!activeThread) {
-      return
-    }
-    if (event.threadId !== activeThread.id) {
-      return
-    }
-    handler(event)
-  }
-}
-
 function App() {
   const fetchProjects = useProjectsStore((state) => state.fetchProjects)
   const needsOnboarding = useNeedsOnboarding()
@@ -51,6 +32,8 @@ function App() {
   }, [fetchProjects])
 
   // Setup event listeners - only once on mount
+  // Note: With multi-session support, event handlers now route by threadId internally
+  // so we no longer need the withThreadFilter wrapper
   useEffect(() => {
     // Prevent duplicate setup
     if (listenersSetupRef.current) return
@@ -61,42 +44,43 @@ function App() {
     let setupPromise: Promise<(() => void)[]> | null = null
 
     setupPromise = setupEventListeners({
-      // Thread lifecycle
+      // Thread lifecycle - routes by threadId internally
       onThreadStarted: (event) => useThreadStore.getState().handleThreadStarted(event),
-      // Item lifecycle - filtered by threadId
-      onItemStarted: withThreadFilter((event) => useThreadStore.getState().handleItemStarted(event)),
-      onItemCompleted: withThreadFilter((event) => useThreadStore.getState().handleItemCompleted(event)),
-      // Agent messages - filtered by threadId
-      onAgentMessageDelta: withThreadFilter((event) => useThreadStore.getState().handleAgentMessageDelta(event)),
-      // Approvals - filtered by threadId
-      onCommandApprovalRequested: withThreadFilter((event) => useThreadStore.getState().handleCommandApprovalRequested(event)),
-      onFileChangeApprovalRequested: withThreadFilter((event) => useThreadStore.getState().handleFileChangeApprovalRequested(event)),
-      // Turn lifecycle - filtered by threadId
-      onTurnStarted: withThreadFilter((event) => useThreadStore.getState().handleTurnStarted(event)),
-      onTurnCompleted: withThreadFilter((event) => useThreadStore.getState().handleTurnCompleted(event)),
-      onTurnDiffUpdated: withThreadFilter((event) => useThreadStore.getState().handleTurnDiffUpdated(event)),
-      onTurnPlanUpdated: withThreadFilter((event) => useThreadStore.getState().handleTurnPlanUpdated(event)),
-      onThreadCompacted: withThreadFilter((event) => useThreadStore.getState().handleThreadCompacted(event)),
-      // Command execution output - filtered by threadId
-      onCommandExecutionOutputDelta: withThreadFilter((event) =>
-        useThreadStore.getState().handleCommandExecutionOutputDelta(event)),
-      onFileChangeOutputDelta: withThreadFilter((event) =>
-        useThreadStore.getState().handleFileChangeOutputDelta(event)),
-      // Reasoning - filtered by threadId
-      onReasoningSummaryTextDelta: withThreadFilter((event) =>
-        useThreadStore.getState().handleReasoningSummaryTextDelta(event)),
-      onReasoningSummaryPartAdded: withThreadFilter((event) =>
-        useThreadStore.getState().handleReasoningSummaryPartAdded(event)),
-      onReasoningTextDelta: withThreadFilter((event) => useThreadStore.getState().handleReasoningTextDelta(event)),
-      // MCP Tools - filtered by threadId
-      onMcpToolCallProgress: withThreadFilter((event) =>
-        useThreadStore.getState().handleMcpToolCallProgress(event)),
-      // Token usage - filtered by threadId
-      onTokenUsage: withThreadFilter((event) => useThreadStore.getState().handleTokenUsage(event)),
-      // Errors - filtered by threadId
-      onStreamError: withThreadFilter((event) => useThreadStore.getState().handleStreamError(event)),
-      // Rate limiting - filtered by threadId
-      onRateLimitExceeded: withThreadFilter((event) => useThreadStore.getState().handleRateLimitExceeded(event)),
+      // Item lifecycle - routes by threadId internally
+      onItemStarted: (event) => useThreadStore.getState().handleItemStarted(event),
+      onItemCompleted: (event) => useThreadStore.getState().handleItemCompleted(event),
+      // Agent messages - routes by threadId internally
+      onAgentMessageDelta: (event) => useThreadStore.getState().handleAgentMessageDelta(event),
+      // Approvals - routes by threadId internally
+      onCommandApprovalRequested: (event) => useThreadStore.getState().handleCommandApprovalRequested(event),
+      onFileChangeApprovalRequested: (event) => useThreadStore.getState().handleFileChangeApprovalRequested(event),
+      // Turn lifecycle - routes by threadId internally
+      onTurnStarted: (event) => useThreadStore.getState().handleTurnStarted(event),
+      onTurnCompleted: (event) => useThreadStore.getState().handleTurnCompleted(event),
+      onTurnDiffUpdated: (event) => useThreadStore.getState().handleTurnDiffUpdated(event),
+      onTurnPlanUpdated: (event) => useThreadStore.getState().handleTurnPlanUpdated(event),
+      onThreadCompacted: (event) => useThreadStore.getState().handleThreadCompacted(event),
+      // Command execution output - routes by threadId internally
+      onCommandExecutionOutputDelta: (event) =>
+        useThreadStore.getState().handleCommandExecutionOutputDelta(event),
+      onFileChangeOutputDelta: (event) =>
+        useThreadStore.getState().handleFileChangeOutputDelta(event),
+      // Reasoning - routes by threadId internally
+      onReasoningSummaryTextDelta: (event) =>
+        useThreadStore.getState().handleReasoningSummaryTextDelta(event),
+      onReasoningSummaryPartAdded: (event) =>
+        useThreadStore.getState().handleReasoningSummaryPartAdded(event),
+      onReasoningTextDelta: (event) => useThreadStore.getState().handleReasoningTextDelta(event),
+      // MCP Tools - routes by threadId internally
+      onMcpToolCallProgress: (event) =>
+        useThreadStore.getState().handleMcpToolCallProgress(event),
+      // Token usage - routes by threadId internally
+      onTokenUsage: (event) => useThreadStore.getState().handleTokenUsage(event),
+      // Errors - routes by threadId internally
+      onStreamError: (event) => useThreadStore.getState().handleStreamError(event),
+      // Rate limiting - routes by threadId internally
+      onRateLimitExceeded: (event) => useThreadStore.getState().handleRateLimitExceeded(event),
+      // Server disconnected - affects all threads
       onServerDisconnected: () => {
         console.log('Server disconnected')
         useThreadStore.getState().handleServerDisconnected()
