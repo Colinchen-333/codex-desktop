@@ -57,11 +57,12 @@ export function ReviewSelectorDialog({
         if (!selectedBranch) return
         target = { type: 'baseBranch', branch: selectedBranch }
         break
-      case 'commit':
+      case 'commit': {
         if (!selectedCommit) return
         const commit = commits.find((c) => c.sha === selectedCommit)
         target = { type: 'commit', sha: selectedCommit, title: commit?.title }
         break
+      }
       case 'custom':
         if (!customInstructions.trim()) return
         target = { type: 'custom', instructions: customInstructions.trim() }

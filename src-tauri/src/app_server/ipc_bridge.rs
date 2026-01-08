@@ -53,6 +53,10 @@ pub enum SandboxPolicy {
         writable_roots: Vec<String>,
         #[serde(default)]
         network_access: bool,
+        #[serde(default)]
+        exclude_tmpdir_env_var: bool,
+        #[serde(default)]
+        exclude_slash_tmp: bool,
     },
     DangerFullAccess,
     ExternalSandbox {
@@ -77,6 +81,8 @@ pub struct ThreadStartResponse {
     pub sandbox: SandboxPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<String>,
 }
 
 /// Thread information
@@ -95,6 +101,10 @@ pub struct ThreadInfo {
     pub created_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cli_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<SandboxPolicy>,
 }
 
 /// Thread resume parameters

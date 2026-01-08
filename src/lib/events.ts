@@ -98,7 +98,7 @@ export interface ReasoningSummaryTextDeltaEvent {
   threadId: string
   turnId: string
   delta: string
-  summaryIndex: number
+  summaryIndex?: number
 }
 
 export interface ReasoningSummaryPartAddedEvent {
@@ -113,7 +113,7 @@ export interface ReasoningTextDeltaEvent {
   threadId: string
   turnId: string
   delta: string
-  contentIndex: number
+  contentIndex?: number
 }
 
 // Command execution events
