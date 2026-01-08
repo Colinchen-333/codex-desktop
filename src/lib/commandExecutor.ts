@@ -123,6 +123,7 @@ export async function executeImmediateCommand(
     default: {
       // Exhaustive check - if this errors at compile time, a new command was added to IMMEDIATE_COMMANDS but not to switch
       const _exhaustiveCheck: never = command.name as never
+      void _exhaustiveCheck // Silence unused variable warning
       return { executed: false, error: `Unknown immediate command: ${command.name}` }
     }
   }

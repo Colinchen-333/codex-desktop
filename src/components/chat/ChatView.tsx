@@ -596,6 +596,9 @@ export function ChatView() {
     }
 
     try {
+      // Get project for skill lookup
+      const project = projects.find((p) => p.id === selectedProjectId)
+
       // Detect skill mentions in the text (pattern: $skillName)
       // Only match $ at start of string or after whitespace to avoid false positives
       // in URLs, code blocks, or variable references like ${var}
@@ -1532,7 +1535,7 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
   const [expandedFiles, setExpandedFiles] = useState<Set<number>>(new Set())
   const [isApplying, setIsApplying] = useState(false)
   const [isReverting, setIsReverting] = useState(false)
-  const [isDeclining, setIsDeclining] = useState(false)
+  const [, setIsDeclining] = useState(false)
 
   // Refs for double-click protection (state updates are async, refs are synchronous)
   const isApplyingRef = useRef(false)
