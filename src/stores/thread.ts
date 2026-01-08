@@ -94,27 +94,30 @@ function clearTurnTimeout() {
 }
 
 // Clean up stale pending approvals that have exceeded the timeout
+// Uses a single setState call to avoid race conditions
 function cleanupStaleApprovals() {
   const now = Date.now()
-  const { pendingApprovals, activeThread } = useThreadStore.getState()
 
-  if (pendingApprovals.length === 0) return
+  useThreadStore.setState((state) => {
+    const { pendingApprovals, activeThread, items } = state
 
-  const staleApprovals = pendingApprovals.filter(
-    (approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS
-  )
+    if (pendingApprovals.length === 0) return state
 
-  if (staleApprovals.length > 0) {
-    console.warn(
-      '[cleanupStaleApprovals] Removing',
-      staleApprovals.length,
-      'stale approvals:',
-      staleApprovals.map((a) => a.itemId)
+    // Find stale approvals (exceeded timeout)
+    const staleApprovals = pendingApprovals.filter(
+      (approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS
     )
 
-    useThreadStore.setState((state) => {
-      // Also update item status to reflect timeout
-      const updatedItems = { ...state.items }
+    // Update items for stale approvals
+    const updatedItems = { ...items }
+    if (staleApprovals.length > 0) {
+      console.warn(
+        '[cleanupStaleApprovals] Removing',
+        staleApprovals.length,
+        'stale approvals:',
+        staleApprovals.map((a) => a.itemId)
+      )
+
       staleApprovals.forEach((approval) => {
         const item = updatedItems[approval.itemId]
         if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
@@ -131,34 +134,46 @@ function cleanupStaleApprovals() {
           } as AnyThreadItem
         }
       })
+    }
 
-      return {
-        items: updatedItems,
-        pendingApprovals: state.pendingApprovals.filter(
-          (approval) => now - approval.createdAt <= APPROVAL_TIMEOUT_MS
-        ),
+    // Filter out stale and orphaned approvals in one pass
+    const validApprovals = pendingApprovals.filter((approval) => {
+      // Remove if timed out
+      if (now - approval.createdAt > APPROVAL_TIMEOUT_MS) {
+        return false
       }
+      // Remove if orphaned (belongs to different thread)
+      if (activeThread && approval.threadId !== activeThread.id) {
+        return false
+      }
+      return true
     })
-  }
 
-  // Also clean up approvals for threads that are no longer active
-  if (activeThread) {
-    const orphanedApprovals = pendingApprovals.filter(
-      (approval) => approval.threadId !== activeThread.id
-    )
-    if (orphanedApprovals.length > 0) {
+    // Log orphaned approvals being removed
+    const orphanedCount = pendingApprovals.filter(
+      (approval) =>
+        activeThread &&
+        approval.threadId !== activeThread.id &&
+        now - approval.createdAt <= APPROVAL_TIMEOUT_MS
+    ).length
+    if (orphanedCount > 0) {
       console.warn(
         '[cleanupStaleApprovals] Removing',
-        orphanedApprovals.length,
+        orphanedCount,
         'orphaned approvals from different threads'
       )
-      useThreadStore.setState((state) => ({
-        pendingApprovals: state.pendingApprovals.filter(
-          (approval) => approval.threadId === activeThread.id
-        ),
-      }))
     }
-  }
+
+    // Only update if there were changes
+    if (validApprovals.length === pendingApprovals.length && staleApprovals.length === 0) {
+      return state
+    }
+
+    return {
+      items: updatedItems,
+      pendingApprovals: validApprovals,
+    }
+  })
 }
 
 // Start the approval cleanup timer
@@ -881,7 +896,12 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       // Only update error state if no other thread became active
       const { activeThread: currentActive } = get()
       if (!currentActive || currentActive.id === threadId) {
-        set({ error: parseError(error), isLoading: false })
+        set({
+          error: parseError(error),
+          isLoading: false,
+          pendingApprovals: [], // Clean up any stale approvals
+          turnStatus: 'idle',
+        })
       }
       throw error
     }
@@ -913,8 +933,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     const currentThreadId = activeThread.id
     console.log('[sendMessage] Sending message to thread:', currentThreadId)
 
-    // Add user message to items
-    const userMessageId = `user-${Date.now()}`
+    // Add user message to items (use random suffix to avoid collision on rapid sends)
+    const userMessageId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     const userMessage: UserMessageItem = {
       id: userMessageId,
       type: 'userMessage',
