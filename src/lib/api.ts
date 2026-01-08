@@ -69,7 +69,13 @@ export interface ThreadInfo {
 // Sandbox policy (tagged union from API response)
 export type SandboxPolicy =
   | { type: 'readOnly' }
-  | { type: 'workspaceWrite'; writableRoots?: string[]; networkAccess?: boolean }
+  | {
+      type: 'workspaceWrite'
+      writableRoots?: string[]
+      networkAccess?: boolean
+      excludeTmpdirEnvVar?: boolean
+      excludeSlashTmp?: boolean
+    }
   | { type: 'dangerFullAccess' }
   | { type: 'externalSandbox'; networkAccess?: string }
 

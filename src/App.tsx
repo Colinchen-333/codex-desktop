@@ -61,6 +61,8 @@ function App() {
     let setupPromise: Promise<(() => void)[]> | null = null
 
     setupPromise = setupEventListeners({
+      // Thread lifecycle
+      onThreadStarted: (event) => useThreadStore.getState().handleThreadStarted(event),
       // Item lifecycle - filtered by threadId
       onItemStarted: withThreadFilter((event) => useThreadStore.getState().handleItemStarted(event)),
       onItemCompleted: withThreadFilter((event) => useThreadStore.getState().handleItemCompleted(event)),
@@ -97,7 +99,7 @@ function App() {
       onRateLimitExceeded: withThreadFilter((event) => useThreadStore.getState().handleRateLimitExceeded(event)),
       onServerDisconnected: () => {
         console.log('Server disconnected')
-        // TODO: Show reconnection UI
+        useThreadStore.getState().handleServerDisconnected()
       },
     })
 

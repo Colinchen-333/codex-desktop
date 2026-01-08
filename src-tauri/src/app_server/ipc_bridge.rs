@@ -234,6 +234,9 @@ pub struct TurnStartResponse {
 #[serde(rename_all = "camelCase")]
 pub struct TurnInterruptParams {
     pub thread_id: String,
+    /// Optional turn_id to interrupt a specific turn (if not provided, interrupts current turn)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 
 /// Execpolicy amendment for persistent approvals

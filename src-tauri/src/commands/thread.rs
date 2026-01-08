@@ -154,7 +154,7 @@ pub async fn send_message(
 /// Interrupt the current turn
 #[tauri::command]
 pub async fn interrupt_turn(state: State<'_, AppState>, thread_id: String) -> Result<()> {
-    let params = TurnInterruptParams { thread_id };
+    let params = TurnInterruptParams { thread_id, turn_id: None };
 
     let mut server = state.app_server.write().await;
     let server = server

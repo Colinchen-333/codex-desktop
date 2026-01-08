@@ -19,6 +19,7 @@ import type {
   TurnDiffUpdatedEvent,
   TurnPlanUpdatedEvent,
   ThreadCompactedEvent,
+  ThreadStartedEvent,
   CommandExecutionOutputDeltaEvent,
   FileChangeOutputDeltaEvent,
   ReasoningSummaryTextDeltaEvent,
@@ -80,11 +81,105 @@ const MAX_BUFFER_SIZE = 500_000 // 500KB - force flush to prevent memory issues
 let turnTimeoutTimer: ReturnType<typeof setTimeout> | null = null
 const TURN_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - generous timeout for long operations
 
+// Approval timeout - clean up stale approvals that were never responded to
+const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes - generous timeout for user decisions
+let approvalCleanupTimer: ReturnType<typeof setInterval> | null = null
+const APPROVAL_CLEANUP_INTERVAL_MS = 60 * 1000 // Check every minute
+
 function clearTurnTimeout() {
   if (turnTimeoutTimer) {
     clearTimeout(turnTimeoutTimer)
     turnTimeoutTimer = null
   }
+}
+
+// Clean up stale pending approvals that have exceeded the timeout
+function cleanupStaleApprovals() {
+  const now = Date.now()
+  const { pendingApprovals, activeThread } = useThreadStore.getState()
+
+  if (pendingApprovals.length === 0) return
+
+  const staleApprovals = pendingApprovals.filter(
+    (approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS
+  )
+
+  if (staleApprovals.length > 0) {
+    console.warn(
+      '[cleanupStaleApprovals] Removing',
+      staleApprovals.length,
+      'stale approvals:',
+      staleApprovals.map((a) => a.itemId)
+    )
+
+    useThreadStore.setState((state) => {
+      // Also update item status to reflect timeout
+      const updatedItems = { ...state.items }
+      staleApprovals.forEach((approval) => {
+        const item = updatedItems[approval.itemId]
+        if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
+          const content = item.content as Record<string, unknown>
+          updatedItems[approval.itemId] = {
+            ...item,
+            status: 'failed',
+            content: {
+              ...content,
+              needsApproval: false,
+              approved: false,
+              reason: 'Approval request timed out',
+            },
+          } as AnyThreadItem
+        }
+      })
+
+      return {
+        items: updatedItems,
+        pendingApprovals: state.pendingApprovals.filter(
+          (approval) => now - approval.createdAt <= APPROVAL_TIMEOUT_MS
+        ),
+      }
+    })
+  }
+
+  // Also clean up approvals for threads that are no longer active
+  if (activeThread) {
+    const orphanedApprovals = pendingApprovals.filter(
+      (approval) => approval.threadId !== activeThread.id
+    )
+    if (orphanedApprovals.length > 0) {
+      console.warn(
+        '[cleanupStaleApprovals] Removing',
+        orphanedApprovals.length,
+        'orphaned approvals from different threads'
+      )
+      useThreadStore.setState((state) => ({
+        pendingApprovals: state.pendingApprovals.filter(
+          (approval) => approval.threadId === activeThread.id
+        ),
+      }))
+    }
+  }
+}
+
+// Start the approval cleanup timer
+function startApprovalCleanupTimer() {
+  if (approvalCleanupTimer === null) {
+    approvalCleanupTimer = setInterval(cleanupStaleApprovals, APPROVAL_CLEANUP_INTERVAL_MS)
+  }
+}
+
+// Stop the approval cleanup timer
+function stopApprovalCleanupTimer() {
+  if (approvalCleanupTimer !== null) {
+    clearInterval(approvalCleanupTimer)
+    approvalCleanupTimer = null
+  }
+}
+
+// Full turn cleanup - called when turn ends abnormally (timeout, disconnect, etc.)
+function performFullTurnCleanup() {
+  clearDeltaBuffer()
+  clearTurnTimeout()
 }
 
 // Calculate current buffer size for overflow detection
@@ -396,6 +491,7 @@ interface ThreadState {
   clearSessionOverrides: () => void
 
   // Event handlers
+  handleThreadStarted: (event: ThreadStartedEvent) => void
   handleItemStarted: (event: ItemStartedEvent) => void
   handleItemCompleted: (event: ItemCompletedEvent) => void
   handleAgentMessageDelta: (event: AgentMessageDeltaEvent) => void
@@ -415,6 +511,7 @@ interface ThreadState {
   handleTokenUsage: (event: TokenUsageEvent) => void
   handleStreamError: (event: StreamErrorEvent) => void
   handleRateLimitExceeded: (event: RateLimitExceededEvent) => void
+  handleServerDisconnected: () => void
 
   // Snapshot actions
   createSnapshot: (projectPath: string) => Promise<Snapshot>
@@ -692,6 +789,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   startThread: async (projectId, cwd, model, sandboxMode, approvalPolicy) => {
     // Clear delta buffer before starting new thread
     clearDeltaBuffer()
+    // Start approval cleanup timer
+    startApprovalCleanupTimer()
 
     set({ isLoading: true, error: null })
     try {
@@ -731,6 +830,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
     // Clear delta buffer before resuming thread
     clearDeltaBuffer()
+    // Start approval cleanup timer
+    startApprovalCleanupTimer()
 
     set({ isLoading: true, error: null })
     try {
@@ -925,11 +1026,14 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       // Immediately update UI to show interrupted state
       set({ turnStatus: 'interrupted' })
 
-      // Clear delta buffer
-      clearDeltaBuffer()
+      // Full cleanup including delta buffer and turn timeout
+      performFullTurnCleanup()
 
-      // Update turn timing
+      // Update turn timing and clear pending state
       set((state) => ({
+        currentTurnId: null,
+        pendingApprovals: [],
+        queuedMessages: [],
         turnTiming: {
           ...state.turnTiming,
           completedAt: Date.now(),
@@ -1039,9 +1143,10 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   clearThread: () => {
-    // Clear the delta buffer and turn timeout
+    // Clear the delta buffer, turn timeout, and approval cleanup timer
     clearDeltaBuffer()
     clearTurnTimeout()
+    stopApprovalCleanupTimer()
 
     set({
       activeThread: null,
@@ -1265,6 +1370,42 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   // Event Handlers
+  handleThreadStarted: (event) => {
+    const { activeThread } = get()
+    const threadInfo = event.thread
+
+    // Only update if this is the active thread (or no thread is active yet)
+    if (activeThread && activeThread.id !== threadInfo.id) {
+      console.log('[handleThreadStarted] Ignoring event for different thread:', threadInfo.id)
+      return
+    }
+
+    console.log('[handleThreadStarted] Thread started event received:', threadInfo.id)
+
+    // Update thread info with any new data from server
+    set((state) => ({
+      activeThread: state.activeThread
+        ? {
+            ...state.activeThread,
+            model: threadInfo.model ?? state.activeThread.model,
+            modelProvider: threadInfo.modelProvider ?? state.activeThread.modelProvider,
+            preview: threadInfo.preview ?? state.activeThread.preview,
+            cliVersion: threadInfo.cliVersion ?? state.activeThread.cliVersion,
+            gitInfo: threadInfo.gitInfo ?? state.activeThread.gitInfo,
+          }
+        : {
+            id: threadInfo.id,
+            cwd: threadInfo.cwd,
+            model: threadInfo.model ?? undefined,
+            modelProvider: threadInfo.modelProvider ?? undefined,
+            preview: threadInfo.preview ?? undefined,
+            createdAt: threadInfo.createdAt ?? undefined,
+            cliVersion: threadInfo.cliVersion ?? undefined,
+            gitInfo: threadInfo.gitInfo ?? undefined,
+          },
+    }))
+  },
+
   handleItemStarted: (event) => {
     const item = toThreadItem(event.item)
     const inProgressItem = {
@@ -1491,10 +1632,19 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       const { currentTurnId, turnStatus } = useThreadStore.getState()
       if (currentTurnId === turnId && turnStatus === 'running') {
         console.error('[handleTurnStarted] Turn timeout - no completion received for turnId:', turnId)
-        useThreadStore.setState({
+        // Full cleanup on timeout
+        performFullTurnCleanup()
+        useThreadStore.setState((state) => ({
           turnStatus: 'failed',
           error: 'Turn timed out - server may have disconnected',
-        })
+          currentTurnId: null,
+          pendingApprovals: [],
+          queuedMessages: [],
+          turnTiming: {
+            ...state.turnTiming,
+            completedAt: Date.now(),
+          },
+        }))
       }
     }, TURN_TIMEOUT_MS)
 
@@ -1557,6 +1707,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         currentTurnId: null,
         error: event.turn.error?.message || null,
         pendingApprovals: [],
+        queuedMessages: [], // Clear queued messages when turn completes
         turnTiming: {
           ...state.turnTiming,
           completedAt: Date.now(),
@@ -1812,15 +1963,55 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
     console.warn('[handleRateLimitExceeded] Rate limit exceeded:', event)
 
+    // Perform full cleanup
+    performFullTurnCleanup()
+
     // Set error state with retry information if available
     const errorMessage = event.retryAfterMs
       ? `Rate limit exceeded. Retry after ${Math.ceil(event.retryAfterMs / 1000)} seconds.`
       : 'Rate limit exceeded. Please wait before sending more messages.'
 
-    set({
+    // Complete state cleanup (consistent with handleTurnCompleted and handleServerDisconnected)
+    set((state) => ({
       turnStatus: 'failed',
       error: errorMessage,
-    })
+      currentTurnId: null,
+      pendingApprovals: [],
+      queuedMessages: [],
+      turnTiming: {
+        ...state.turnTiming,
+        completedAt: Date.now(),
+      },
+    }))
+  },
+
+  // Server Disconnected Handler
+  handleServerDisconnected: () => {
+    const { turnStatus } = get()
+    console.warn('[handleServerDisconnected] Server disconnected, turnStatus:', turnStatus)
+
+    // Perform full cleanup
+    performFullTurnCleanup()
+
+    // If a turn was running, mark it as failed
+    if (turnStatus === 'running') {
+      set((state) => ({
+        turnStatus: 'failed',
+        error: 'Server disconnected. Please try again.',
+        currentTurnId: null,
+        pendingApprovals: [],
+        queuedMessages: [],
+        turnTiming: {
+          ...state.turnTiming,
+          completedAt: Date.now(),
+        },
+      }))
+    } else {
+      // Even if not running, set an error to inform the user
+      set({
+        error: 'Server disconnected. Connection will be restored automatically.',
+      })
+    }
   },
 
   // Snapshot Actions
