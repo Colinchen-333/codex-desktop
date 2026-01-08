@@ -87,6 +87,7 @@ export interface ThreadStartResponse {
   approvalPolicy: string
   sandbox: SandboxPolicy
   reasoningEffort?: string
+  reasoningSummary?: string
 }
 
 export interface ThreadResumeResponse {

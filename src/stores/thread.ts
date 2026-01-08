@@ -1001,6 +1001,9 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
       set({ currentTurnId: response.turn.id })
     } catch (error) {
+      // Clear turn timeout since the turn failed before starting
+      clearTurnTimeout()
+
       // Only update error state if we're still on the same thread
       const { activeThread: currentActive } = get()
       if (currentActive?.id === currentThreadId) {
