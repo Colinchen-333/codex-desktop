@@ -22,11 +22,11 @@ pub struct ThreadStartParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_provider: Option<String>,
 
-    /// Sandbox policy: "readOnly" | "workspaceWrite" | "dangerFullAccess"
+    /// Sandbox policy: "read-only" | "workspace-write" | "danger-full-access"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
 
-    /// Approval policy: "never" | "onRequest" | "onFailure" | "unlessTrusted"
+    /// Approval policy: "never" | "on-request" | "on-failure" | "untrusted"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
 
