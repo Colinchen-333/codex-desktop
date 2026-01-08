@@ -94,7 +94,7 @@ export function ChatView() {
   const interrupt = useThreadStore((state) => state.interrupt)
   const addInfoItem = useThreadStore((state) => state.addInfoItem)
   const shouldFocusInput = useAppStore((state) => state.shouldFocusInput)
-  const clearFocusInput = useAppStore((state) => state.clearFocusInput)
+  // clearFocusInput is called via getState() to avoid dependency issues
   const { showToast } = useToast()
   const setSettingsOpen = useAppStore((state) => state.setSettingsOpen)
   const setSettingsTab = useAppStore((state) => state.setSettingsTab)
@@ -291,9 +291,10 @@ export function ChatView() {
   useEffect(() => {
     if (shouldFocusInput) {
       inputRef.current?.focus()
-      clearFocusInput()
+      // Use getState() to avoid dependency on clearFocusInput
+      useAppStore.getState().clearFocusInput()
     }
-  }, [shouldFocusInput, clearFocusInput])
+  }, [shouldFocusInput]) // Only depend on shouldFocusInput (data), not clearFocusInput (function)
 
   // Auto-resize textarea
   const adjustTextareaHeight = useCallback(() => {
@@ -2299,7 +2300,7 @@ function parseReasoningSummary(text: string): string {
 function WorkingStatusBar() {
   const turnStatus = useThreadStore((state) => state.turnStatus)
   const turnTiming = useThreadStore((state) => state.turnTiming)
-  const tokenUsage = useThreadStore((state) => state.tokenUsage)
+  // tokenUsage is accessed via getState() in the interval to avoid dependency issues
   const pendingApprovals = useThreadStore((state) => state.pendingApprovals)
   const items = useThreadStore((state) => state.items)
   const itemOrder = useThreadStore((state) => state.itemOrder)
@@ -2315,26 +2316,31 @@ function WorkingStatusBar() {
       return
     }
 
-    // Reset refs when starting
-    prevTokensRef.current = tokenUsage.totalTokens
+    // Reset refs when starting - use getState() to avoid dependency issues
+    const initialTokens = useThreadStore.getState().tokenUsage.totalTokens
+    prevTokensRef.current = initialTokens
     prevTimeRef.current = Date.now()
     const interval = setInterval(() => {
       const now = Date.now()
-      setElapsedMs(now - turnTiming.startedAt!)
+      const startedAt = useThreadStore.getState().turnTiming.startedAt
+      if (startedAt) {
+        setElapsedMs(now - startedAt)
+      }
 
       // Calculate token rate (tokens per second)
       const timeDelta = (now - prevTimeRef.current) / 1000
       if (timeDelta >= 0.5) { // Update rate every 500ms for stability
-        const tokenDelta = tokenUsage.totalTokens - prevTokensRef.current
+        const currentTokens = useThreadStore.getState().tokenUsage.totalTokens
+        const tokenDelta = currentTokens - prevTokensRef.current
         if (tokenDelta > 0 && timeDelta > 0) {
           setTokenRate(Math.round(tokenDelta / timeDelta))
         }
-        prevTokensRef.current = tokenUsage.totalTokens
+        prevTokensRef.current = currentTokens
         prevTimeRef.current = now
       }
     }, 50) // 50ms update for smoother time display
     return () => clearInterval(interval)
-  }, [turnStatus, turnTiming.startedAt, tokenUsage.totalTokens])
+  }, [turnStatus, turnTiming.startedAt]) // Remove tokenUsage.totalTokens - use getState() instead
 
   // Find current reasoning summary (streaming or recent)
   const currentReasoning = useMemo(() => {
@@ -2447,15 +2453,18 @@ function QueuedMessagesDisplay() {
 // Rate Limit Warning - Shows when approaching quota (like CLI's "Heads up...")
 function RateLimitWarning() {
   const rateLimits = useAccountStore((state) => state.rateLimits)
-  const refreshRateLimits = useAccountStore((state) => state.refreshRateLimits)
+  // refreshRateLimits is called via getState() to avoid dependency issues
   const [dismissed, setDismissed] = useState(false)
 
   // Refresh rate limits periodically when mounted
   useEffect(() => {
-    refreshRateLimits()
-    const interval = setInterval(refreshRateLimits, 60000) // Every minute
+    // Use getState() to avoid dependency on refreshRateLimits function
+    useAccountStore.getState().refreshRateLimits()
+    const interval = setInterval(() => {
+      useAccountStore.getState().refreshRateLimits()
+    }, 60000) // Every minute
     return () => clearInterval(interval)
-  }, [refreshRateLimits])
+  }, []) // No dependencies - uses getState()
 
   // Reset dismissed state when limits change significantly
   useEffect(() => {

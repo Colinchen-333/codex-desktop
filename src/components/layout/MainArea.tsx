@@ -16,17 +16,12 @@ const RESUME_TIMEOUT_MS = 30000
 
 export function MainArea() {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId)
-  const projects = useProjectsStore((state) => state.projects)
-  const fetchGitInfo = useProjectsStore((state) => state.fetchGitInfo)
-  
-  // Multi-session state
+
+  // Multi-session state - only subscribe to what we need for rendering
   const threads = useThreadStore((state) => state.threads)
-  const focusedThreadId = useThreadStore((state) => state.focusedThreadId)
   const activeThread = useThreadStore((state) => state.activeThread)
-  const canAddSession = useThreadStore((state) => state.canAddSession)
-  
+
   const selectedSessionId = useSessionsStore((state) => state.selectedSessionId)
-  const resumeThread = useThreadStore((state) => state.resumeThread)
 
   // Track previous session ID to detect switches
   const prevSessionIdRef = useRef<string | null>(null)
@@ -34,12 +29,14 @@ export function MainArea() {
   // Load Git info when project is selected
   useEffect(() => {
     if (selectedProjectId) {
-      const project = projects.find((p) => p.id === selectedProjectId)
+      // Use getState() to get current projects and avoid dependency issues
+      const currentProjects = useProjectsStore.getState().projects
+      const project = currentProjects.find((p) => p.id === selectedProjectId)
       if (project) {
-        fetchGitInfo(selectedProjectId, project.path)
+        useProjectsStore.getState().fetchGitInfo(selectedProjectId, project.path)
       }
     }
-  }, [selectedProjectId, projects, fetchGitInfo])
+  }, [selectedProjectId])
 
   // Track if we're resuming to prevent duplicate calls
   const isResumingRef = useRef(false)
@@ -59,12 +56,6 @@ export function MainArea() {
   }, [])
 
   // Resume thread when session is selected or switched
-  // Note: Use refs to avoid dependency issues with functions
-  const resumeThreadRef = useRef(resumeThread)
-  resumeThreadRef.current = resumeThread
-  const canAddSessionRef = useRef(canAddSession)
-  canAddSessionRef.current = canAddSession
-
   useEffect(() => {
     // Skip if no session selected
     if (!selectedSessionId) {
@@ -102,8 +93,8 @@ export function MainArea() {
       return
     }
 
-    // Check if we can add more sessions
-    if (!canAddSessionRef.current()) {
+    // Check if we can add more sessions using getState()
+    if (!useThreadStore.getState().canAddSession()) {
       console.warn('[MainArea] Maximum sessions reached, cannot resume:', selectedSessionId)
       return
     }
@@ -127,7 +118,8 @@ export function MainArea() {
         }
       }, RESUME_TIMEOUT_MS)
 
-      resumeThreadRef.current(sessionId)
+      // Use getState() to call resumeThread
+      useThreadStore.getState().resumeThread(sessionId)
         .catch((error) => {
           console.error('Failed to resume session:', error)
         })

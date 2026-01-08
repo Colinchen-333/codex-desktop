@@ -49,13 +49,12 @@ function formatRelativeTime(timestamp: number): string {
 
 export function Sidebar() {
   const { sidebarTab: activeTab, setSidebarTab: setActiveTab } = useAppStore()
-  const { projects, selectedProjectId, selectProject, addProject, removeProject, updateProject } =
+  // Only destructure what we need - functions called via getState() are omitted
+  const { projects, selectedProjectId, addProject, removeProject, updateProject } =
     useProjectsStore()
   const {
     sessions,
     selectedSessionId,
-    selectSession,
-    fetchSessions,
     updateSession,
     deleteSession,
     isLoading: sessionsLoading,
@@ -65,16 +64,16 @@ export function Sidebar() {
     searchSessions,
     clearSearch,
   } = useSessionsStore()
-  const { startThread, closeAllThreads } = useThreadStore()
-  const settings = useSettingsStore((state) => state.settings)
+  // startThread, closeAllThreads, selectProject, fetchSessions, selectSession are called via getState()
   const { showToast } = useToast()
 
   // Fetch sessions when project is selected
   useEffect(() => {
     if (selectedProjectId) {
-      fetchSessions(selectedProjectId)
+      // Use getState() to avoid function reference in dependencies
+      useSessionsStore.getState().fetchSessions(selectedProjectId)
     }
-  }, [selectedProjectId, fetchSessions])
+  }, [selectedProjectId])
 
   // Handle project selection with proper cleanup
   const handleSelectProject = useCallback(
@@ -82,18 +81,20 @@ export function Sidebar() {
       if (!projectId) return
       // If selecting a different project, clean up all related state first
       if (projectId !== selectedProjectId) {
-        // Clear session selection
-        selectSession(null)
-        // Close ALL threads when switching projects (not just the focused one)
-        closeAllThreads()
+        // Use getState() to avoid stale closures and dependency issues
+        useSessionsStore.getState().selectSession(null)
+        useThreadStore.getState().closeAllThreads()
       }
-      // Then select the new project
-      selectProject(projectId)
-      // Switch to sessions tab to show the new project's sessions
-      setActiveTab('sessions')
+      useProjectsStore.getState().selectProject(projectId)
+      useAppStore.getState().setSidebarTab('sessions')
     },
-    [selectedProjectId, selectProject, selectSession, closeAllThreads, setActiveTab]
+    [selectedProjectId]
   )
+
+  // Handle session selection using getState() to avoid function reference issues
+  const handleSelectSession = useCallback((sessionId: string | null) => {
+    useSessionsStore.getState().selectSession(sessionId)
+  }, [])
 
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
@@ -239,11 +240,13 @@ export function Sidebar() {
       return
     }
 
-    const project = projects.find((p) => p.id === selectedProjectId)
+    const currentProjects = useProjectsStore.getState().projects
+    const project = currentProjects.find((p) => p.id === selectedProjectId)
     if (!project) return
 
     // Merge project-specific settings with global settings
-    const effectiveSettings = mergeProjectSettings(settings, project.settingsJson)
+    const currentSettings = useSettingsStore.getState().settings
+    const effectiveSettings = mergeProjectSettings(currentSettings, project.settingsJson)
     const effectiveCwd = getEffectiveWorkingDirectory(project.path, project.settingsJson)
 
     try {
@@ -252,9 +255,9 @@ export function Sidebar() {
       // startThread() will add the new session to threads map while preserving others.
 
       // Deselect current session (will be replaced by the new one)
-      selectSession(null)
+      useSessionsStore.getState().selectSession(null)
       // Start a new thread with merged settings
-      await startThread(
+      await useThreadStore.getState().startThread(
         selectedProjectId,
         effectiveCwd,
         effectiveSettings.model,
@@ -264,12 +267,12 @@ export function Sidebar() {
       // Get the newly created thread from the store and select it as current session
       const newThread = useThreadStore.getState().activeThread
       if (newThread) {
-        selectSession(newThread.id)
+        useSessionsStore.getState().selectSession(newThread.id)
       }
       // Refresh sessions list to show the new session
-      await fetchSessions(selectedProjectId)
+      await useSessionsStore.getState().fetchSessions(selectedProjectId)
       // Switch to sessions tab to show the new session
-      setActiveTab('sessions')
+      useAppStore.getState().setSidebarTab('sessions')
       showToast('New session started', 'success')
     } catch (error) {
       console.error('Failed to start new session:', error)
@@ -356,7 +359,7 @@ export function Sidebar() {
           <SessionList
             sessions={displaySessions}
             selectedId={selectedSessionId}
-            onSelect={selectSession}
+            onSelect={handleSelectSession}
             onToggleFavorite={async (sessionId, isFavorite) => {
               try {
                 await updateSession(sessionId, { isFavorite: !isFavorite })

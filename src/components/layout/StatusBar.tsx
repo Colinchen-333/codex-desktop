@@ -66,28 +66,33 @@ export function StatusBar() {
       return
     }
 
-    // Reset refs when starting
-    prevTokensRef.current = tokenUsage.totalTokens
+    // Reset refs when starting - use getState() to avoid dependency on tokenUsage
+    const initialTokens = useThreadStore.getState().tokenUsage.totalTokens
+    prevTokensRef.current = initialTokens
     prevTimeRef.current = Date.now()
 
     // Update elapsed time every 50ms for CLI-like smooth display
     const interval = setInterval(() => {
       const now = Date.now()
-      setElapsedMs(now - turnTiming.startedAt!)
+      const startedAt = useThreadStore.getState().turnTiming.startedAt
+      if (startedAt) {
+        setElapsedMs(now - startedAt)
+      }
 
       // Calculate token rate every 500ms for stability
       const timeDelta = (now - prevTimeRef.current) / 1000
       if (timeDelta >= 0.5) {
-        const tokenDelta = tokenUsage.totalTokens - prevTokensRef.current
+        const currentTokens = useThreadStore.getState().tokenUsage.totalTokens
+        const tokenDelta = currentTokens - prevTokensRef.current
         if (tokenDelta > 0 && timeDelta > 0) {
           setTokenRate(Math.round(tokenDelta / timeDelta))
         }
-        prevTokensRef.current = tokenUsage.totalTokens
+        prevTokensRef.current = currentTokens
         prevTimeRef.current = now
       }
     }, 50)
     return () => clearInterval(interval)
-  }, [turnStatus, turnTiming.startedAt, tokenUsage.totalTokens])
+  }, [turnStatus, turnTiming.startedAt]) // Remove tokenUsage.totalTokens dependency
 
   // Reset elapsed when turn completes
   useEffect(() => {
@@ -176,13 +181,14 @@ export function StatusBar() {
         !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName || '')
       ) {
         e.preventDefault()
-        setKeyboardShortcutsOpen(true)
+        // Use getState() to avoid dependency on setKeyboardShortcutsOpen
+        useAppStore.getState().setKeyboardShortcutsOpen(true)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setKeyboardShortcutsOpen])
+  }, []) // No dependencies needed - uses getState()
 
   const handleRestartServer = async () => {
     try {
