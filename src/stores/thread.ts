@@ -31,6 +31,17 @@ import type {
   RateLimitExceededEvent,
 } from '../lib/events'
 
+// ==================== Operation Sequence Tracking ====================
+// Prevents race conditions when switching threads during async operations
+
+let operationSequence = 0
+function getNextOperationSequence(): number {
+  return ++operationSequence
+}
+function getCurrentOperationSequence(): number {
+  return operationSequence
+}
+
 // ==================== Delta Batching for Smooth Streaming ====================
 // Accumulates delta updates and flushes at ~20 FPS to reduce re-renders
 
@@ -38,6 +49,8 @@ interface DeltaBuffer {
   // Track which thread ID and turn ID the current buffer is for
   threadId: string | null
   turnId: string | null
+  // Track operation sequence to invalidate buffer on thread switch
+  operationSeq: number
   agentMessages: Map<string, string> // itemId -> accumulated text
   commandOutputs: Map<string, string> // itemId -> accumulated output
   fileChangeOutputs: Map<string, string> // itemId -> accumulated output
@@ -49,6 +62,7 @@ interface DeltaBuffer {
 const deltaBuffer: DeltaBuffer = {
   threadId: null,
   turnId: null,
+  operationSeq: 0,
   agentMessages: new Map(),
   commandOutputs: new Map(),
   fileChangeOutputs: new Map(),
@@ -61,6 +75,7 @@ const deltaBuffer: DeltaBuffer = {
 function clearDeltaBuffer() {
   deltaBuffer.threadId = null
   deltaBuffer.turnId = null
+  deltaBuffer.operationSeq = getCurrentOperationSequence()
   deltaBuffer.agentMessages.clear()
   deltaBuffer.commandOutputs.clear()
   deltaBuffer.fileChangeOutputs.clear()
@@ -95,30 +110,57 @@ function clearTurnTimeout() {
 
 // Clean up stale pending approvals that have exceeded the timeout
 // Uses a single setState call to avoid race conditions
-function cleanupStaleApprovals() {
+// Also sends cancel responses to the backend for timed-out approvals
+async function cleanupStaleApprovals() {
   const now = Date.now()
+  const state = useThreadStore.getState()
+  const { pendingApprovals, activeThread, items } = state
 
+  if (pendingApprovals.length === 0) return
+
+  // Find stale approvals (exceeded timeout) that belong to the active thread
+  const staleApprovals = pendingApprovals.filter(
+    (approval) =>
+      now - approval.createdAt > APPROVAL_TIMEOUT_MS &&
+      activeThread &&
+      approval.threadId === activeThread.id
+  )
+
+  // Send cancel responses to backend for stale approvals
+  // This is fire-and-forget to avoid blocking the cleanup
+  if (staleApprovals.length > 0 && activeThread) {
+    console.warn(
+      '[cleanupStaleApprovals] Cancelling',
+      staleApprovals.length,
+      'timed-out approvals:',
+      staleApprovals.map((a) => a.itemId)
+    )
+
+    // Send cancel for each stale approval (don't await - fire and forget)
+    staleApprovals.forEach((approval) => {
+      threadApi
+        .respondToApproval(activeThread.id, approval.itemId, 'cancel', approval.requestId)
+        .catch((err) => {
+          console.warn('[cleanupStaleApprovals] Failed to cancel approval:', approval.itemId, err)
+        })
+    })
+  }
+
+  // Now update the state
   useThreadStore.setState((state) => {
     const { pendingApprovals, activeThread, items } = state
 
     if (pendingApprovals.length === 0) return state
 
-    // Find stale approvals (exceeded timeout)
-    const staleApprovals = pendingApprovals.filter(
+    // Find all stale approvals (exceeded timeout)
+    const allStaleApprovals = pendingApprovals.filter(
       (approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS
     )
 
     // Update items for stale approvals
     const updatedItems = { ...items }
-    if (staleApprovals.length > 0) {
-      console.warn(
-        '[cleanupStaleApprovals] Removing',
-        staleApprovals.length,
-        'stale approvals:',
-        staleApprovals.map((a) => a.itemId)
-      )
-
-      staleApprovals.forEach((approval) => {
+    if (allStaleApprovals.length > 0) {
+      allStaleApprovals.forEach((approval) => {
         const item = updatedItems[approval.itemId]
         if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
           const content = item.content as Record<string, unknown>
@@ -165,7 +207,7 @@ function cleanupStaleApprovals() {
     }
 
     // Only update if there were changes
-    if (validApprovals.length === pendingApprovals.length && staleApprovals.length === 0) {
+    if (validApprovals.length === pendingApprovals.length && allStaleApprovals.length === 0) {
       return state
     }
 
@@ -802,6 +844,9 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   error: null,
 
   startThread: async (projectId, cwd, model, sandboxMode, approvalPolicy) => {
+    // Get operation sequence to detect if another operation starts during this one
+    const opSeq = getNextOperationSequence()
+
     // Clear delta buffer before starting new thread
     clearDeltaBuffer()
     // Start approval cleanup timer
@@ -820,6 +865,13 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         safeSandboxMode,
         safeApprovalPolicy
       )
+
+      // Verify no other operation started during this async call
+      if (getCurrentOperationSequence() !== opSeq) {
+        console.warn('[startThread] Another operation started, discarding result')
+        return
+      }
+
       // Reset all state for the new thread
       set({
         activeThread: response.thread,
@@ -835,13 +887,19 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         error: null,
       })
     } catch (error) {
-      set({ error: parseError(error), isLoading: false })
+      // Only update error state if this is still the current operation
+      if (getCurrentOperationSequence() === opSeq) {
+        set({ error: parseError(error), isLoading: false })
+      }
       throw error
     }
   },
 
   resumeThread: async (threadId) => {
     console.log('[resumeThread] Starting resume with threadId:', threadId)
+
+    // Get operation sequence to detect if another operation starts during this one
+    const opSeq = getNextOperationSequence()
 
     // Clear delta buffer before resuming thread
     clearDeltaBuffer()
@@ -851,6 +909,12 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const response = await threadApi.resume(threadId)
+
+      // Verify no other operation started during this async call
+      if (getCurrentOperationSequence() !== opSeq) {
+        console.warn('[resumeThread] Another operation started, discarding result for threadId:', threadId)
+        return
+      }
 
       console.log('[resumeThread] Resume response - thread.id:', response.thread.id, 'requested threadId:', threadId)
       if (response.thread.id !== threadId) {
@@ -893,9 +957,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       console.log('[resumeThread] Resume completed, activeThread.id:', response.thread.id)
     } catch (error) {
       console.error('[resumeThread] Resume failed:', error)
-      // Only update error state if no other thread became active
-      const { activeThread: currentActive } = get()
-      if (!currentActive || currentActive.id === threadId) {
+      // Only update error state if this is still the current operation
+      if (getCurrentOperationSequence() === opSeq) {
         set({
           error: parseError(error),
           isLoading: false,
@@ -1541,6 +1604,13 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleAgentMessageDelta: (event) => {
+    // Validate event belongs to current active thread
+    const { activeThread } = get()
+    if (!activeThread || activeThread.id !== event.threadId) {
+      // Silently ignore deltas from other threads
+      return
+    }
+
     // Log first delta to confirm events are arriving
     const current = deltaBuffer.agentMessages.get(event.itemId) || ''
     const isFirstDelta = current === '' // First character should show immediately
@@ -1551,10 +1621,12 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     // Track the thread ID for this buffer - if it changes, we should clear
     if (deltaBuffer.threadId === null) {
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     } else if (deltaBuffer.threadId !== event.threadId) {
       console.warn('[handleAgentMessageDelta] Thread ID changed, clearing buffer. Old:', deltaBuffer.threadId, 'New:', event.threadId)
       clearDeltaBuffer()
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     }
 
     // Buffer the delta instead of updating state immediately
@@ -1826,12 +1898,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleCommandExecutionOutputDelta: (event) => {
+    // Validate event belongs to current active thread
+    const { activeThread } = get()
+    if (!activeThread || activeThread.id !== event.threadId) return
+
     // Track the thread ID for this buffer
     if (deltaBuffer.threadId === null) {
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     } else if (deltaBuffer.threadId !== event.threadId) {
       clearDeltaBuffer()
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     }
 
     // Buffer the delta instead of updating state immediately
@@ -1842,12 +1920,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleFileChangeOutputDelta: (event) => {
+    // Validate event belongs to current active thread
+    const { activeThread } = get()
+    if (!activeThread || activeThread.id !== event.threadId) return
+
     // Track the thread ID for this buffer
     if (deltaBuffer.threadId === null) {
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     } else if (deltaBuffer.threadId !== event.threadId) {
       clearDeltaBuffer()
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     }
 
     // Buffer the delta instead of updating state immediately
@@ -1858,12 +1942,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleReasoningSummaryTextDelta: (event) => {
+    // Validate event belongs to current active thread
+    const { activeThread } = get()
+    if (!activeThread || activeThread.id !== event.threadId) return
+
     // Track the thread ID for this buffer
     if (deltaBuffer.threadId === null) {
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     } else if (deltaBuffer.threadId !== event.threadId) {
       clearDeltaBuffer()
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     }
 
     // Buffer the delta instead of updating state immediately
@@ -1886,12 +1976,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleReasoningTextDelta: (event) => {
+    // Validate event belongs to current active thread
+    const { activeThread } = get()
+    if (!activeThread || activeThread.id !== event.threadId) return
+
     // Track the thread ID for this buffer
     if (deltaBuffer.threadId === null) {
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     } else if (deltaBuffer.threadId !== event.threadId) {
       clearDeltaBuffer()
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     }
 
     // Buffer the delta instead of updating state immediately
@@ -1909,12 +2005,18 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   },
 
   handleMcpToolCallProgress: (event) => {
+    // Validate event belongs to current active thread
+    const { activeThread } = get()
+    if (!activeThread || activeThread.id !== event.threadId) return
+
     // Track the thread ID for this buffer
     if (deltaBuffer.threadId === null) {
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     } else if (deltaBuffer.threadId !== event.threadId) {
       clearDeltaBuffer()
       deltaBuffer.threadId = event.threadId
+      deltaBuffer.operationSeq = getCurrentOperationSequence()
     }
 
     // Buffer the progress message instead of updating state immediately
