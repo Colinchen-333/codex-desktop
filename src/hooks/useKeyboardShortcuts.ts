@@ -39,7 +39,6 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[]) {
         const keyMatches = event.key.toLowerCase() === shortcut.key.toLowerCase()
 
         // Check modifier keys
-        const ctrlMatches = shortcut.ctrl ? event.ctrlKey : !event.ctrlKey
         const metaMatches = shortcut.meta
           ? isMac
             ? event.metaKey
@@ -47,6 +46,11 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[]) {
           : isMac
             ? !event.metaKey
             : true
+        const ctrlMatches = shortcut.ctrl
+          ? event.ctrlKey
+          : shortcut.meta && !isMac
+            ? true
+            : !event.ctrlKey
         const shiftMatches = shortcut.shift ? event.shiftKey : !event.shiftKey
         const altMatches = shortcut.alt ? event.altKey : !event.altKey
 

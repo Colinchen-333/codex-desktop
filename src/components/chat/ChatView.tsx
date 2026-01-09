@@ -2424,14 +2424,13 @@ function QueuedMessagesDisplay() {
   const queuedMessages = useThreadStore((state) => state.queuedMessages)
   const turnStatus = useThreadStore((state) => state.turnStatus)
 
-  // Only show when there are queued messages and turn is running
-  if (queuedMessages.length === 0 || turnStatus !== 'running') return null
+  if (queuedMessages.length === 0) return null
 
   return (
     <div className="mb-2 space-y-1.5 animate-in fade-in slide-in-from-bottom-1 duration-150">
       <div className="text-xs text-muted-foreground px-2">
         <ListChecks size={12} className="inline mr-1.5" />
-        Queued messages ({queuedMessages.length}):
+        Queued messages{turnStatus === 'running' ? '' : ' (pending)'} ({queuedMessages.length}):
       </div>
       {queuedMessages.map((msg) => (
         <div
