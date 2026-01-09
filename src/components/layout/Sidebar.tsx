@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { cn, formatAbsoluteTime } from '../../lib/utils'
 import { useProjectsStore } from '../../stores/projects'
@@ -61,7 +61,17 @@ export function Sidebar() {
   )
 
   // Handle session selection using getState() to avoid function reference issues
-  const handleSelectSession = useCallback((sessionId: string | null) => {
+  // For global search results, also switch project if the session belongs to a different project
+  const handleSelectSession = useCallback((sessionId: string | null, sessionProjectId?: string) => {
+    const currentProjectId = useProjectsStore.getState().selectedProjectId
+
+    // If selecting a search result from a different project, switch project first
+    if (sessionProjectId && sessionProjectId !== currentProjectId) {
+      // Close all threads when switching project to avoid state conflicts
+      useThreadStore.getState().closeAllThreads()
+      useProjectsStore.getState().selectProject(sessionProjectId)
+    }
+
     useSessionsStore.getState().selectSession(sessionId)
   }, [])
 
@@ -328,7 +338,7 @@ export function Sidebar() {
           <SessionList
             sessions={displaySessions}
             selectedId={selectedSessionId}
-            onSelect={handleSelectSession}
+            onSelect={(sessionId, projectId) => handleSelectSession(sessionId, projectId)}
             onToggleFavorite={async (sessionId, isFavorite) => {
               try {
                 await updateSession(sessionId, { isFavorite: !isFavorite })
@@ -496,7 +506,8 @@ interface SessionListProps {
     tasksJson: string | null
   }>
   selectedId: string | null
-  onSelect: (id: string | null) => void
+  // onSelect receives sessionId and optionally projectId (for cross-project switching in global search)
+  onSelect: (id: string | null, projectId?: string) => void
   onToggleFavorite: (sessionId: string, isFavorite: boolean) => void
   onRename: (sessionId: string, currentTitle: string) => void
   onDelete: (sessionId: string) => void
@@ -517,6 +528,17 @@ function SessionList({
   isGlobalSearch,
 }: SessionListProps) {
   const { getSessionDisplayName } = useSessionsStore()
+  const { projects } = useProjectsStore()
+
+  // Helper to get project display name by ID (for global search results)
+  const getProjectName = useCallback(
+    (projectId: string): string | null => {
+      const project = projects.find((p) => p.id === projectId)
+      if (!project) return null
+      return project.displayName || project.path.split('/').pop() || null
+    },
+    [projects]
+  )
 
   // When doing global search, don't require project selection
   if (!hasProject && !isGlobalSearch) {
@@ -541,6 +563,24 @@ function SessionList({
     )
   }
 
+  // Memoize sorted sessions to avoid recalculating on every render
+  // Sort order: running first, then favorites, then by last accessed or created time
+  const sortedSessions = useMemo(() => {
+    return [...sessions].sort((a, b) => {
+      // Running sessions always first
+      if (a.status === 'running' && b.status !== 'running') return -1
+      if (a.status !== 'running' && b.status === 'running') return 1
+      // Then favorites
+      if (a.isFavorite !== b.isFavorite) {
+        return a.isFavorite ? -1 : 1
+      }
+      // Then by time
+      const timeA = a.lastAccessedAt || a.createdAt
+      const timeB = b.lastAccessedAt || b.createdAt
+      return timeB - timeA
+    })
+  }, [sessions])
+
   if (sessions.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
@@ -548,21 +588,6 @@ function SessionList({
       </div>
     )
   }
-
-  // Sort sessions: running first, then favorites, then by last accessed or created time
-  const sortedSessions = [...sessions].sort((a, b) => {
-    // Running sessions always first
-    if (a.status === 'running' && b.status !== 'running') return -1
-    if (a.status !== 'running' && b.status === 'running') return 1
-    // Then favorites
-    if (a.isFavorite !== b.isFavorite) {
-      return a.isFavorite ? -1 : 1
-    }
-    // Then by time
-    const timeA = a.lastAccessedAt || a.createdAt
-    const timeB = b.lastAccessedAt || b.createdAt
-    return timeB - timeA
-  })
 
   return (
     <div className="space-y-1">
@@ -572,6 +597,8 @@ function SessionList({
         const timeStr = formatAbsoluteTime(timestamp)
         const statusLabel = getStatusLabel(session.status)
         const isRunning = session.status === 'running'
+        // Get project name for global search results display
+        const projectName = isGlobalSearch ? getProjectName(session.projectId) : null
 
         const contextMenuItems: ContextMenuItem[] = [
           {
@@ -602,7 +629,7 @@ function SessionList({
                   : 'text-foreground hover:bg-secondary/50',
                 isRunning && selectedId !== session.sessionId && 'border border-blue-400/30 bg-blue-50/10 dark:bg-blue-950/20'
               )}
-              onClick={() => onSelect(session.sessionId)}
+              onClick={() => onSelect(session.sessionId, isGlobalSearch ? session.projectId : undefined)}
             >
               {/* First row: Status icon + Session name */}
               <div className="flex items-center gap-2">
@@ -612,7 +639,7 @@ function SessionList({
                   {displayName}
                 </span>
               </div>
-              {/* Second row: Status label + Timestamp */}
+              {/* Second row: Status label + Timestamp + Project name (for global search) */}
               <div className="flex items-center gap-1.5 mt-1 text-xs">
                 <span className={cn(
                   'text-muted-foreground',
@@ -633,6 +660,23 @@ function SessionList({
                       selectedId === session.sessionId && 'text-primary-foreground/70'
                     )}>
                       {timeStr}
+                    </span>
+                  </>
+                )}
+                {/* Show project name in global search results */}
+                {projectName && (
+                  <>
+                    <span className={cn(
+                      'text-muted-foreground/60',
+                      selectedId === session.sessionId && 'text-primary-foreground/50'
+                    )}>
+                      ·
+                    </span>
+                    <span className={cn(
+                      'px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground truncate max-w-[80px]',
+                      selectedId === session.sessionId && 'bg-primary-foreground/20 text-primary-foreground/80'
+                    )}>
+                      {projectName}
                     </span>
                   </>
                 )}

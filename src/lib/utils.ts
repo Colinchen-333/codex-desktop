@@ -5,6 +5,36 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * Timestamp unit detection threshold constant.
+ *
+ * This value (10000000000) represents the boundary between Unix timestamps in seconds
+ * and milliseconds. It corresponds to approximately September 2001 in milliseconds,
+ * or year 2286 in seconds. Since all modern timestamps are well past 2001, any value
+ * below this threshold is assumed to be in seconds and needs conversion to milliseconds.
+ *
+ * Note: The backend API (Tauri/SQLite) returns timestamps in seconds (Unix timestamp),
+ * while JavaScript Date APIs expect milliseconds. This constant helps detect and convert
+ * between the two formats.
+ *
+ * @see formatAbsoluteTime
+ * @see formatSessionTime
+ */
+const TIMESTAMP_SECONDS_THRESHOLD = 10000000000
+
+/**
+ * Normalize timestamp to milliseconds.
+ * Detects if the timestamp is in seconds or milliseconds and converts to milliseconds.
+ *
+ * @param timestamp - Unix timestamp in either seconds or milliseconds
+ * @returns Timestamp in milliseconds
+ */
+export function normalizeTimestampToMs(timestamp: number): number {
+  // Values below threshold are assumed to be in seconds (Unix timestamp)
+  // Values above threshold are assumed to be in milliseconds
+  return timestamp < TIMESTAMP_SECONDS_THRESHOLD ? timestamp * 1000 : timestamp
+}
+
 export function formatRelativeTime(timestamp: number): string {
   const now = Date.now()
   const diff = now - timestamp * 1000 // Convert from Unix timestamp
@@ -36,6 +66,9 @@ export function formatRelativeTime(timestamp: number): string {
 /**
  * Format timestamp to absolute time in Chinese format
  * e.g., "1月6日 14:31"
+ *
+ * @param timestamp - Unix timestamp in either seconds or milliseconds
+ *                    (Backend API returns seconds, JS Date expects milliseconds)
  */
 export function formatAbsoluteTime(timestamp: number): string {
   // Handle invalid timestamps
@@ -43,8 +76,8 @@ export function formatAbsoluteTime(timestamp: number): string {
     return ''
   }
 
-  // Convert Unix timestamp (seconds) to milliseconds if needed
-  const ts = timestamp < 10000000000 ? timestamp * 1000 : timestamp
+  // Normalize timestamp to milliseconds using the threshold-based detection
+  const ts = normalizeTimestampToMs(timestamp)
   const date = new Date(ts)
 
   // Check if date is valid
@@ -72,6 +105,9 @@ export function formatAbsoluteTime(timestamp: number): string {
 /**
  * Format timestamp for display in session list
  * Shows relative time for recent, absolute time for older
+ *
+ * @param timestamp - Unix timestamp in either seconds or milliseconds
+ *                    (Backend API returns seconds, JS Date expects milliseconds)
  */
 export function formatSessionTime(timestamp: number): string {
   // Handle invalid timestamps
@@ -79,8 +115,8 @@ export function formatSessionTime(timestamp: number): string {
     return ''
   }
 
-  // Convert Unix timestamp (seconds) to milliseconds if needed
-  const ts = timestamp < 10000000000 ? timestamp * 1000 : timestamp
+  // Normalize timestamp to milliseconds using the threshold-based detection
+  const ts = normalizeTimestampToMs(timestamp)
   const now = Date.now()
   const diff = now - ts
 

@@ -1241,6 +1241,12 @@ export const useThreadStore = create<ThreadState>((set, get) => {
         globalError: null,
       }))
 
+      // Sync session status to 'idle' after successful resume
+      // This ensures the UI reflects the correct state (not stale 'running' from previous session)
+      import('../stores/sessions').then(({ useSessionsStore }) => {
+        useSessionsStore.getState().updateSessionStatus(response.thread.id, 'idle')
+      }).catch(console.error)
+
       console.log('[resumeThread] Resume completed, activeThread.id:', response.thread.id)
     } catch (error) {
       console.error('[resumeThread] Resume failed:', error)
@@ -1887,11 +1893,19 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     } as AnyThreadItem
 
     // If this is a user message, try to set it as the session's first message
+    // Note: setSessionFirstMessage internally checks if firstMessage is already set,
+    // but we also check here to avoid unnecessary async imports and store lookups
     if (inProgressItem.type === 'userMessage') {
       const userMsg = inProgressItem as UserMessageItem
       if (userMsg.content.text) {
         import('../stores/sessions').then(({ useSessionsStore }) => {
-          useSessionsStore.getState().setSessionFirstMessage(threadId, userMsg.content.text)
+          const sessionsStore = useSessionsStore.getState()
+          const session = sessionsStore.sessions.find((s) => s.sessionId === threadId)
+          // Only set firstMessage if the session exists and doesn't already have one
+          // This prevents race conditions when multiple messages are sent quickly
+          if (session && !session.firstMessage) {
+            sessionsStore.setSessionFirstMessage(threadId, userMsg.content.text)
+          }
         }).catch(console.error)
       }
     }

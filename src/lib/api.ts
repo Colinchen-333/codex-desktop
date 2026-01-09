@@ -27,7 +27,15 @@ export interface SessionMetadata {
   tags: string | null
   isFavorite: boolean
   isArchived: boolean
+  /**
+   * Last accessed timestamp in Unix seconds (from SQLite).
+   * Use normalizeTimestampToMs() for JavaScript Date operations.
+   */
   lastAccessedAt: number | null
+  /**
+   * Creation timestamp in Unix seconds (from SQLite).
+   * Use normalizeTimestampToMs() for JavaScript Date operations.
+   */
   createdAt: number
   // New fields for multi-agent management
   status: SessionStatus
