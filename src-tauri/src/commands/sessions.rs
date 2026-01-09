@@ -2,7 +2,7 @@
 
 use tauri::State;
 
-use crate::database::SessionMetadata;
+use crate::database::{SessionMetadata, SessionStatus};
 use crate::state::AppState;
 use crate::Result;
 
@@ -44,6 +44,9 @@ pub async fn update_session_metadata(
     tags: Option<Vec<String>>,
     is_favorite: Option<bool>,
     is_archived: Option<bool>,
+    status: Option<String>,
+    first_message: Option<String>,
+    tasks_json: Option<String>,
 ) -> Result<SessionMetadata> {
     // Get existing metadata or create new
     let existing = get_session(state.clone(), session_id.clone()).await?;
@@ -66,6 +69,18 @@ pub async fn update_session_metadata(
     if let Some(a) = is_archived {
         metadata.is_archived = a;
     }
+    if let Some(s) = status {
+        metadata.status = SessionStatus::from_str(&s);
+    }
+    if let Some(fm) = first_message {
+        // Only set first message if not already set
+        if metadata.first_message.is_none() {
+            metadata.first_message = Some(fm);
+        }
+    }
+    if let Some(tj) = tasks_json {
+        metadata.tasks_json = Some(tj);
+    }
     metadata.last_accessed_at = Some(chrono::Utc::now().timestamp());
 
     state.database.upsert_session_metadata(&metadata)?;
@@ -77,6 +92,40 @@ pub async fn update_session_metadata(
 #[tauri::command]
 pub async fn delete_session(state: State<'_, AppState>, session_id: String) -> Result<()> {
     state.database.delete_session_metadata(&session_id)?;
+    Ok(())
+}
+
+/// Update session status only (lightweight update)
+#[tauri::command]
+pub async fn update_session_status(
+    state: State<'_, AppState>,
+    session_id: String,
+    status: String,
+) -> Result<()> {
+    let status_enum = SessionStatus::from_str(&status);
+    state.database.update_session_status(&session_id, &status_enum)?;
+    Ok(())
+}
+
+/// Set session first message (only if not already set)
+#[tauri::command]
+pub async fn set_session_first_message(
+    state: State<'_, AppState>,
+    session_id: String,
+    first_message: String,
+) -> Result<()> {
+    state.database.update_session_first_message(&session_id, &first_message)?;
+    Ok(())
+}
+
+/// Update session tasks
+#[tauri::command]
+pub async fn update_session_tasks(
+    state: State<'_, AppState>,
+    session_id: String,
+    tasks_json: String,
+) -> Result<()> {
+    state.database.update_session_tasks(&session_id, &tasks_json)?;
     Ok(())
 }
 
@@ -104,6 +153,13 @@ pub async fn search_sessions(
             // Match title
             if let Some(title) = &s.title {
                 if title.to_lowercase().contains(&query_lower) {
+                    return true;
+                }
+            }
+
+            // Match first message
+            if let Some(first_msg) = &s.first_message {
+                if first_msg.to_lowercase().contains(&query_lower) {
                     return true;
                 }
             }

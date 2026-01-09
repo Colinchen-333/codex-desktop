@@ -1886,6 +1886,16 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       status: 'inProgress',
     } as AnyThreadItem
 
+    // If this is a user message, try to set it as the session's first message
+    if (inProgressItem.type === 'userMessage') {
+      const userMsg = inProgressItem as UserMessageItem
+      if (userMsg.content.text) {
+        import('../stores/sessions').then(({ useSessionsStore }) => {
+          useSessionsStore.getState().setSessionFirstMessage(threadId, userMsg.content.text)
+        }).catch(console.error)
+      }
+    }
+
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
@@ -2139,6 +2149,11 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
     clearTurnTimeout(threadId)
 
+    // Sync session status to 'running'
+    import('../stores/sessions').then(({ useSessionsStore }) => {
+      useSessionsStore.getState().updateSessionStatus(threadId, 'running')
+    }).catch(console.error)
+
     // Set turn timeout for this specific thread
     const turnId = event.turn.id
     const timeoutTimer = setTimeout(() => {
@@ -2147,6 +2162,10 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       if (threadState?.currentTurnId === turnId && threadState?.turnStatus === 'running') {
         console.error('[handleTurnStarted] Turn timeout - no completion received for turnId:', turnId)
         performFullTurnCleanup(threadId)
+        // Sync session status to 'failed' on timeout
+        import('../stores/sessions').then(({ useSessionsStore }) => {
+          useSessionsStore.getState().updateSessionStatus(threadId, 'failed')
+        }).catch(console.error)
         useThreadStore.setState((state) => {
           const threadState = state.threads[threadId]
           if (!threadState) return state
@@ -2216,6 +2235,14 @@ export const useThreadStore = create<ThreadState>((set, get) => {
         : status === 'interrupted'
         ? 'interrupted'
         : 'completed'
+
+    // Sync session status based on turn result
+    import('../stores/sessions').then(({ useSessionsStore }) => {
+      const sessionStatus = nextTurnStatus === 'failed' ? 'failed'
+        : nextTurnStatus === 'interrupted' ? 'interrupted'
+        : 'completed'
+      useSessionsStore.getState().updateSessionStatus(threadId, sessionStatus)
+    }).catch(console.error)
 
     set((state) => {
       const threadState = state.threads[threadId]

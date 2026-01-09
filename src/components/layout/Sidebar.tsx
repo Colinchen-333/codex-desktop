@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { cn } from '../../lib/utils'
+import { cn, formatAbsoluteTime } from '../../lib/utils'
 import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
 import { useAppStore } from '../../stores/app'
@@ -14,38 +14,8 @@ import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
 import { RenameDialog } from '../ui/RenameDialog'
 import { ProjectSettingsDialog } from '../dialogs/ProjectSettingsDialog'
 import { useToast } from '../ui/Toast'
-
-// Helper function to format relative time
-function formatRelativeTime(timestamp: number): string {
-  // Handle invalid timestamps (0, null, or very old dates like 1970)
-  if (!timestamp || timestamp < 1000000000000) {
-    // If timestamp looks like seconds (between year 2001 and 2286), convert to ms
-    if (timestamp > 1000000000 && timestamp < 10000000000) {
-      timestamp = timestamp * 1000
-    } else if (timestamp < 1000000000) {
-      // Invalid or zero timestamp
-      return 'just now'
-    }
-  }
-
-  const now = Date.now()
-  const diff = now - timestamp
-
-  // If diff is negative or very large (future date or invalid), return 'just now'
-  if (diff < 0 || diff > 365 * 24 * 60 * 60 * 1000 * 10) {
-    return 'just now'
-  }
-
-  const minutes = Math.floor(diff / 60000)
-  const hours = Math.floor(diff / 3600000)
-  const days = Math.floor(diff / 86400000)
-
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  if (hours < 24) return `${hours}h ago`
-  if (days < 7) return `${days}d ago`
-  return new Date(timestamp).toLocaleDateString()
-}
+import { StatusIcon, getStatusLabel } from '../ui/StatusIndicator'
+import type { SessionStatus } from '../../lib/api'
 
 export function Sidebar() {
   const { sidebarTab: activeTab, setSidebarTab: setActiveTab } = useAppStore()
@@ -521,6 +491,9 @@ interface SessionListProps {
     isFavorite: boolean
     lastAccessedAt: number | null
     createdAt: number
+    status: SessionStatus
+    firstMessage: string | null
+    tasksJson: string | null
   }>
   selectedId: string | null
   onSelect: (id: string | null) => void
@@ -543,6 +516,8 @@ function SessionList({
   hasProject,
   isGlobalSearch,
 }: SessionListProps) {
+  const { getSessionDisplayName } = useSessionsStore()
+
   // When doing global search, don't require project selection
   if (!hasProject && !isGlobalSearch) {
     return (
@@ -555,7 +530,12 @@ function SessionList({
   if (isLoading) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-        <div className="animate-spin mr-2">⚙️</div>
+        <div className="animate-spin mr-2">
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+        </div>
         {isGlobalSearch ? 'Searching...' : 'Loading sessions...'}
       </div>
     )
@@ -569,11 +549,16 @@ function SessionList({
     )
   }
 
-  // Sort sessions: favorites first, then by last accessed or created time
+  // Sort sessions: running first, then favorites, then by last accessed or created time
   const sortedSessions = [...sessions].sort((a, b) => {
+    // Running sessions always first
+    if (a.status === 'running' && b.status !== 'running') return -1
+    if (a.status !== 'running' && b.status === 'running') return 1
+    // Then favorites
     if (a.isFavorite !== b.isFavorite) {
       return a.isFavorite ? -1 : 1
     }
+    // Then by time
     const timeA = a.lastAccessedAt || a.createdAt
     const timeB = b.lastAccessedAt || b.createdAt
     return timeB - timeA
@@ -582,14 +567,17 @@ function SessionList({
   return (
     <div className="space-y-1">
       {sortedSessions.map((session) => {
-        const tags = session.tags ? JSON.parse(session.tags) : []
-        const timeAgo = formatRelativeTime(session.lastAccessedAt || session.createdAt)
+        const displayName = getSessionDisplayName(session)
+        const timestamp = session.lastAccessedAt || session.createdAt
+        const timeStr = formatAbsoluteTime(timestamp)
+        const statusLabel = getStatusLabel(session.status)
+        const isRunning = session.status === 'running'
 
         const contextMenuItems: ContextMenuItem[] = [
           {
             label: 'Rename',
             icon: '✏️',
-            onClick: () => onRename(session.sessionId, session.title || `Session ${session.sessionId.slice(0, 8)}`),
+            onClick: () => onRename(session.sessionId, displayName),
           },
           {
             label: session.isFavorite ? 'Remove from favorites' : 'Add to favorites',
@@ -608,34 +596,47 @@ function SessionList({
           <ContextMenu key={session.sessionId} items={contextMenuItems}>
             <button
               className={cn(
-                'w-full rounded-md px-3 py-2 text-left transition-all mb-1',
+                'w-full rounded-lg px-3 py-2.5 text-left transition-all mb-1',
                 selectedId === session.sessionId
                   ? 'bg-primary text-primary-foreground shadow-sm'
-                  : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
+                  : 'text-foreground hover:bg-secondary/50',
+                isRunning && selectedId !== session.sessionId && 'border border-blue-400/30 bg-blue-50/10 dark:bg-blue-950/20'
               )}
               onClick={() => onSelect(session.sessionId)}
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  {session.isFavorite && <span className="text-yellow-500 flex-shrink-0">★</span>}
-                  <span className="truncate text-sm font-medium">
-                    {session.title || `Session ${session.sessionId.slice(0, 8)}`}
-                  </span>
-                </div>
-                <span className="text-xs text-muted-foreground flex-shrink-0">{timeAgo}</span>
+              {/* First row: Status icon + Session name */}
+              <div className="flex items-center gap-2">
+                <StatusIcon status={session.status} />
+                {session.isFavorite && <span className="text-yellow-500 flex-shrink-0 text-xs">★</span>}
+                <span className="truncate text-sm font-medium flex-1">
+                  {displayName}
+                </span>
               </div>
-              {tags.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {tags.slice(0, 3).map((tag: string) => (
-                    <span
-                      key={tag}
-                      className="rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground"
-                    >
-                      {tag}
+              {/* Second row: Status label + Timestamp */}
+              <div className="flex items-center gap-1.5 mt-1 text-xs">
+                <span className={cn(
+                  'text-muted-foreground',
+                  selectedId === session.sessionId && 'text-primary-foreground/70'
+                )}>
+                  {statusLabel}
+                </span>
+                {timeStr && (
+                  <>
+                    <span className={cn(
+                      'text-muted-foreground/60',
+                      selectedId === session.sessionId && 'text-primary-foreground/50'
+                    )}>
+                      ·
                     </span>
-                  ))}
-                </div>
-              )}
+                    <span className={cn(
+                      'text-muted-foreground',
+                      selectedId === session.sessionId && 'text-primary-foreground/70'
+                    )}>
+                      {timeStr}
+                    </span>
+                  </>
+                )}
+              </div>
             </button>
           </ContextMenu>
         )

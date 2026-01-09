@@ -44,6 +44,40 @@ impl Project {
     }
 }
 
+/// Session status enum for agent state tracking
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStatus {
+    #[default]
+    Idle,
+    Running,
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+impl SessionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionStatus::Idle => "idle",
+            SessionStatus::Running => "running",
+            SessionStatus::Completed => "completed",
+            SessionStatus::Failed => "failed",
+            SessionStatus::Interrupted => "interrupted",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "running" => SessionStatus::Running,
+            "completed" => SessionStatus::Completed,
+            "failed" => SessionStatus::Failed,
+            "interrupted" => SessionStatus::Interrupted,
+            _ => SessionStatus::Idle,
+        }
+    }
+}
+
 /// Session metadata extensions (tags, favorites, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +105,16 @@ pub struct SessionMetadata {
 
     /// Unix timestamp when created
     pub created_at: i64,
+
+    /// Current session status (idle, running, completed, failed, interrupted)
+    #[serde(default)]
+    pub status: SessionStatus,
+
+    /// First user message (used as session name if no title set)
+    pub first_message: Option<String>,
+
+    /// JSON array of tasks for progress tracking
+    pub tasks_json: Option<String>,
 }
 
 impl SessionMetadata {
@@ -85,6 +129,9 @@ impl SessionMetadata {
             is_archived: false,
             last_accessed_at: Some(chrono::Utc::now().timestamp()),
             created_at: chrono::Utc::now().timestamp(),
+            status: SessionStatus::Idle,
+            first_message: None,
+            tasks_json: None,
         }
     }
 
@@ -100,6 +147,46 @@ impl SessionMetadata {
     pub fn set_tags(&mut self, tags: Vec<String>) {
         self.tags = Some(serde_json::to_string(&tags).unwrap_or_default());
     }
+
+    /// Get display name for session (title or truncated first message)
+    pub fn get_display_name(&self) -> String {
+        if let Some(ref title) = self.title {
+            if !title.is_empty() {
+                return title.clone();
+            }
+        }
+        if let Some(ref first_msg) = self.first_message {
+            // Truncate to 30 chars for display
+            if first_msg.len() > 30 {
+                return format!("{}...", &first_msg[..30]);
+            }
+            return first_msg.clone();
+        }
+        format!("Session {}", &self.session_id[..8.min(self.session_id.len())])
+    }
+
+    /// Parse tasks from JSON
+    pub fn get_tasks(&self) -> Vec<TaskItem> {
+        self.tasks_json
+            .as_ref()
+            .and_then(|t| serde_json::from_str(t).ok())
+            .unwrap_or_default()
+    }
+
+    /// Set tasks as JSON
+    pub fn set_tasks(&mut self, tasks: Vec<TaskItem>) {
+        self.tasks_json = Some(serde_json::to_string(&tasks).unwrap_or_default());
+    }
+}
+
+/// Task item for progress tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskItem {
+    /// Task description
+    pub content: String,
+    /// Task status (pending, in_progress, completed)
+    pub status: String,
 }
 
 /// Snapshot for revert functionality
