@@ -115,6 +115,8 @@ export function FileMentionPopup({
   return (
     <div className="absolute bottom-full left-0 right-0 mb-2 mx-2">
       <div
+        role="listbox"
+        aria-label="File suggestions"
         className="max-h-72 overflow-y-auto rounded-xl border border-border/50 bg-card shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-200"
       >
         <div className="p-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider border-b border-border/30 bg-secondary/30 flex items-center justify-between">

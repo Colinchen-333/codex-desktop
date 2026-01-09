@@ -113,6 +113,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       <button
         className="text-muted-foreground hover:text-foreground"
         onClick={onDismiss}
+        aria-label="Dismiss notification"
       >
         ✕
       </button>

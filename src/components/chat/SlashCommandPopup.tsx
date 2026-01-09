@@ -148,6 +148,8 @@ export function SlashCommandPopup({
     <div className="absolute bottom-full left-0 right-0 mb-2 mx-2">
       <div
         ref={listRef}
+        role="listbox"
+        aria-label="Slash commands"
         className="max-h-80 overflow-y-auto rounded-xl border border-border/50 bg-card shadow-xl backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-200"
       >
         <div className="sticky top-0 z-10 flex items-center gap-2 p-3 text-xs font-medium text-muted-foreground border-b border-border/30 bg-card/95 backdrop-blur-sm">
