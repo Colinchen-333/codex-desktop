@@ -42,7 +42,8 @@ function getSnapshotTypeLabel(type: string): string {
 }
 
 export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps) {
-  const { snapshots, fetchSnapshots, revertToSnapshot, activeThread } = useThreadStore()
+  const { snapshots, activeThread } = useThreadStore()
+  // fetchSnapshots, revertToSnapshot are called via getState() to avoid dependency issues
   const { projects, selectedProjectId } = useProjectsStore()
   const { showToast } = useToast()
   const [isReverting, setIsReverting] = useState<string | null>(null)
@@ -53,9 +54,9 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
   useEffect(() => {
     if (isOpen && activeThread) {
       setIsLoading(true)
-      fetchSnapshots().finally(() => setIsLoading(false))
+      useThreadStore.getState().fetchSnapshots().finally(() => setIsLoading(false))
     }
-  }, [isOpen, activeThread, fetchSnapshots])
+  }, [isOpen, activeThread]) // Remove fetchSnapshots dependency
 
   const handleRevert = async (snapshot: Snapshot) => {
     if (!project) {
@@ -65,7 +66,7 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
 
     setIsReverting(snapshot.id)
     try {
-      await revertToSnapshot(snapshot.id, project.path)
+      await useThreadStore.getState().revertToSnapshot(snapshot.id, project.path)
       showToast('Reverted to snapshot successfully', 'success')
     } catch (error) {
       console.error('Failed to revert:', error)

@@ -10,8 +10,7 @@ import { useToast } from './ui/Toast'
 const DOUBLE_ESCAPE_TIMEOUT_MS = 1500
 
 export function KeyboardShortcuts() {
-  const { setSettingsOpen, setSidebarTab, triggerFocusInput, setEscapePending } = useAppStore()
-  const { addProject } = useProjectsStore()
+  // Store functions are called via getState() to avoid dependency issues
   const { showToast } = useToast()
   const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -38,22 +37,22 @@ export function KeyboardShortcuts() {
           clearTimeout(escapeTimerRef.current)
           escapeTimerRef.current = null
         }
-        setEscapePending(false)
+        useAppStore.getState().setEscapePending(false)
         interrupt()
       } else {
         // First escape - show pending state
-        setEscapePending(true)
+        useAppStore.getState().setEscapePending(true)
         escapeTimerRef.current = setTimeout(() => {
-          setEscapePending(false)
+          useAppStore.getState().setEscapePending(false)
           escapeTimerRef.current = null
         }, DOUBLE_ESCAPE_TIMEOUT_MS)
       }
     } else {
       // Not running - close dialogs
-      setSettingsOpen(false)
+      useAppStore.getState().setSettingsOpen(false)
       useAppStore.getState().setKeyboardShortcutsOpen(false)
     }
-  }, [setSettingsOpen, setEscapePending])
+  }, []) // No dependencies - all store functions called via getState()
 
   const shortcuts: KeyboardShortcut[] = useMemo(
     () => [
@@ -62,28 +61,28 @@ export function KeyboardShortcuts() {
         key: ',',
         meta: true,
         description: 'Open settings',
-        handler: () => setSettingsOpen(true),
+        handler: () => useAppStore.getState().setSettingsOpen(true),
       },
       // Focus input (Cmd/Ctrl + K)
       {
         key: 'k',
         meta: true,
         description: 'Focus input',
-        handler: () => triggerFocusInput(),
+        handler: () => useAppStore.getState().triggerFocusInput(),
       },
       // Switch to Projects tab (Cmd/Ctrl + 1)
       {
         key: '1',
         meta: true,
         description: 'Switch to Projects tab',
-        handler: () => setSidebarTab('projects'),
+        handler: () => useAppStore.getState().setSidebarTab('projects'),
       },
       // Switch to Sessions tab (Cmd/Ctrl + 2)
       {
         key: '2',
         meta: true,
         description: 'Switch to Sessions tab',
-        handler: () => setSidebarTab('sessions'),
+        handler: () => useAppStore.getState().setSidebarTab('sessions'),
       },
       // Open project (Cmd/Ctrl + O)
       {
@@ -98,7 +97,7 @@ export function KeyboardShortcuts() {
               title: 'Select Project Folder',
             })
             if (selected && typeof selected === 'string') {
-              await addProject(selected)
+              await useProjectsStore.getState().addProject(selected)
               showToast('Project added successfully', 'success')
             }
           } catch (error) {
@@ -114,7 +113,7 @@ export function KeyboardShortcuts() {
         handler: handleEscape,
       },
     ],
-    [setSettingsOpen, setSidebarTab, triggerFocusInput, addProject, showToast, handleEscape]
+    [showToast, handleEscape] // Only dependencies that aren't store functions
   )
 
   useKeyboardShortcuts(shortcuts)

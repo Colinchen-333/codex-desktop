@@ -26,8 +26,9 @@ export function ProjectSettingsDialog({
   onClose,
   projectId,
 }: ProjectSettingsDialogProps) {
-  const { projects, fetchProjects } = useProjectsStore()
-  const { models, fetchModels } = useModelsStore()
+  const { projects } = useProjectsStore()
+  // fetchProjects, fetchModels are called via getState() to avoid dependency issues
+  const { models } = useModelsStore()
   const [settings, setSettings] = useState<ProjectSettings>({})
   const [isSaving, setIsSaving] = useState(false)
   const [newEnvKey, setNewEnvKey] = useState('')
@@ -51,16 +52,16 @@ export function ProjectSettingsDialog({
   // Fetch models on mount
   useEffect(() => {
     if (isOpen) {
-      fetchModels()
+      useModelsStore.getState().fetchModels()
     }
-  }, [isOpen, fetchModels])
+  }, [isOpen]) // No fetchModels dependency - called via getState()
 
   const handleSave = async () => {
     if (!projectId) return
     setIsSaving(true)
     try {
       await projectApi.update(projectId, undefined, settings)
-      await fetchProjects()
+      await useProjectsStore.getState().fetchProjects()
       onClose()
     } catch (error) {
       console.error('Failed to save project settings:', error)
