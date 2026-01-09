@@ -776,10 +776,11 @@ export function ChatView() {
             : target.type === 'commit'
               ? `commit: ${(target as { sha: string }).sha.slice(0, 7)}`
               : 'custom instructions'
-      addInfoItem('Review', `Starting review of ${targetDesc}...`)
+      // Use getState() to avoid addInfoItem dependency
+      useThreadStore.getState().addInfoItem('Review', `Starting review of ${targetDesc}...`)
       await serverApi.startReview(currentThread.id, target)
     },
-    [addInfoItem]
+    [] // No dependencies - store functions called via getState()
   )
 
   // Get current project for review selector

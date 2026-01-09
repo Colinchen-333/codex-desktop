@@ -195,24 +195,26 @@ function ModelSettings({
   settings: Settings
   updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void
 }) {
-  const { models, isLoading, error, fetchModels, getModelById, getDefaultModel } = useModelsStore()
+  const { models, isLoading, error } = useModelsStore()
+  // getModelById, getDefaultModel, fetchModels are called via getState() to avoid dependency issues
 
   // Fetch models on mount
   useEffect(() => {
-    fetchModels()
-  }, [fetchModels])
+    useModelsStore.getState().fetchModels()
+  }, []) // No dependencies - fetchModels called via getState()
 
   // Auto-select default model if none is selected
   useEffect(() => {
     if (!settings.model && models.length > 0) {
-      const defaultModel = getDefaultModel()
+      const defaultModel = useModelsStore.getState().getDefaultModel()
       if (defaultModel) {
-        updateSetting('model', defaultModel.model)
+        // Use getState() to avoid updateSetting dependency
+        useSettingsStore.getState().updateSetting('model', defaultModel.model)
       }
     }
-  }, [settings.model, models, getDefaultModel, updateSetting])
+  }, [settings.model, models]) // Remove updateSetting from deps - called via getState()
 
-  const currentModel = getModelById(settings.model) || getDefaultModel()
+  const currentModel = useModelsStore.getState().getModelById(settings.model) || useModelsStore.getState().getDefaultModel()
   const supportsReasoning = currentModel ? modelSupportsReasoning(currentModel) : false
 
   // Get reasoning effort options from current model
@@ -237,7 +239,7 @@ function ModelSettings({
             Failed to load models: {error}
             <button
               className="ml-2 text-primary underline"
-              onClick={() => fetchModels()}
+              onClick={() => useModelsStore.getState().fetchModels()}
             >
               Retry
             </button>
