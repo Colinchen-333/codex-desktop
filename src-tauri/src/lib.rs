@@ -106,6 +106,9 @@ pub fn run() {
             commands::sessions::update_session_metadata,
             commands::sessions::delete_session,
             commands::sessions::search_sessions,
+            commands::sessions::update_session_status,
+            commands::sessions::set_session_first_message,
+            commands::sessions::update_session_tasks,
             // Thread commands (proxy to app-server)
             commands::thread::start_thread,
             commands::thread::resume_thread,

@@ -494,6 +494,7 @@ export interface QueuedMessage {
   id: string
   text: string
   images?: string[]
+  skills?: SkillInput[]
   queuedAt: number
 }
 
@@ -548,7 +549,12 @@ interface ThreadState {
     approvalPolicy?: string
   ) => Promise<void>
   resumeThread: (threadId: string) => Promise<void>
-  sendMessage: (text: string, images?: string[], skills?: SkillInput[]) => Promise<void>
+  sendMessage: (
+    text: string,
+    images?: string[],
+    skills?: SkillInput[],
+    threadId?: string
+  ) => Promise<void>
   interrupt: () => Promise<void>
   respondToApproval: (
     itemId: string,
@@ -616,19 +622,27 @@ function mapItemType(type: string): ThreadItemType {
 }
 
 function normalizeStatus(status?: string | null): ThreadItem['status'] {
-  switch (status) {
+  if (!status) return 'completed'
+  const normalized = status.toLowerCase()
+  switch (normalized) {
     case 'completed':
-    case 'Completed':
       return 'completed'
     case 'failed':
-    case 'Failed':
-      return 'failed'
     case 'declined':
-    case 'Declined':
+    case 'cancelled':
+    case 'canceled':
+    case 'aborted':
+    case 'interrupted':
       return 'failed'
-    case 'inProgress':
-    case 'InProgress':
+    case 'inprogress':
+    case 'in_progress':
+    case 'in-progress':
+    case 'running':
+    case 'open':
       return 'inProgress'
+    case 'pending':
+    case 'queued':
+      return 'pending'
     default:
       return 'completed'
   }
@@ -879,7 +893,78 @@ function getFocusedThreadState(state: ThreadState): SingleThreadState | undefine
 
 // ==================== Store ====================
 
-export const useThreadStore = create<ThreadState>((set, get) => ({
+export const useThreadStore = create<ThreadState>((set, get) => {
+  const enqueueQueuedMessage = (threadId: string, message: QueuedMessage) => {
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            queuedMessages: [...threadState.queuedMessages, message],
+          },
+        },
+      }
+    })
+  }
+
+  const dequeueQueuedMessage = (threadId: string): QueuedMessage | null => {
+    const threadState = get().threads[threadId]
+    if (!threadState || threadState.queuedMessages.length === 0) return null
+    const nextMessage = threadState.queuedMessages[0]
+
+    set((state) => {
+      const currentThread = state.threads[threadId]
+      if (!currentThread) return state
+      if (currentThread.queuedMessages[0]?.id !== nextMessage.id) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...currentThread,
+            queuedMessages: currentThread.queuedMessages.slice(1),
+          },
+        },
+      }
+    })
+
+    return nextMessage
+  }
+
+  const requeueMessageFront = (threadId: string, message: QueuedMessage) => {
+    set((state) => {
+      const threadState = state.threads[threadId]
+      if (!threadState) return state
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadState,
+            queuedMessages: [message, ...threadState.queuedMessages],
+          },
+        },
+      }
+    })
+  }
+
+  const dispatchNextQueuedMessage = async (threadId: string) => {
+    const threadState = get().threads[threadId]
+    if (!threadState || threadState.turnStatus === 'running') return
+
+    const nextMessage = dequeueQueuedMessage(threadId)
+    if (!nextMessage) return
+
+    try {
+      await get().sendMessage(nextMessage.text, nextMessage.images, nextMessage.skills, threadId)
+    } catch (error) {
+      requeueMessageFront(threadId, nextMessage)
+      throw error
+    }
+  }
+
+  return {
   // Multi-thread state
   threads: {},
   focusedThreadId: null,
@@ -1156,6 +1241,12 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         globalError: null,
       }))
 
+      // Sync session status to 'idle' after successful resume
+      // This ensures the UI reflects the correct state (not stale 'running' from previous session)
+      import('../stores/sessions').then(({ useSessionsStore }) => {
+        useSessionsStore.getState().updateSessionStatus(response.thread.id, 'idle')
+      }).catch(console.error)
+
       console.log('[resumeThread] Resume completed, activeThread.id:', response.thread.id)
     } catch (error) {
       console.error('[resumeThread] Resume failed:', error)
@@ -1169,39 +1260,32 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     }
   },
 
-  sendMessage: async (text, images, skills) => {
+  sendMessage: async (text, images, skills, threadIdOverride) => {
     const { focusedThreadId, threads } = get()
-    if (!focusedThreadId || !threads[focusedThreadId]) {
+    const threadId = threadIdOverride ?? focusedThreadId
+    if (!threadId || !threads[threadId]) {
       throw new Error('No active thread')
     }
 
-    const threadState = threads[focusedThreadId]
-    const threadId = focusedThreadId
+    const threadState = threads[threadId]
 
-    // Track queued message if turn is already running
-    const isQueued = threadState.turnStatus === 'running'
-    const queuedMsgId = isQueued ? `queued-${Date.now()}` : null
-    if (isQueued && queuedMsgId) {
-      console.log('[sendMessage] Turn already running, tracking queued message')
+    // Queue messages if a turn is running or if backlog exists
+    if (threadState.turnStatus === 'running' || threadState.queuedMessages.length > 0) {
+      console.log('[sendMessage] Turn already running or backlog exists, queueing message')
       const queuedMsg: QueuedMessage = {
-        id: queuedMsgId,
+        id: `queued-${Date.now()}`,
         text,
         images,
+        skills,
         queuedAt: Date.now(),
       }
-      set((state) => {
-        const threadState = state.threads[threadId]
-        if (!threadState) return state
-        return {
-          threads: {
-            ...state.threads,
-            [threadId]: {
-              ...threadState,
-              queuedMessages: [...threadState.queuedMessages, queuedMsg],
-            },
-          },
-        }
-      })
+      enqueueQueuedMessage(threadId, queuedMsg)
+      if (threadState.turnStatus !== 'running') {
+        queueMicrotask(() => {
+          void dispatchNextQueuedMessage(threadId)
+        })
+      }
+      return
     }
 
     console.log('[sendMessage] Sending message to thread:', threadId)
@@ -1227,9 +1311,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
             items: { ...threadState.items, [userMessageId]: userMessage },
             itemOrder: [...threadState.itemOrder, userMessageId],
             turnStatus: 'running',
-            queuedMessages: queuedMsgId
-              ? threadState.queuedMessages.filter((m) => m.id !== queuedMsgId)
-              : threadState.queuedMessages,
           },
         },
       }
@@ -1354,7 +1435,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
               ...threadState,
               currentTurnId: null,
               pendingApprovals: [],
-              queuedMessages: [],
               turnTiming: {
                 ...threadState.turnTiming,
                 completedAt: Date.now(),
@@ -1444,7 +1524,10 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         const item = threadState.items[itemId]
         if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
           const content = item.content as Record<string, unknown>
-          const isApproved = decision !== 'decline'
+          const isApproved =
+            decision === 'accept' ||
+            decision === 'acceptForSession' ||
+            decision === 'acceptWithExecpolicyAmendment'
 
           const extraFields =
             item.type === 'fileChange' && isApproved
@@ -1809,6 +1892,24 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       status: 'inProgress',
     } as AnyThreadItem
 
+    // If this is a user message, try to set it as the session's first message
+    // Note: setSessionFirstMessage internally checks if firstMessage is already set,
+    // but we also check here to avoid unnecessary async imports and store lookups
+    if (inProgressItem.type === 'userMessage') {
+      const userMsg = inProgressItem as UserMessageItem
+      if (userMsg.content.text) {
+        import('../stores/sessions').then(({ useSessionsStore }) => {
+          const sessionsStore = useSessionsStore.getState()
+          const session = sessionsStore.sessions.find((s) => s.sessionId === threadId)
+          // Only set firstMessage if the session exists and doesn't already have one
+          // This prevents race conditions when multiple messages are sent quickly
+          if (session && !session.firstMessage) {
+            sessionsStore.setSessionFirstMessage(threadId, userMsg.content.text)
+          }
+        }).catch(console.error)
+      }
+    }
+
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
@@ -2062,6 +2163,11 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
     clearTurnTimeout(threadId)
 
+    // Sync session status to 'running'
+    import('../stores/sessions').then(({ useSessionsStore }) => {
+      useSessionsStore.getState().updateSessionStatus(threadId, 'running')
+    }).catch(console.error)
+
     // Set turn timeout for this specific thread
     const turnId = event.turn.id
     const timeoutTimer = setTimeout(() => {
@@ -2070,6 +2176,10 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       if (threadState?.currentTurnId === turnId && threadState?.turnStatus === 'running') {
         console.error('[handleTurnStarted] Turn timeout - no completion received for turnId:', turnId)
         performFullTurnCleanup(threadId)
+        // Sync session status to 'failed' on timeout
+        import('../stores/sessions').then(({ useSessionsStore }) => {
+          useSessionsStore.getState().updateSessionStatus(threadId, 'failed')
+        }).catch(console.error)
         useThreadStore.setState((state) => {
           const threadState = state.threads[threadId]
           if (!threadState) return state
@@ -2082,7 +2192,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
                 error: 'Turn timed out - server may have disconnected',
                 currentTurnId: null,
                 pendingApprovals: [],
-                queuedMessages: [],
                 turnTiming: {
                   ...threadState.turnTiming,
                   completedAt: Date.now(),
@@ -2141,6 +2250,14 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         ? 'interrupted'
         : 'completed'
 
+    // Sync session status based on turn result
+    import('../stores/sessions').then(({ useSessionsStore }) => {
+      const sessionStatus = nextTurnStatus === 'failed' ? 'failed'
+        : nextTurnStatus === 'interrupted' ? 'interrupted'
+        : 'completed'
+      useSessionsStore.getState().updateSessionStatus(threadId, sessionStatus)
+    }).catch(console.error)
+
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
@@ -2169,7 +2286,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
             currentTurnId: null,
             error: event.turn.error?.message || null,
             pendingApprovals: [],
-            queuedMessages: [],
             turnTiming: {
               ...threadState.turnTiming,
               completedAt: Date.now(),
@@ -2178,6 +2294,12 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         },
       }
     })
+
+    if (nextTurnStatus === 'completed' || nextTurnStatus === 'interrupted') {
+      queueMicrotask(() => {
+        void dispatchNextQueuedMessage(threadId)
+      })
+    }
   },
 
   handleTurnDiffUpdated: (event) => {
@@ -2477,7 +2599,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
             error: errorMessage,
             currentTurnId: null,
             pendingApprovals: [],
-            queuedMessages: [],
             turnTiming: {
               ...threadState.turnTiming,
               completedAt: Date.now(),
@@ -2508,7 +2629,6 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
             error: 'Server disconnected. Please try again.',
             currentTurnId: null,
             pendingApprovals: [],
-            queuedMessages: [],
             turnTiming: {
               ...threadState.turnTiming,
               completedAt: Date.now(),
@@ -2574,4 +2694,5 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       console.error('Failed to fetch snapshots:', error)
     }
   },
-}))
+  }
+})

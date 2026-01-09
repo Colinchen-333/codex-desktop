@@ -11,6 +11,15 @@ export interface Project {
   settingsJson: string | null
 }
 
+// Session status types for agent state tracking
+export type SessionStatus = 'idle' | 'running' | 'completed' | 'failed' | 'interrupted'
+
+// Task item for progress tracking
+export interface TaskItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
 export interface SessionMetadata {
   sessionId: string
   projectId: string
@@ -18,8 +27,20 @@ export interface SessionMetadata {
   tags: string | null
   isFavorite: boolean
   isArchived: boolean
+  /**
+   * Last accessed timestamp in Unix seconds (from SQLite).
+   * Use normalizeTimestampToMs() for JavaScript Date operations.
+   */
   lastAccessedAt: number | null
+  /**
+   * Creation timestamp in Unix seconds (from SQLite).
+   * Use normalizeTimestampToMs() for JavaScript Date operations.
+   */
   createdAt: number
+  // New fields for multi-agent management
+  status: SessionStatus
+  firstMessage: string | null
+  tasksJson: string | null
 }
 
 export interface GitInfo {
@@ -308,7 +329,10 @@ export const sessionApi = {
     title?: string,
     tags?: string[],
     isFavorite?: boolean,
-    isArchived?: boolean
+    isArchived?: boolean,
+    status?: SessionStatus,
+    firstMessage?: string,
+    tasksJson?: string
   ) =>
     invoke<SessionMetadata>('update_session_metadata', {
       sessionId,
@@ -316,6 +340,9 @@ export const sessionApi = {
       tags,
       isFavorite,
       isArchived,
+      status,
+      firstMessage,
+      tasksJson,
     }),
 
   delete: (sessionId: string) =>
@@ -323,6 +350,18 @@ export const sessionApi = {
 
   search: (query: string, tagsFilter?: string[], favoritesOnly?: boolean) =>
     invoke<SessionMetadata[]>('search_sessions', { query, tagsFilter, favoritesOnly }),
+
+  // Lightweight status update
+  updateStatus: (sessionId: string, status: SessionStatus) =>
+    invoke<void>('update_session_status', { sessionId, status }),
+
+  // Set first message (only if not already set)
+  setFirstMessage: (sessionId: string, firstMessage: string) =>
+    invoke<void>('set_session_first_message', { sessionId, firstMessage }),
+
+  // Update tasks for progress tracking
+  updateTasks: (sessionId: string, tasks: TaskItem[]) =>
+    invoke<void>('update_session_tasks', { sessionId, tasksJson: JSON.stringify(tasks) }),
 }
 
 // ==================== Thread API ====================

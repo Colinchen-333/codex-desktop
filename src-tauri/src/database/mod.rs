@@ -57,7 +57,10 @@ impl Database {
                 is_favorite INTEGER NOT NULL DEFAULT 0,
                 is_archived INTEGER NOT NULL DEFAULT 0,
                 last_accessed_at INTEGER,
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                status TEXT NOT NULL DEFAULT 'idle',
+                first_message TEXT,
+                tasks_json TEXT
             );
 
             -- Snapshots for revert functionality
@@ -82,10 +85,37 @@ impl Database {
                 ON session_metadata(project_id);
             CREATE INDEX IF NOT EXISTS idx_session_metadata_last_accessed
                 ON session_metadata(last_accessed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_session_metadata_status
+                ON session_metadata(status);
             CREATE INDEX IF NOT EXISTS idx_snapshots_session
                 ON snapshots(session_id);
             "#,
         )?;
+
+        // Run migrations for existing databases
+        Self::run_migrations(conn)?;
+
+        Ok(())
+    }
+
+    /// Run database migrations to add new columns to existing tables
+    fn run_migrations(conn: &Connection) -> Result<()> {
+        // Check if status column exists in session_metadata
+        let has_status: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('session_metadata') WHERE name = 'status'")?
+            .exists([])?;
+
+        if !has_status {
+            // Add new columns for session status tracking
+            conn.execute_batch(
+                r#"
+                ALTER TABLE session_metadata ADD COLUMN status TEXT NOT NULL DEFAULT 'idle';
+                ALTER TABLE session_metadata ADD COLUMN first_message TEXT;
+                ALTER TABLE session_metadata ADD COLUMN tasks_json TEXT;
+                CREATE INDEX IF NOT EXISTS idx_session_metadata_status ON session_metadata(status);
+                "#,
+            )?;
+        }
 
         Ok(())
     }
@@ -181,14 +211,17 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             r#"INSERT INTO session_metadata
-               (session_id, project_id, title, tags, is_favorite, is_archived, last_accessed_at, created_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+               (session_id, project_id, title, tags, is_favorite, is_archived, last_accessed_at, created_at, status, first_message, tasks_json)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                ON CONFLICT(session_id) DO UPDATE SET
                    title = excluded.title,
                    tags = excluded.tags,
                    is_favorite = excluded.is_favorite,
                    is_archived = excluded.is_archived,
-                   last_accessed_at = excluded.last_accessed_at"#,
+                   last_accessed_at = excluded.last_accessed_at,
+                   status = excluded.status,
+                   first_message = COALESCE(session_metadata.first_message, excluded.first_message),
+                   tasks_json = excluded.tasks_json"#,
             params![
                 metadata.session_id,
                 metadata.project_id,
@@ -198,6 +231,9 @@ impl Database {
                 metadata.is_archived,
                 metadata.last_accessed_at,
                 metadata.created_at,
+                metadata.status.as_str(),
+                metadata.first_message,
+                metadata.tasks_json,
             ],
         )?;
         Ok(())
@@ -208,7 +244,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"SELECT session_id, project_id, title, tags, is_favorite, is_archived,
-                      last_accessed_at, created_at
+                      last_accessed_at, created_at, status, first_message, tasks_json
                FROM session_metadata
                WHERE project_id = ?1 AND is_archived = 0
                ORDER BY last_accessed_at DESC NULLS LAST"#,
@@ -216,6 +252,7 @@ impl Database {
 
         let sessions = stmt
             .query_map(params![project_id], |row| {
+                let status_str: String = row.get::<_, Option<String>>(8)?.unwrap_or_else(|| "idle".to_string());
                 Ok(SessionMetadata {
                     session_id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -225,11 +262,44 @@ impl Database {
                     is_archived: row.get(5)?,
                     last_accessed_at: row.get(6)?,
                     created_at: row.get(7)?,
+                    status: SessionStatus::from_str(&status_str),
+                    first_message: row.get(9)?,
+                    tasks_json: row.get(10)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(sessions)
+    }
+
+    /// Update session status
+    pub fn update_session_status(&self, session_id: &str, status: &SessionStatus) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            r#"UPDATE session_metadata SET status = ?1, last_accessed_at = strftime('%s', 'now') WHERE session_id = ?2"#,
+            params![status.as_str(), session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update session first message (only if not already set)
+    pub fn update_session_first_message(&self, session_id: &str, first_message: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            r#"UPDATE session_metadata SET first_message = ?1 WHERE session_id = ?2 AND first_message IS NULL"#,
+            params![first_message, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update session tasks
+    pub fn update_session_tasks(&self, session_id: &str, tasks_json: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            r#"UPDATE session_metadata SET tasks_json = ?1, last_accessed_at = strftime('%s', 'now') WHERE session_id = ?2"#,
+            params![tasks_json, session_id],
+        )?;
+        Ok(())
     }
 
     /// Delete session metadata
