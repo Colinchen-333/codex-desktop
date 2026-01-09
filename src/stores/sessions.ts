@@ -149,7 +149,13 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
 
   // Update tasks for progress tracking
   updateSessionTasks: async (sessionId: string, tasks: TaskItem[]) => {
-    const tasksJson = JSON.stringify(tasks)
+    let tasksJson: string
+    try {
+      tasksJson = JSON.stringify(tasks)
+    } catch (e) {
+      console.error('Failed to serialize tasks:', e)
+      tasksJson = '[]'
+    }
     // Optimistic update
     set((state) => ({
       sessions: state.sessions.map((s) =>

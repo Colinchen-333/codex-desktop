@@ -134,20 +134,30 @@ function clearTurnTimeout(threadId: string) {
   }
 }
 
-// Calculate buffer size for overflow detection
+// Calculate buffer size in bytes for overflow detection
+// Uses conservative estimate: ASCII=1 byte, non-ASCII=2 bytes (actual UTF-8 can be 1-4)
 function getBufferSize(buffer: DeltaBuffer): number {
+  const estimateBytes = (text: string): number => {
+    let bytes = 0
+    for (let i = 0; i < text.length; i++) {
+      // ASCII characters (0-127) take 1 byte, others take 2+ bytes
+      bytes += text.charCodeAt(i) < 128 ? 1 : 2
+    }
+    return bytes
+  }
+
   let size = 0
-  buffer.agentMessages.forEach((text) => { size += text.length })
-  buffer.commandOutputs.forEach((text) => { size += text.length })
-  buffer.fileChangeOutputs.forEach((text) => { size += text.length })
+  buffer.agentMessages.forEach((text) => { size += estimateBytes(text) })
+  buffer.commandOutputs.forEach((text) => { size += estimateBytes(text) })
+  buffer.fileChangeOutputs.forEach((text) => { size += estimateBytes(text) })
   buffer.reasoningSummaries.forEach((arr) => {
-    arr.forEach((item) => { size += item.text.length })
+    arr.forEach((item) => { size += estimateBytes(item.text) })
   })
   buffer.reasoningContents.forEach((arr) => {
-    arr.forEach((item) => { size += item.text.length })
+    arr.forEach((item) => { size += estimateBytes(item.text) })
   })
   buffer.mcpProgress.forEach((arr) => {
-    arr.forEach((msg) => { size += msg.length })
+    arr.forEach((msg) => { size += estimateBytes(msg) })
   })
   return size
 }
@@ -2588,7 +2598,14 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
     const errorInfo =
       event.error.codexErrorInfo && typeof event.error.codexErrorInfo === 'object'
-        ? JSON.stringify(event.error.codexErrorInfo)
+        ? (() => {
+            try {
+              return JSON.stringify(event.error.codexErrorInfo)
+            } catch (e) {
+              console.error('[handleStreamError] Failed to serialize codexErrorInfo:', e)
+              return '[Serialization failed]'
+            }
+          })()
         : event.error.codexErrorInfo
     const errorItem: ErrorItem = {
       id: `error-${Date.now()}`,

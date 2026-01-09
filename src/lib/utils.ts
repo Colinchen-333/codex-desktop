@@ -71,8 +71,8 @@ export function formatRelativeTime(timestamp: number): string {
  *                    (Backend API returns seconds, JS Date expects milliseconds)
  */
 export function formatAbsoluteTime(timestamp: number): string {
-  // Handle invalid timestamps
-  if (!timestamp || timestamp <= 0) {
+  // Handle invalid timestamps (explicitly check for null/undefined/negative, allow 0)
+  if (timestamp == null || timestamp < 0) {
     return ''
   }
 
@@ -110,8 +110,8 @@ export function formatAbsoluteTime(timestamp: number): string {
  *                    (Backend API returns seconds, JS Date expects milliseconds)
  */
 export function formatSessionTime(timestamp: number): string {
-  // Handle invalid timestamps
-  if (!timestamp || timestamp <= 0) {
+  // Handle invalid timestamps (explicitly check for null/undefined/negative, allow 0)
+  if (timestamp == null || timestamp < 0) {
     return ''
   }
 

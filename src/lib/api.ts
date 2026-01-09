@@ -385,8 +385,15 @@ export const sessionApi = {
     invoke<void>('set_session_first_message', { sessionId, firstMessage }),
 
   // Update tasks for progress tracking
-  updateTasks: (sessionId: string, tasks: TaskItem[]) =>
-    invoke<void>('update_session_tasks', { sessionId, tasksJson: JSON.stringify(tasks) }),
+  updateTasks: (sessionId: string, tasks: TaskItem[]) => {
+    try {
+      const tasksJson = JSON.stringify(tasks)
+      return invoke<void>('update_session_tasks', { sessionId, tasksJson })
+    } catch (e) {
+      console.error('Failed to serialize tasks:', e)
+      return invoke<void>('update_session_tasks', { sessionId, tasksJson: '[]' })
+    }
+  },
 }
 
 // ==================== Thread API ====================
