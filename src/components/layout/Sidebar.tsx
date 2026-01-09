@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
+import { Star, X } from 'lucide-react'
 import { cn, formatAbsoluteTime } from '../../lib/utils'
 import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
@@ -265,7 +266,7 @@ export function Sidebar() {
       <div className="flex mb-4 rounded-lg bg-secondary/50 p-1">
         <button
           className={cn(
-            'flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all',
+            'flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
             activeTab === 'projects'
               ? 'bg-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
@@ -276,7 +277,7 @@ export function Sidebar() {
         </button>
         <button
           className={cn(
-            'flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all',
+            'flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
             activeTab === 'sessions'
               ? 'bg-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground'
@@ -294,29 +295,29 @@ export function Sidebar() {
             <input
               type="text"
               placeholder="Search all sessions..."
-              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none pr-8"
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none pr-8"
               value={localSearchQuery}
               onChange={(e) => handleSearchChange(e.target.value)}
             />
             {isSearching && (
-              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+              <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               </div>
             )}
             {localSearchQuery && !isSearching && (
               <button
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
                 onClick={() => {
                   setLocalSearchQuery('')
                   useSessionsStore.getState().clearSearch()
                 }}
               >
-                ✕
+                <X size={14} />
               </button>
             )}
           </div>
           {isGlobalSearch && searchResults.length > 0 && (
-            <div className="mt-1 text-xs text-muted-foreground">
+            <div className="mt-1.5 text-xs text-muted-foreground">
               Found {searchResults.length} session(s) across all projects
             </div>
           )}
@@ -365,7 +366,7 @@ export function Sidebar() {
       {/* Add Button */}
       <div className="mt-2 pt-2">
         <button
-          className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 shadow-sm"
+          className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 active:bg-primary/80 disabled:opacity-50 shadow-sm transition-colors"
           onClick={activeTab === 'projects' ? handleAddProject : handleNewSession}
           disabled={activeTab === 'sessions' && !selectedProjectId}
         >
@@ -472,7 +473,7 @@ function ProjectList({ projects, selectedId, onSelect, onRename, onDelete, onSet
           <ContextMenu key={project.id} items={contextMenuItems}>
             <button
               className={cn(
-                'w-full rounded-md px-3 py-2 text-left transition-all mb-1',
+                'w-full rounded-lg px-3 py-2.5 text-left transition-all mb-1',
                 selectedId === project.id
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
@@ -634,7 +635,7 @@ function SessionList({
               {/* First row: Status icon + Session name */}
               <div className="flex items-center gap-2">
                 <StatusIcon status={session.status} />
-                {session.isFavorite && <span className="text-yellow-500 flex-shrink-0 text-xs">★</span>}
+                {session.isFavorite && <Star size={12} className="text-yellow-500 flex-shrink-0 fill-yellow-500" />}
                 <span className="truncate text-sm font-medium flex-1">
                   {displayName}
                 </span>

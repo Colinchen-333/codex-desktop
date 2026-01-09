@@ -53,8 +53,8 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
       <div className="flex h-[600px] w-full max-w-4xl overflow-hidden rounded-[2rem] bg-card shadow-2xl border border-border/50 animate-in zoom-in-95 duration-300">
         
         {/* Sidebar */}
-        <div className="w-60 bg-secondary/30 p-4 border-r border-border/50 flex flex-col gap-1">
-          <div className="mb-6 px-4 py-2">
+        <div className="w-60 bg-secondary/30 p-6 border-r border-border/50 flex flex-col gap-1">
+          <div className="mb-6 px-2 py-2">
             <h2 className="text-xl font-bold tracking-tight">Settings</h2>
           </div>
           
@@ -70,7 +70,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
               <button
                 key={tab.id}
                 className={cn(
-                  'group flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium transition-all',
+                  'group flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-medium transition-all',
                   activeTab === tab.id
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'
@@ -78,12 +78,12 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 onClick={() => setSettingsTab(tab.id)}
               >
                 <Icon size={18} className={cn(
-                  'transition-colors',
+                  'flex-shrink-0 transition-colors',
                   activeTab === tab.id ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'
                 )} />
                 <span className="flex-1">{tab.label}</span>
                 {activeTab === tab.id && (
-                  <ChevronRight size={14} className="text-muted-foreground" />
+                  <ChevronRight size={14} className="flex-shrink-0 text-foreground/60" />
                 )}
               </button>
             )
@@ -92,7 +92,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
 
         {/* Content Area */}
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 overflow-y-auto p-8">
+          <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-2xl mx-auto">
               {activeTab === 'general' && <GeneralSettings />}
               {activeTab === 'model' && (
@@ -115,9 +115,9 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           </div>
 
           {/* Footer */}
-          <div className="flex justify-end gap-3 border-t border-border/50 bg-background/50 p-6 backdrop-blur-sm">
+          <div className="flex justify-end gap-3 border-t border-border/50 bg-background/50 px-6 py-4 backdrop-blur-sm">
             <button
-              className="rounded-xl px-6 py-2.5 text-sm font-medium text-muted-foreground hover:bg-secondary transition-colors"
+              className="rounded-lg px-6 py-2.5 text-sm font-medium text-muted-foreground hover:bg-secondary transition-colors"
               onClick={onClose}
             >
               Close

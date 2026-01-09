@@ -202,22 +202,22 @@ export function StatusBar() {
 
   return (
     <>
-      <div className="flex h-9 items-center justify-between border-t border-border/40 bg-card/50 backdrop-blur-md px-4 text-[11px] font-medium tracking-tight text-muted-foreground/80">
+      <div className="flex h-9 items-center justify-between border-t border-border/40 bg-card/50 backdrop-blur-md px-4 text-xs font-medium tracking-tight text-muted-foreground/80">
         {/* Left side - Server status */}
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-2">
-            <div className="relative flex h-2 w-2">
+            <div className="relative flex h-2.5 w-2.5">
               {serverStatus?.isRunning && (
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
               )}
               <span
                 className={cn(
-                  'relative inline-flex h-2 w-2 rounded-full',
+                  'relative inline-flex h-2.5 w-2.5 rounded-full',
                   serverStatus?.isRunning ? 'bg-green-500' : 'bg-red-500'
                 )}
               />
             </div>
-            <span className="flex items-center gap-1.5 uppercase tracking-widest text-[10px]">
+            <span className="flex items-center gap-1.5 uppercase tracking-widest text-xs">
               <Activity size={12} strokeWidth={2.5} />
               Engine: {serverStatus?.isRunning ? 'Running' : 'Stopped'}
             </span>
@@ -225,7 +225,7 @@ export function StatusBar() {
 
           {!serverStatus?.isRunning && (
             <button
-              className="text-primary hover:text-primary/80 transition-colors uppercase tracking-widest text-[10px] font-bold"
+              className="text-primary hover:text-primary/80 transition-colors uppercase tracking-widest text-xs font-bold"
               onClick={handleRestartServer}
             >
               Restart
@@ -236,9 +236,9 @@ export function StatusBar() {
           {gitInfo?.isGitRepo && gitInfo.branch && (
             <div className="flex items-center gap-1.5 text-muted-foreground/70">
               <GitBranch size={12} />
-              <span className="text-[10px] max-w-[80px] truncate">{gitInfo.branch}</span>
+              <span className="text-xs max-w-[80px] truncate">{gitInfo.branch}</span>
               {gitInfo.isDirty && (
-                <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" title="Uncommitted changes" />
+                <span className="h-2 w-2 rounded-full bg-yellow-500" title="Uncommitted changes" />
               )}
             </div>
           )}
@@ -247,35 +247,35 @@ export function StatusBar() {
           {turnStatus === 'running' && (
             <div className="flex items-center gap-2 text-blue-500">
               {/* Shimmer effect spinner */}
-              <span className="relative flex h-2 w-2">
+              <span className="relative flex h-2.5 w-2.5">
                 <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
               </span>
               {/* Shimmer text effect */}
-              <span className="uppercase tracking-widest text-[10px] font-medium shimmer-text">
+              <span className="uppercase tracking-widest text-xs font-medium shimmer-text">
                 Working
               </span>
               {/* Pending approvals badge */}
               {pendingApprovals.length > 0 && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 text-[9px] font-medium">
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400 text-xs font-medium">
                   {pendingApprovals.length} pending
                 </span>
               )}
               {/* Token rate */}
               {tokenRate > 0 && (
-                <span className="flex items-center gap-1 text-[9px] text-muted-foreground/70">
-                  <Zap size={9} />
+                <span className="flex items-center gap-1 text-xs text-muted-foreground/70">
+                  <Zap size={10} />
                   {tokenRate} tok/s
                 </span>
               )}
               {/* Elapsed time */}
-              <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                <Clock size={10} />
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Clock size={11} />
                 {formatElapsedCompact(elapsedMs)}
               </span>
               {/* Interrupt hint */}
-              <span className="text-[9px] text-muted-foreground/60">
-                • esc
+              <span className="text-xs text-muted-foreground/60">
+                esc
               </span>
             </div>
           )}
@@ -296,14 +296,14 @@ export function StatusBar() {
                 {accountInfo.account.planType && ` (${accountInfo.account.planType})`}
               </span>
             ) : (
-              <span className="text-yellow-600/80 uppercase tracking-widest text-[10px]">Auth Required</span>
+              <span className="text-yellow-600/80 uppercase tracking-widest text-xs">Auth Required</span>
             )}
           </div>
 
           <div className="flex items-center gap-1">
             {activeThread && (
               <button
-                className="hover:bg-primary/5 p-1.5 rounded-md transition-colors hover:text-foreground"
+                className="hover:bg-primary/10 h-7 w-7 flex items-center justify-center rounded-lg transition-colors hover:text-foreground"
                 onClick={() => setSnapshotsOpen(true)}
                 title="Snapshots"
               >
@@ -311,23 +311,23 @@ export function StatusBar() {
               </button>
             )}
             <button
-              className="hover:bg-primary/5 p-1.5 rounded-md transition-colors hover:text-foreground"
+              className="hover:bg-primary/10 h-7 w-7 flex items-center justify-center rounded-lg transition-colors hover:text-foreground"
               onClick={() => setHelpOpen(true)}
               title="Help"
             >
               <HelpCircle size={14} />
             </button>
             <button
-              className="hover:bg-primary/5 p-1.5 rounded-md transition-colors hover:text-foreground"
+              className="hover:bg-primary/10 h-7 w-7 flex items-center justify-center rounded-lg transition-colors hover:text-foreground"
               onClick={() => setAboutOpen(true)}
               title="About"
             >
               <Info size={14} />
             </button>
             <button
-              className="hover:bg-primary/5 p-1.5 rounded-md transition-colors hover:text-foreground"
+              className="hover:bg-primary/10 h-7 w-7 flex items-center justify-center rounded-lg transition-colors hover:text-foreground"
               onClick={() => setSettingsOpen(true)}
-              title="Settings (⌘,)"
+              title="Settings"
             >
               <Settings size={14} />
             </button>
@@ -377,7 +377,7 @@ function ContextWindowIndicator({ tokenUsage }: ContextWindowIndicatorProps) {
       <Coins size={12} className={getTextColor(remainingPercent)} />
 
       {/* CLI-style progress bar */}
-      <div className="relative w-20 h-1.5 bg-secondary rounded-full overflow-hidden">
+      <div className="relative w-20 h-1.5 bg-secondary rounded-lg overflow-hidden">
         <div
           className={cn('h-full transition-all duration-300', getColor(remainingPercent))}
           style={{ width: `${usagePercent}%` }}
@@ -385,13 +385,13 @@ function ContextWindowIndicator({ tokenUsage }: ContextWindowIndicatorProps) {
       </div>
 
       {/* Token count with remaining percentage */}
-      <span className={cn('text-[10px] tabular-nums', getTextColor(remainingPercent))}>
+      <span className={cn('text-xs tabular-nums', getTextColor(remainingPercent))}>
         {formatTokenCount(tokenUsage.totalTokens)}
         <span className="text-muted-foreground/50 mx-0.5">/</span>
         {formatTokenCount(contextWindow)}
         {cachePercent > 0 && (
           <span className="text-green-500/70 ml-1">
-            ({cachePercent}%↓)
+            ({cachePercent}%)
           </span>
         )}
       </span>
