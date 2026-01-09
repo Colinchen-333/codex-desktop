@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { projectApi, type Project, type GitInfo } from '../lib/api'
+import { parseError } from '../lib/errorUtils'
 
 interface ProjectsState {
   projects: Project[]
@@ -30,7 +31,7 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
       const projects = await projectApi.list()
       set({ projects, isLoading: false })
     } catch (error) {
-      set({ error: String(error), isLoading: false })
+      set({ error: parseError(error), isLoading: false })
     }
   },
 
@@ -44,7 +45,7 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
       }))
       return project
     } catch (error) {
-      set({ error: String(error), isLoading: false })
+      set({ error: parseError(error), isLoading: false })
       throw error
     }
   },
@@ -58,7 +59,7 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
           state.selectedProjectId === id ? null : state.selectedProjectId,
       }))
     } catch (error) {
-      set({ error: String(error) })
+      set({ error: parseError(error) })
       throw error
     }
   },
@@ -70,7 +71,7 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
         projects: state.projects.map((p) => (p.id === id ? updated : p)),
       }))
     } catch (error) {
-      set({ error: String(error) })
+      set({ error: parseError(error) })
       throw error
     }
   },

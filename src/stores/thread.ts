@@ -677,7 +677,8 @@ function toThreadItem(item: { id: string; type: string } & Record<string, unknow
     id: item.id,
     type: mapItemType(item.type),
     status: normalizeStatus(item.status as string | undefined),
-    createdAt: Date.now(),
+    // Preserve original timestamp from backend if available, otherwise use current time
+    createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
   }
 
   switch (item.type) {
@@ -1261,6 +1262,8 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       // Sync session status to 'idle' after successful resume
       // This ensures the UI reflects the correct state (not stale 'running' from previous session)
       import('../stores/sessions').then(({ useSessionsStore }) => {
+        // Check thread still exists to prevent race condition with closeThread
+        if (!useThreadStore.getState().threads[response.thread.id]) return
         useSessionsStore.getState().updateSessionStatus(response.thread.id, 'idle')
       }).catch((err) => handleAsyncError(err, 'resumeThread session sync', 'thread'))
 
@@ -1401,7 +1404,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
                 items: newItems,
                 itemOrder: threadState.itemOrder.filter((id) => id !== userMessageId),
                 turnStatus: 'failed',
-                error: String(error),
+                error: parseError(error),
               },
             },
           }
@@ -1916,6 +1919,8 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       const userMsg = inProgressItem as UserMessageItem
       if (userMsg.content.text) {
         import('../stores/sessions').then(({ useSessionsStore }) => {
+          // Check thread still exists to prevent race condition with closeThread
+          if (!useThreadStore.getState().threads[threadId]) return
           const sessionsStore = useSessionsStore.getState()
           const session = sessionsStore.sessions.find((s) => s.sessionId === threadId)
           // Only set firstMessage if the session exists and doesn't already have one
@@ -2185,6 +2190,8 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
     // Sync session status to 'running'
     import('../stores/sessions').then(({ useSessionsStore }) => {
+      // Check thread still exists to prevent race condition with closeThread
+      if (!useThreadStore.getState().threads[threadId]) return
       useSessionsStore.getState().updateSessionStatus(threadId, 'running')
     }).catch((err) => handleAsyncError(err, 'handleTurnStarted session sync', 'thread'))
 
@@ -2198,6 +2205,8 @@ export const useThreadStore = create<ThreadState>((set, get) => {
         performFullTurnCleanup(threadId)
         // Sync session status to 'failed' on timeout
         import('../stores/sessions').then(({ useSessionsStore }) => {
+          // Check thread still exists and not being closed
+          if (!useThreadStore.getState().threads[threadId] || closingThreads.has(threadId)) return
           useSessionsStore.getState().updateSessionStatus(threadId, 'failed')
         }).catch((err) => handleAsyncError(err, 'handleTurnStarted timeout session sync', 'thread'))
         useThreadStore.setState((state) => {
@@ -2272,6 +2281,8 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
     // Sync session status based on turn result
     import('../stores/sessions').then(({ useSessionsStore }) => {
+      // Check thread still exists to prevent race condition with closeThread
+      if (!useThreadStore.getState().threads[threadId]) return
       const sessionStatus = nextTurnStatus === 'failed' ? 'failed'
         : nextTurnStatus === 'interrupted' ? 'interrupted'
         : 'completed'

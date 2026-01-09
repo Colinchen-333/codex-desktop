@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { sessionApi, type SessionMetadata, type SessionStatus, type TaskItem } from '../lib/api'
+import { parseError } from '../lib/errorUtils'
 
 interface SessionsState {
   sessions: SessionMetadata[]
@@ -58,7 +59,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       const sessions = await sessionApi.list(projectId)
       set({ sessions, isLoading: false })
     } catch (error) {
-      set({ error: String(error), isLoading: false })
+      set({ error: parseError(error), isLoading: false })
     }
   },
 
@@ -85,7 +86,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         ),
       }))
     } catch (error) {
-      set({ error: String(error) })
+      set({ error: parseError(error) })
       throw error
     }
   },
@@ -99,7 +100,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
           state.selectedSessionId === sessionId ? null : state.selectedSessionId,
       }))
     } catch (error) {
-      set({ error: String(error) })
+      set({ error: parseError(error) })
       throw error
     }
   },
@@ -123,7 +124,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     } catch (error) {
       // Revert on error
       console.error('Failed to update session status:', error)
-      set({ error: String(error) })
+      set({ error: parseError(error) })
     }
   },
 
@@ -173,7 +174,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
       const results = await sessionApi.search(query, tagsFilter, favoritesOnly)
       set({ searchResults: results, isSearching: false })
     } catch (error) {
-      set({ error: String(error), isSearching: false })
+      set({ error: parseError(error), isSearching: false })
     }
   },
 
