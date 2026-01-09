@@ -7,9 +7,10 @@ import { useNeedsOnboarding } from './components/onboarding/useNeedsOnboarding'
 import { ToastProvider } from './components/ui/Toast'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { ConnectionStatus } from './components/ui/ConnectionStatus'
+import { GlobalErrorHandler } from './components/ui/GlobalErrorHandler'
 import { KeyboardShortcuts } from './components/KeyboardShortcuts'
 import { useProjectsStore } from './stores/projects'
-import { useThreadStore } from './stores/thread'
+import { useThreadStore, cleanupThreadResources } from './stores/thread'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
 
 function App() {
@@ -108,6 +109,8 @@ function App() {
       cleanupEventListeners(unlistenersRef.current)
       unlistenersRef.current = []
       listenersSetupRef.current = false
+      // Cleanup thread resources (timers, buffers) to prevent memory leaks
+      cleanupThreadResources()
     }
   }, []) // Empty deps - only run once
 
@@ -128,6 +131,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
+        <GlobalErrorHandler />
         <KeyboardShortcuts />
         <div className="flex h-screen w-screen overflow-hidden bg-background p-3 gap-3">
           {/* Left Sidebar */}

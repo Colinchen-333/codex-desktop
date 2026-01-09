@@ -1,7 +1,15 @@
+// React imports
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+
+// External library imports
 import { open } from '@tauri-apps/plugin-dialog'
 import { Star, X } from 'lucide-react'
+
+// Internal - utilities and types
 import { cn, formatAbsoluteTime } from '../../lib/utils'
+import type { SessionStatus } from '../../lib/api'
+
+// Internal - stores
 import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
 import { useAppStore } from '../../stores/app'
@@ -11,12 +19,15 @@ import {
   mergeProjectSettings,
   getEffectiveWorkingDirectory,
 } from '../../stores/settings'
+
+// Internal - UI components
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
 import { RenameDialog } from '../ui/RenameDialog'
-import { ProjectSettingsDialog } from '../dialogs/ProjectSettingsDialog'
 import { useToast } from '../ui/Toast'
 import { StatusIcon, getStatusLabel } from '../ui/StatusIndicator'
-import type { SessionStatus } from '../../lib/api'
+
+// Internal - dialogs
+import { ProjectSettingsDialog } from '../dialogs/ProjectSettingsDialog'
 
 export function Sidebar() {
   const { sidebarTab: activeTab, setSidebarTab: setActiveTab } = useAppStore()
@@ -298,9 +309,16 @@ export function Sidebar() {
               className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none pr-8"
               value={localSearchQuery}
               onChange={(e) => handleSearchChange(e.target.value)}
+              aria-label="Search sessions"
+              aria-describedby={isGlobalSearch && searchResults.length > 0 ? 'search-results-count' : undefined}
             />
             {isSearching && (
-              <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+              <div
+                className="absolute right-2.5 top-1/2 -translate-y-1/2"
+                role="status"
+                aria-busy="true"
+                aria-label="Searching"
+              >
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               </div>
             )}
@@ -311,13 +329,14 @@ export function Sidebar() {
                   setLocalSearchQuery('')
                   useSessionsStore.getState().clearSearch()
                 }}
+                aria-label="Clear search"
               >
                 <X size={14} />
               </button>
             )}
           </div>
           {isGlobalSearch && searchResults.length > 0 && (
-            <div className="mt-1.5 text-xs text-muted-foreground">
+            <div id="search-results-count" className="mt-1.5 text-xs text-muted-foreground" aria-live="polite">
               Found {searchResults.length} session(s) across all projects
             </div>
           )}
@@ -436,9 +455,10 @@ function ProjectList({ projects, selectedId, onSelect, onRename, onDelete, onSet
   }
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1" role="listbox" aria-label="Projects list">
       {projects.map((project) => {
         const displayName = project.displayName || project.path.split('/').pop() || 'Unknown'
+        const isSelected = selectedId === project.id
 
         const contextMenuItems: ContextMenuItem[] = [
           {
@@ -474,11 +494,13 @@ function ProjectList({ projects, selectedId, onSelect, onRename, onDelete, onSet
             <button
               className={cn(
                 'w-full rounded-lg px-3 py-2.5 text-left transition-all mb-1',
-                selectedId === project.id
+                isSelected
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
               )}
               onClick={() => onSelect(project.id)}
+              role="option"
+              aria-selected={isSelected}
             >
               <div className="truncate text-sm font-medium">{displayName}</div>
               <div className="truncate text-xs text-muted-foreground">
@@ -552,8 +574,13 @@ function SessionList({
 
   if (isLoading) {
     return (
-      <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-        <div className="animate-spin mr-2">
+      <div
+        className="flex h-32 items-center justify-center text-sm text-muted-foreground"
+        role="status"
+        aria-busy="true"
+        aria-label={isGlobalSearch ? 'Searching sessions' : 'Loading sessions'}
+      >
+        <div className="animate-spin mr-2" aria-hidden="true">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -591,13 +618,14 @@ function SessionList({
   }
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1" role="listbox" aria-label="Sessions list">
       {sortedSessions.map((session) => {
         const displayName = getSessionDisplayName(session)
         const timestamp = session.lastAccessedAt || session.createdAt
         const timeStr = formatAbsoluteTime(timestamp)
         const statusLabel = getStatusLabel(session.status)
         const isRunning = session.status === 'running'
+        const isSelected = selectedId === session.sessionId
         // Get project name for global search results display
         const projectName = isGlobalSearch ? getProjectName(session.projectId) : null
 
@@ -625,12 +653,14 @@ function SessionList({
             <button
               className={cn(
                 'w-full rounded-lg px-3 py-2.5 text-left transition-all mb-1',
-                selectedId === session.sessionId
+                isSelected
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-foreground hover:bg-secondary/50',
-                isRunning && selectedId !== session.sessionId && 'border border-blue-400/30 bg-blue-50/10 dark:bg-blue-950/20'
+                isRunning && !isSelected && 'border border-blue-400/30 bg-blue-50/10 dark:bg-blue-950/20'
               )}
               onClick={() => onSelect(session.sessionId, isGlobalSearch ? session.projectId : undefined)}
+              role="option"
+              aria-selected={isSelected}
             >
               {/* First row: Status icon + Session name */}
               <div className="flex items-center gap-2">
@@ -644,7 +674,7 @@ function SessionList({
               <div className="flex items-center gap-1.5 mt-1 text-xs">
                 <span className={cn(
                   'text-muted-foreground',
-                  selectedId === session.sessionId && 'text-primary-foreground/70'
+                  isSelected && 'text-primary-foreground/70'
                 )}>
                   {statusLabel}
                 </span>
@@ -652,13 +682,13 @@ function SessionList({
                   <>
                     <span className={cn(
                       'text-muted-foreground/60',
-                      selectedId === session.sessionId && 'text-primary-foreground/50'
+                      isSelected && 'text-primary-foreground/50'
                     )}>
                       ·
                     </span>
                     <span className={cn(
                       'text-muted-foreground',
-                      selectedId === session.sessionId && 'text-primary-foreground/70'
+                      isSelected && 'text-primary-foreground/70'
                     )}>
                       {timeStr}
                     </span>
@@ -669,13 +699,13 @@ function SessionList({
                   <>
                     <span className={cn(
                       'text-muted-foreground/60',
-                      selectedId === session.sessionId && 'text-primary-foreground/50'
+                      isSelected && 'text-primary-foreground/50'
                     )}>
                       ·
                     </span>
                     <span className={cn(
                       'px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground truncate max-w-[80px]',
-                      selectedId === session.sessionId && 'bg-primary-foreground/20 text-primary-foreground/80'
+                      isSelected && 'bg-primary-foreground/20 text-primary-foreground/80'
                     )}>
                       {projectName}
                     </span>

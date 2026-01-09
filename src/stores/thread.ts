@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { threadApi, snapshotApi, type ThreadInfo, type Snapshot, type SkillInput } from '../lib/api'
-import { parseError } from '../lib/errorUtils'
+import { parseError, handleAsyncError } from '../lib/errorUtils'
 import { useSettingsStore } from './settings'
 import {
   normalizeApprovalPolicy,
@@ -74,6 +74,10 @@ const flushTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
 // Per-thread turn timeout timers
 const turnTimeoutTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
 
+// Set of threads currently being closed - prevents race conditions
+// where delta events might recreate buffers during closeThread
+const closingThreads: Set<string> = new Set()
+
 // Global approval cleanup timer
 let approvalCleanupTimer: ReturnType<typeof setInterval> | null = null
 
@@ -90,7 +94,11 @@ function createEmptyDeltaBuffer(): DeltaBuffer {
   }
 }
 
-function getDeltaBuffer(threadId: string): DeltaBuffer {
+function getDeltaBuffer(threadId: string): DeltaBuffer | null {
+  // Check if thread is being closed - don't create new buffers for closing threads
+  if (closingThreads.has(threadId)) {
+    return null
+  }
   let buffer = deltaBuffers.get(threadId)
   if (!buffer) {
     buffer = createEmptyDeltaBuffer()
@@ -118,12 +126,6 @@ function clearDeltaBuffer(threadId: string) {
   }
 }
 
-// Reserved for future use - clears all delta buffers
-// function clearAllDeltaBuffers() {
-//   deltaBuffers.forEach((_, threadId) => clearDeltaBuffer(threadId))
-//   deltaBuffers.clear()
-// }
-
 function clearTurnTimeout(threadId: string) {
   const timer = turnTimeoutTimers.get(threadId)
   if (timer) {
@@ -131,12 +133,6 @@ function clearTurnTimeout(threadId: string) {
     turnTimeoutTimers.delete(threadId)
   }
 }
-
-// Reserved for future use - clears all turn timeouts
-// function clearAllTurnTimeouts() {
-//   turnTimeoutTimers.forEach((timer) => clearTimeout(timer))
-//   turnTimeoutTimers.clear()
-// }
 
 // Calculate buffer size for overflow detection
 function getBufferSize(buffer: DeltaBuffer): number {
@@ -159,6 +155,8 @@ function getBufferSize(buffer: DeltaBuffer): number {
 // Schedule a flush for a specific thread
 function scheduleFlush(threadId: string, flushFn: () => void, immediate = false) {
   const buffer = getDeltaBuffer(threadId)
+  // If buffer is null, thread is closing - don't schedule flush
+  if (!buffer) return
 
   // Check for buffer overflow - force flush if too large
   if (getBufferSize(buffer) > MAX_BUFFER_SIZE) {
@@ -283,6 +281,21 @@ function stopApprovalCleanupTimer() {
     clearInterval(approvalCleanupTimer)
     approvalCleanupTimer = null
   }
+}
+
+// Export cleanup function for App.tsx unmount cleanup
+// This prevents memory leaks when the app is unmounted
+export function cleanupThreadResources() {
+  stopApprovalCleanupTimer()
+  // Clear all delta buffers and timers
+  deltaBuffers.forEach((_, threadId) => {
+    clearDeltaBuffer(threadId)
+    clearTurnTimeout(threadId)
+  })
+  deltaBuffers.clear()
+  flushTimers.clear()
+  turnTimeoutTimers.clear()
+  closingThreads.clear()
 }
 
 // ==================== Thread Item Types ====================
@@ -880,11 +893,6 @@ function createEmptyThreadState(thread: ThreadInfo): SingleThreadState {
   }
 }
 
-// Helper to get thread state or return undefined (reserved for future use)
-// function getThreadState(state: ThreadState, threadId: string): SingleThreadState | undefined {
-//   return state.threads[threadId]
-// }
-
 // Helper to get focused thread state
 function getFocusedThreadState(state: ThreadState): SingleThreadState | undefined {
   if (!state.focusedThreadId) return undefined
@@ -1060,6 +1068,10 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       return
     }
 
+    // Mark thread as closing to prevent race conditions with delta events
+    // This prevents getDeltaBuffer from recreating buffers during cleanup
+    closingThreads.add(threadId)
+
     // Clean up thread-specific resources
     clearDeltaBuffer(threadId)
     clearTurnTimeout(threadId)
@@ -1085,6 +1097,11 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     if (Object.keys(updatedThreads).length === 0) {
       stopApprovalCleanupTimer()
     }
+
+    // Remove from closing set after a short delay to ensure all pending events are handled
+    setTimeout(() => {
+      closingThreads.delete(threadId)
+    }, 100)
   },
 
   closeAllThreads: () => {
@@ -1245,7 +1262,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       // This ensures the UI reflects the correct state (not stale 'running' from previous session)
       import('../stores/sessions').then(({ useSessionsStore }) => {
         useSessionsStore.getState().updateSessionStatus(response.thread.id, 'idle')
-      }).catch(console.error)
+      }).catch((err) => handleAsyncError(err, 'resumeThread session sync', 'thread'))
 
       console.log('[resumeThread] Resume completed, activeThread.id:', response.thread.id)
     } catch (error) {
@@ -1906,7 +1923,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
           if (session && !session.firstMessage) {
             sessionsStore.setSessionFirstMessage(threadId, userMsg.content.text)
           }
-        }).catch(console.error)
+        }).catch((err) => handleAsyncError(err, 'handleItemStarted session sync', 'thread'))
       }
     }
 
@@ -2041,6 +2058,9 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     if (!threads[threadId]) return
 
     const buffer = getDeltaBuffer(threadId)
+    // Skip if thread is closing (buffer will be null)
+    if (!buffer) return
+
     const current = buffer.agentMessages.get(event.itemId) || ''
     const isFirstDelta = current === ''
 
@@ -2166,7 +2186,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     // Sync session status to 'running'
     import('../stores/sessions').then(({ useSessionsStore }) => {
       useSessionsStore.getState().updateSessionStatus(threadId, 'running')
-    }).catch(console.error)
+    }).catch((err) => handleAsyncError(err, 'handleTurnStarted session sync', 'thread'))
 
     // Set turn timeout for this specific thread
     const turnId = event.turn.id
@@ -2179,7 +2199,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
         // Sync session status to 'failed' on timeout
         import('../stores/sessions').then(({ useSessionsStore }) => {
           useSessionsStore.getState().updateSessionStatus(threadId, 'failed')
-        }).catch(console.error)
+        }).catch((err) => handleAsyncError(err, 'handleTurnStarted timeout session sync', 'thread'))
         useThreadStore.setState((state) => {
           const threadState = state.threads[threadId]
           if (!threadState) return state
@@ -2256,7 +2276,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
         : nextTurnStatus === 'interrupted' ? 'interrupted'
         : 'completed'
       useSessionsStore.getState().updateSessionStatus(threadId, sessionStatus)
-    }).catch(console.error)
+    }).catch((err) => handleAsyncError(err, 'handleTurnCompleted session sync', 'thread'))
 
     set((state) => {
       const threadState = state.threads[threadId]
@@ -2427,6 +2447,9 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     if (!threads[threadId]) return
 
     const buffer = getDeltaBuffer(threadId)
+    // Skip if thread is closing (buffer will be null)
+    if (!buffer) return
+
     const current = buffer.commandOutputs.get(event.itemId) || ''
     const isFirstDelta = current === ''
     buffer.commandOutputs.set(event.itemId, current + event.delta)
@@ -2439,6 +2462,9 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     if (!threads[threadId]) return
 
     const buffer = getDeltaBuffer(threadId)
+    // Skip if thread is closing (buffer will be null)
+    if (!buffer) return
+
     const current = buffer.fileChangeOutputs.get(event.itemId) || ''
     const isFirstDelta = current === ''
     buffer.fileChangeOutputs.set(event.itemId, current + event.delta)
@@ -2451,6 +2477,9 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     if (!threads[threadId]) return
 
     const buffer = getDeltaBuffer(threadId)
+    // Skip if thread is closing (buffer will be null)
+    if (!buffer) return
+
     const index = event.summaryIndex ?? 0
     const updates = buffer.reasoningSummaries.get(event.itemId) || []
     const isFirstDelta = updates.length === 0
@@ -2474,6 +2503,9 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     if (!threads[threadId]) return
 
     const buffer = getDeltaBuffer(threadId)
+    // Skip if thread is closing (buffer will be null)
+    if (!buffer) return
+
     const index = event.contentIndex ?? 0
     const updates = buffer.reasoningContents.get(event.itemId) || []
     const isFirstDelta = updates.length === 0
@@ -2493,6 +2525,9 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     if (!threads[threadId]) return
 
     const buffer = getDeltaBuffer(threadId)
+    // Skip if thread is closing (buffer will be null)
+    if (!buffer) return
+
     const messages = buffer.mcpProgress.get(event.itemId) || []
     const isFirstMessage = messages.length === 0
     messages.push(event.message)

@@ -141,6 +141,7 @@ export function StatusBar() {
   }, [])
 
   // Fetch git info when project changes
+  // Optimized: pauses polling when page is hidden to save resources
   useEffect(() => {
     if (!selectedProject?.path) {
       setGitInfo(null)
@@ -148,8 +149,12 @@ export function StatusBar() {
     }
 
     let isMounted = true
+    let pollInterval: ReturnType<typeof setInterval> | null = null
 
     const fetchGitInfo = async () => {
+      // Skip fetch if page is hidden to save resources
+      if (document.visibilityState === 'hidden') return
+
       try {
         const info = await projectApi.getGitInfo(selectedProject.path)
         if (isMounted) {
@@ -163,12 +168,46 @@ export function StatusBar() {
       }
     }
 
+    const startPolling = () => {
+      if (pollInterval) clearInterval(pollInterval)
+      // Poll git status every 30 seconds only when page is visible
+      pollInterval = setInterval(fetchGitInfo, 30000)
+    }
+
+    const stopPolling = () => {
+      if (pollInterval) {
+        clearInterval(pollInterval)
+        pollInterval = null
+      }
+    }
+
+    // Handle visibility changes - pause/resume polling
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Fetch immediately when becoming visible, then resume polling
+        fetchGitInfo()
+        startPolling()
+      } else {
+        // Stop polling when hidden
+        stopPolling()
+      }
+    }
+
+    // Initial fetch
     fetchGitInfo()
-    // Poll git status every 30 seconds
-    const interval = setInterval(fetchGitInfo, 30000)
+
+    // Start polling if page is visible
+    if (document.visibilityState === 'visible') {
+      startPolling()
+    }
+
+    // Listen for visibility changes
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
     return () => {
       isMounted = false
-      clearInterval(interval)
+      stopPolling()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [selectedProject?.path])
 
