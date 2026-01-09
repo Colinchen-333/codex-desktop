@@ -324,6 +324,18 @@ export const sessionApi = {
   get: (sessionId: string) =>
     invoke<SessionMetadata | null>('get_session', { sessionId }),
 
+  /**
+   * Update session metadata
+   * @param sessionId - The session ID to update
+   * @param projectId - Optional project ID (required when creating new session metadata)
+   * @param title - Optional title
+   * @param tags - Optional tags array
+   * @param isFavorite - Optional favorite flag
+   * @param isArchived - Optional archived flag
+   * @param status - Optional session status
+   * @param firstMessage - Optional first message
+   * @param tasksJson - Optional tasks JSON string
+   */
   update: (
     sessionId: string,
     title?: string,
@@ -332,10 +344,12 @@ export const sessionApi = {
     isArchived?: boolean,
     status?: SessionStatus,
     firstMessage?: string,
-    tasksJson?: string
+    tasksJson?: string,
+    projectId?: string
   ) =>
     invoke<SessionMetadata>('update_session_metadata', {
       sessionId,
+      projectId,
       title,
       tags,
       isFavorite,
@@ -348,6 +362,17 @@ export const sessionApi = {
   delete: (sessionId: string) =>
     invoke<void>('delete_session', { sessionId }),
 
+  /**
+   * Search sessions across all projects with relevance scoring
+   * Results are sorted by relevance score (descending):
+   * - Exact title match: 100 points
+   * - Title prefix match: 80 points
+   * - Title contains match: 60 points
+   * - firstMessage match: 40-50 points
+   * - Tag match: 30-35 points
+   * - sessionId match: 10 points
+   * - Favorites bonus: +5 points
+   */
   search: (query: string, tagsFilter?: string[], favoritesOnly?: boolean) =>
     invoke<SessionMetadata[]>('search_sessions', { query, tagsFilter, favoritesOnly }),
 

@@ -40,6 +40,7 @@ pub async fn get_session(
 pub async fn update_session_metadata(
     state: State<'_, AppState>,
     session_id: String,
+    project_id: Option<String>,
     title: Option<String>,
     tags: Option<Vec<String>>,
     is_favorite: Option<bool>,
@@ -51,11 +52,33 @@ pub async fn update_session_metadata(
     // Get existing metadata or create new
     let existing = get_session(state.clone(), session_id.clone()).await?;
 
-    let mut metadata = existing.unwrap_or_else(|| {
-        // If no existing metadata, we need a project_id
-        // For now, just use an empty string - this should be handled better
-        SessionMetadata::new(&session_id, "")
-    });
+    let mut metadata = match existing {
+        Some(m) => m,
+        None => {
+            // If no existing metadata, we need a project_id
+            // Try to get from parameter, or try to infer from thread information
+            let pid = match project_id.clone() {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    // Try to infer project_id from the session by checking all projects
+                    // and finding one that might be associated with this thread
+                    // If we can't find one, return an error
+                    return Err(crate::Error::Other(format!(
+                        "Cannot create session metadata for {} without project_id",
+                        session_id
+                    )));
+                }
+            };
+            SessionMetadata::new(&session_id, &pid)
+        }
+    };
+
+    // Allow updating project_id if provided and different (for migration/fix purposes)
+    if let Some(ref pid) = project_id {
+        if !pid.is_empty() && metadata.project_id.is_empty() {
+            metadata.project_id = pid.clone();
+        }
+    }
 
     if let Some(t) = title {
         metadata.title = Some(t);
@@ -129,7 +152,69 @@ pub async fn update_session_tasks(
     Ok(())
 }
 
-/// Search sessions across all projects
+/// Calculate relevance score for a session based on query match
+/// Scoring:
+/// - Exact title match: 100 points
+/// - Title prefix match: 80 points
+/// - Title contains match: 60 points
+/// - firstMessage match: 40 points
+/// - Tag match: 30 points
+/// - sessionId match: 10 points
+fn calculate_relevance_score(session: &SessionMetadata, query_lower: &str) -> i32 {
+    let mut score = 0i32;
+
+    // Title matching (highest priority)
+    if let Some(title) = &session.title {
+        let title_lower = title.to_lowercase();
+        if title_lower == query_lower {
+            // Exact match
+            score += 100;
+        } else if title_lower.starts_with(query_lower) {
+            // Prefix match
+            score += 80;
+        } else if title_lower.contains(query_lower) {
+            // Contains match
+            score += 60;
+        }
+    }
+
+    // First message matching
+    if let Some(first_msg) = &session.first_message {
+        let first_msg_lower = first_msg.to_lowercase();
+        if first_msg_lower == query_lower {
+            score += 50; // Exact match bonus
+        } else if first_msg_lower.starts_with(query_lower) {
+            score += 45; // Prefix match
+        } else if first_msg_lower.contains(query_lower) {
+            score += 40;
+        }
+    }
+
+    // Tag matching
+    let session_tags = session.get_tags();
+    for tag in &session_tags {
+        let tag_lower = tag.to_lowercase();
+        if tag_lower == query_lower {
+            score += 35; // Exact tag match
+        } else if tag_lower.contains(query_lower) {
+            score += 30;
+        }
+    }
+
+    // Session ID matching (lowest priority)
+    if session.session_id.to_lowercase().contains(query_lower) {
+        score += 10;
+    }
+
+    // Bonus for favorites
+    if session.is_favorite {
+        score += 5;
+    }
+
+    score
+}
+
+/// Search sessions across all projects with relevance scoring
 #[tauri::command]
 pub async fn search_sessions(
     state: State<'_, AppState>,
@@ -145,59 +230,52 @@ pub async fn search_sessions(
         all_sessions.extend(sessions);
     }
 
-    // Filter by query
     let query_lower = query.to_lowercase();
-    let filtered: Vec<SessionMetadata> = all_sessions
+
+    // Filter and score sessions
+    let mut scored_sessions: Vec<(SessionMetadata, i32)> = all_sessions
         .into_iter()
         .filter(|s| {
-            // Match title
-            if let Some(title) = &s.title {
-                if title.to_lowercase().contains(&query_lower) {
-                    return true;
-                }
-            }
-
-            // Match first message
-            if let Some(first_msg) = &s.first_message {
-                if first_msg.to_lowercase().contains(&query_lower) {
-                    return true;
-                }
-            }
-
-            // Match tags
-            let session_tags = s.get_tags();
-            if session_tags
-                .iter()
-                .any(|t| t.to_lowercase().contains(&query_lower))
-            {
-                return true;
-            }
-
-            // Match session_id
-            if s.session_id.to_lowercase().contains(&query_lower) {
-                return true;
-            }
-
-            false
-        })
-        .filter(|s| {
-            // Filter by tags
+            // Filter by tags first
             if let Some(ref filter_tags) = tags_filter {
                 let session_tags = s.get_tags();
-                return filter_tags
-                    .iter()
-                    .all(|ft| session_tags.contains(ft));
+                if !filter_tags.iter().all(|ft| session_tags.contains(ft)) {
+                    return false;
+                }
             }
-            true
-        })
-        .filter(|s| {
+
             // Filter by favorites
             if let Some(true) = favorites_only {
-                return s.is_favorite;
+                if !s.is_favorite {
+                    return false;
+                }
             }
-            true
+
+            // Check if any field matches
+            let score = calculate_relevance_score(s, &query_lower);
+            score > 0
+        })
+        .map(|s| {
+            let score = calculate_relevance_score(&s, &query_lower);
+            (s, score)
         })
         .collect();
 
-    Ok(filtered)
+    // Sort by relevance score (descending), then by last_accessed_at (descending)
+    scored_sessions.sort_by(|a, b| {
+        // First compare by score (higher is better)
+        let score_cmp = b.1.cmp(&a.1);
+        if score_cmp != std::cmp::Ordering::Equal {
+            return score_cmp;
+        }
+        // Then by last_accessed_at (more recent is better)
+        let a_time = a.0.last_accessed_at.unwrap_or(0);
+        let b_time = b.0.last_accessed_at.unwrap_or(0);
+        b_time.cmp(&a_time)
+    });
+
+    // Extract just the sessions (without scores)
+    let result: Vec<SessionMetadata> = scored_sessions.into_iter().map(|(s, _)| s).collect();
+
+    Ok(result)
 }

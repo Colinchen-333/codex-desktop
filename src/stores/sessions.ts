@@ -24,6 +24,7 @@ interface SessionsState {
       isArchived?: boolean
       status?: SessionStatus
       firstMessage?: string
+      projectId?: string
     }
   ) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
@@ -74,7 +75,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         updates.isFavorite,
         updates.isArchived,
         updates.status,
-        updates.firstMessage
+        updates.firstMessage,
+        undefined, // tasksJson - not used in this method
+        updates.projectId // projectId for creating new session metadata
       )
       set((state) => ({
         sessions: state.sessions.map((s) =>
