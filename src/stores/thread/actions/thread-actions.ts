@@ -8,6 +8,7 @@
 import type { WritableDraft } from 'immer'
 import { threadApi } from '../../../lib/api'
 import { parseError, handleAsyncError } from '../../../lib/errorUtils'
+import { log } from '../../../lib/logger'
 import {
   normalizeApprovalPolicy,
   normalizeSandboxMode,
@@ -119,7 +120,7 @@ export function createResumeThread(
   cleanupStaleApprovals: () => Promise<void>
 ) {
   return async (threadId: string) => {
-    console.log('[resumeThread] Starting resume with threadId:', threadId)
+    log.debug(`[resumeThread] Starting resume with threadId: ${threadId}`, 'thread-actions')
 
     const { threads, maxSessions } = get()
 
@@ -155,7 +156,7 @@ export function createResumeThread(
         return
       }
 
-      console.log('[resumeThread] Resume response - thread.id:', response.thread.id, 'requested threadId:', threadId)
+      log.debug(`[resumeThread] Resume response - thread.id: ${response.thread.id}, requested threadId: ${threadId}`, 'thread-actions')
 
       // Convert items from response to our format
       const items: Record<string, AnyThreadItem> = {}
@@ -199,15 +200,15 @@ export function createResumeThread(
       })
 
       // Sync session status to 'idle' after successful resume
-      import('../../sessions').then(({ useSessionsStore }) => {
+      void import('../../sessions').then(async ({ useSessionsStore }) => {
         // Check thread still exists to prevent race condition with closeThread
         if (!getThreadStore().threads[response.thread.id]) return
-        useSessionsStore.getState().updateSessionStatus(response.thread.id, 'idle')
+        await useSessionsStore.getState().updateSessionStatus(response.thread.id, 'idle')
       }).catch((err) => handleAsyncError(err, 'resumeThread session sync', 'thread'))
 
-      console.log('[resumeThread] Resume completed, activeThread.id:', response.thread.id)
+      log.debug(`[resumeThread] Resume completed, activeThread.id: ${response.thread.id}`, 'thread-actions')
     } catch (error) {
-      console.error('[resumeThread] Resume failed:', error)
+      log.error(`[resumeThread] Resume failed: ${error}`, 'thread-actions')
       if (getCurrentOperationSequence() === opSeq) {
         set((state) => {
           state.globalError = parseError(error)

@@ -92,11 +92,12 @@ export function StatusBar() {
       }
     }, 50)
     return () => clearInterval(interval)
-  }, [turnStatus, turnTiming.startedAt]) // Remove tokenUsage.totalTokens dependency
+  }, [turnStatus]) // eslint-disable-line react-hooks/exhaustive-deps -- Uses getState() to avoid dependencies
 
-  // Reset elapsed when turn completes
+  // Reset elapsed when turn completes - legitimate state update based on prop change
   useEffect(() => {
     if (turnStatus !== 'running') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Resetting state when turn completes
       setElapsedMs(0)
       setTokenRate(0)
     }
@@ -129,8 +130,8 @@ export function StatusBar() {
       }
     }
 
-    fetchStatus()
-    fetchAccount()
+    void fetchStatus()
+    void fetchAccount()
 
     // Reduced polling to 60 seconds (status comes from events now)
     const interval = setInterval(fetchStatus, 60000)
@@ -140,10 +141,10 @@ export function StatusBar() {
     }
   }, [])
 
-  // Fetch git info when project changes
-  // Optimized: pauses polling when page is hidden to save resources
+  // Fetch git info when project changes - legitimate state reset based on prop change
   useEffect(() => {
     if (!selectedProject?.path) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Resetting git info when project changes
       setGitInfo(null)
       return
     }
@@ -185,7 +186,7 @@ export function StatusBar() {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         // Fetch immediately when becoming visible, then resume polling
-        fetchGitInfo()
+        void fetchGitInfo()
         startPolling()
       } else {
         // Stop polling when hidden
@@ -194,7 +195,7 @@ export function StatusBar() {
     }
 
     // Initial fetch
-    fetchGitInfo()
+    void fetchGitInfo()
 
     // Start polling if page is visible
     if (document.visibilityState === 'visible') {
@@ -221,7 +222,7 @@ export function StatusBar() {
       ) {
         e.preventDefault()
         // Use getState() to avoid dependency on setKeyboardShortcutsOpen
-        useAppStore.getState().setKeyboardShortcutsOpen(true)
+        void useAppStore.getState().setKeyboardShortcutsOpen(true)
       }
     }
 
@@ -265,7 +266,7 @@ export function StatusBar() {
           {!serverStatus?.isRunning && (
             <button
               className="text-primary hover:text-primary/80 transition-colors uppercase tracking-widest text-xs font-bold"
-              onClick={handleRestartServer}
+              onClick={() => void handleRestartServer()}
             >
               Restart
             </button>

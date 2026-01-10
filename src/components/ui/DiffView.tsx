@@ -1,31 +1,7 @@
 import { useState } from 'react'
 import { Check, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
-
-export type HunkAction = 'accept' | 'reject' | 'pending'
-
-export interface DiffLine {
-  type: 'add' | 'remove' | 'context'
-  content: string
-  oldLineNumber?: number
-  newLineNumber?: number
-}
-
-export interface DiffHunk {
-  oldStart: number
-  oldLines: number
-  newStart: number
-  newLines: number
-  lines: DiffLine[]
-}
-
-export interface FileDiff {
-  path: string
-  kind: 'add' | 'modify' | 'delete' | 'rename'
-  oldPath?: string
-  hunks: DiffHunk[]
-  raw?: string
-}
+import type { HunkAction, DiffHunk, FileDiff } from './DiffView.utils'
 
 interface DiffViewProps {
   diff: FileDiff
@@ -346,61 +322,4 @@ function SplitDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }: 
       })}
     </div>
   )
-}
-
-// Helper to parse unified diff string
-export function parseDiff(diffString: string): DiffHunk[] {
-  const lines = diffString.split('\n')
-  const hunks: DiffHunk[] = []
-  let currentHunk: DiffHunk | null = null
-  let oldLine = 0
-  let newLine = 0
-
-  for (const line of lines) {
-    const hunkMatch = line.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/)
-    if (hunkMatch) {
-      if (currentHunk) {
-        hunks.push(currentHunk)
-      }
-      oldLine = parseInt(hunkMatch[1], 10)
-      newLine = parseInt(hunkMatch[3], 10)
-      currentHunk = {
-        oldStart: oldLine,
-        oldLines: parseInt(hunkMatch[2] || '1', 10),
-        newStart: newLine,
-        newLines: parseInt(hunkMatch[4] || '1', 10),
-        lines: [],
-      }
-      continue
-    }
-
-    if (!currentHunk) continue
-
-    if (line.startsWith('+')) {
-      currentHunk.lines.push({
-        type: 'add',
-        content: line.slice(1),
-        newLineNumber: newLine++,
-      })
-    } else if (line.startsWith('-')) {
-      currentHunk.lines.push({
-        type: 'remove',
-        content: line.slice(1),
-        oldLineNumber: oldLine++,
-      })
-    } else if (line.startsWith(' ') || line === '') {
-      currentHunk.lines.push({
-        type: 'context',
-        content: line.slice(1) || '',
-        oldLineNumber: oldLine++,
-        newLineNumber: newLine++,
-      })
-    }
-  }
-
-  if (currentHunk) {
-    hunks.push(currentHunk)
-  }
-
-  return hunks
 }

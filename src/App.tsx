@@ -13,6 +13,7 @@ import { KeyboardShortcuts } from './components/KeyboardShortcuts'
 import { useProjectsStore } from './stores/projects'
 import { useThreadStore, cleanupThreadResources } from './stores/thread'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
+import { log } from './lib/logger'
 
 function App() {
   const fetchProjects = useProjectsStore((state) => state.fetchProjects)
@@ -30,7 +31,7 @@ function App() {
 
   // Fetch projects on mount
   useEffect(() => {
-    fetchProjects()
+    void fetchProjects()
   }, [fetchProjects])
 
   // Setup event listeners - only once on mount
@@ -84,7 +85,7 @@ function App() {
       onRateLimitExceeded: (event) => useThreadStore.getState().handleRateLimitExceeded(event),
       // Server disconnected - affects all threads
       onServerDisconnected: () => {
-        console.log('Server disconnected')
+        log.info('Server disconnected', 'App')
         useThreadStore.getState().handleServerDisconnected()
       },
     })
@@ -122,7 +123,7 @@ function App() {
         <OnboardingFlow
           onComplete={() => {
             setShowOnboarding(false)
-            fetchProjects()
+            void fetchProjects()
           }}
         />
       </ToastProvider>

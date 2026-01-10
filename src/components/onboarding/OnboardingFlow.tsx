@@ -28,7 +28,7 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
         console.error('Failed to check login status:', err)
       }
     }
-    checkLogin()
+    void checkLogin()
   }, [])
 
   const handleAddProject = async () => {

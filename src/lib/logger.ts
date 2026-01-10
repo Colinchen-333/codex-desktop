@@ -9,6 +9,8 @@
  * - Emoji indicators for quick visual scanning
  */
 
+/* eslint-disable no-console -- This is the logger implementation that uses console methods */
+
 type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 export interface LogEntry {

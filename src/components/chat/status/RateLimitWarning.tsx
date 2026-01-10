@@ -10,21 +10,32 @@ export const RateLimitWarning = memo(function RateLimitWarning() {
   const rateLimits = useAccountStore((state) => state.rateLimits)
   // refreshRateLimits is called via getState() to avoid dependency issues
   const [dismissed, setDismissed] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
 
   // Refresh rate limits periodically when mounted
   useEffect(() => {
     // Use getState() to avoid dependency on refreshRateLimits function
-    useAccountStore.getState().refreshRateLimits()
+    void useAccountStore.getState().refreshRateLimits()
     const interval = setInterval(() => {
-      useAccountStore.getState().refreshRateLimits()
+      void useAccountStore.getState().refreshRateLimits()
     }, 60000) // Every minute
     return () => clearInterval(interval)
   }, []) // No dependencies - uses getState()
 
   // Reset dismissed state when limits change significantly
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Resetting dismissed state when limits change
     setDismissed(false)
   }, [rateLimits?.primary?.usedPercent])
+
+  // Update now periodically to keep time current
+  useEffect(() => {
+    const updateNow = () => {
+      setNow(Date.now())
+    }
+    const nowInterval = setInterval(updateNow, 1000) // Update every second
+    return () => clearInterval(nowInterval)
+  }, [])
 
   if (dismissed || !rateLimits) return null
 
@@ -39,7 +50,6 @@ export const RateLimitWarning = memo(function RateLimitWarning() {
 
   const formatResetTime = (resetsAt?: number | null) => {
     if (!resetsAt) return null
-    const now = Date.now()
     const diffMs = resetsAt - now
     if (diffMs <= 0) return 'soon'
     const mins = Math.ceil(diffMs / 60000)

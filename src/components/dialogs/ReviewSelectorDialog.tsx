@@ -41,7 +41,7 @@ export function ReviewSelectorDialog({
           setLoading(false)
         }
       }
-      loadGitData()
+      void loadGitData()
     }
   }, [isOpen, projectPath])
 

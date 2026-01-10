@@ -54,7 +54,7 @@ export function Sidebar() {
   useEffect(() => {
     if (selectedProjectId) {
       // Use getState() to avoid function reference in dependencies
-      useSessionsStore.getState().fetchSessions(selectedProjectId)
+      void useSessionsStore.getState().fetchSessions(selectedProjectId)
     }
   }, [selectedProjectId])
 
@@ -139,9 +139,9 @@ export function Sidebar() {
       searchTimeoutRef.current = setTimeout(() => {
         searchTimeoutRef.current = null
         if (query.trim()) {
-          useSessionsStore.getState().searchSessions(query)
+          void useSessionsStore.getState().searchSessions(query)
         } else {
-          useSessionsStore.getState().clearSearch()
+          void useSessionsStore.getState().clearSearch()
         }
       }, 300)
     },
@@ -536,8 +536,8 @@ function ProjectList({ projects, selectedId, onSelect, onRename, onDelete, onSet
             icon: '📂',
             onClick: () => {
               // Use Tauri shell to open folder
-              import('@tauri-apps/plugin-shell').then(({ open }) => {
-                open(project.path)
+              void import('@tauri-apps/plugin-shell').then(async ({ open }) => {
+                await open(project.path)
               })
             },
           },

@@ -19,10 +19,10 @@ import { immer } from 'zustand/middleware/immer'
 import type { WritableDraft } from 'immer'
 
 // Import types
-import type { ThreadState, SingleThreadState } from './types'
+import type { ThreadState } from './types'
 
 // Import constants
-import { MAX_PARALLEL_SESSIONS, APPROVAL_CLEANUP_INTERVAL_MS } from './constants'
+import { MAX_PARALLEL_SESSIONS } from './constants'
 
 // Import utilities
 import {
@@ -84,9 +84,6 @@ import {
 } from './actions'
 
 // Import timer cleanup utilities
-import {
-  startApprovalCleanupTimer,
-} from './utils/timer-cleanup'
 
 // ==================== Store Creation ====================
 

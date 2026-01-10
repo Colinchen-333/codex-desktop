@@ -25,8 +25,6 @@ import {
 import {
   useSettingsStore,
   type Settings,
-  type SandboxMode,
-  type ApprovalPolicy,
   SANDBOX_MODE_OPTIONS,
   APPROVAL_POLICY_OPTIONS,
   REASONING_SUMMARY_OPTIONS,
@@ -59,7 +57,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
           showToast('Failed to load account information', 'error')
         })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, showToast])
 
   if (!isOpen) return null
@@ -222,7 +219,7 @@ function ModelSettings({
 
   // Fetch models on mount
   useEffect(() => {
-    useModelsStore.getState().fetchModels()
+    void useModelsStore.getState().fetchModels()
   }, []) // No dependencies - fetchModels called via getState()
 
   // Auto-select default model if none is selected
@@ -741,7 +738,7 @@ function AllowlistSettings() {
   }, [selectedProjectId])
 
   useEffect(() => {
-    fetchAllowlist()
+    void fetchAllowlist()
   }, [fetchAllowlist])
 
   const handleAdd = async () => {

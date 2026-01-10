@@ -7,8 +7,8 @@
 
 import type { WritableDraft } from 'immer'
 import { handleAsyncError } from '../../../lib/errorUtils'
+import { log } from '../../../lib/logger'
 import {
-  isAgentMessageContent,
   isCommandExecutionContent,
   isFileChangeContent,
   hasTextContent,
@@ -47,14 +47,14 @@ export function createHandleItemStarted(
       if (!hasTextContent(inProgressItem.content)) return
       const userMsg = inProgressItem
       if (userMsg.content.text) {
-        import('../../sessions').then(({ useSessionsStore }) => {
+        void import('../../sessions').then(({ useSessionsStore }) => {
           // Check thread still exists to prevent race condition with closeThread
           if (!get().threads[threadId]) return
           const sessionsStore = useSessionsStore.getState()
           const session = sessionsStore.sessions.find((s) => s.sessionId === threadId)
           // Only set firstMessage if the session exists and doesn't already have one
           if (session && !session.firstMessage) {
-            sessionsStore.setSessionFirstMessage(threadId, userMsg.content.text)
+            await sessionsStore.setSessionFirstMessage(threadId, userMsg.content.text)
           }
         }).catch((err) => handleAsyncError(err, 'handleItemStarted session sync', 'thread'))
       }
@@ -195,7 +195,7 @@ export function createHandleAgentMessageDelta(get: () => ThreadState) {
     const isFirstDelta = current === ''
 
     if (isFirstDelta) {
-      console.log('[handleAgentMessageDelta] First delta for item:', event.itemId, 'threadId:', threadId)
+      log.debug(`[handleAgentMessageDelta] First delta for item: ${event.itemId}, threadId: ${threadId}`, 'message-handlers')
     }
 
     buffer.agentMessages.set(event.itemId, current + event.delta)

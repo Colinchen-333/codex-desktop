@@ -1,25 +1,6 @@
-import { useEffect, useState, createContext, useContext, useCallback } from 'react'
+import { useEffect, useState, useContext, useCallback, type NonNullable } from 'react'
 import { cn } from '../../lib/utils'
-
-// Toast types
-export type ToastType = 'info' | 'success' | 'warning' | 'error'
-
-export interface Toast {
-  id: string
-  type: ToastType
-  title: string
-  message?: string
-  duration?: number
-}
-
-// Toast context
-interface ToastContextValue {
-  toasts: Toast[]
-  addToast: (toast: Omit<Toast, 'id'>) => void
-  removeToast: (id: string) => void
-}
-
-const ToastContext = createContext<ToastContextValue | null>(null)
+import { ToastContext, type Toast } from './ToastContext'
 
 // Toast provider
 export function ToastProvider({ children }: { children: React.ReactNode }) {
@@ -42,27 +23,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   )
 }
 
-// Hook to use toast
-export function useToast() {
-  const context = useContext(ToastContext)
-  if (!context) {
-    throw new Error('useToast must be used within a ToastProvider')
-  }
-
-  // Helper function for simple toast messages
-  const showToast = useCallback(
-    (title: string, type: ToastType = 'info', message?: string) => {
-      context.addToast({ type, title, message })
-    },
-    [context]
-  )
-
-  return { ...context, showToast }
-}
-
 // Toast container
 function ToastContainer() {
-  const { toasts, removeToast } = useToast()
+  const { toasts, removeToast } = useContext(ToastContext) as NonNullable<ToastContextValue>
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">

@@ -18,10 +18,13 @@ export function RenameDialog({
   const [name, setName] = useState(currentName)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Reset name when dialog opens - legitimate state initialization
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Initializing form state when dialog opens
   useEffect(() => {
     if (!isOpen) {
       return
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Initializing form state when dialog opens
     setName(currentName)
     // Focus and select text after dialog opens
     setTimeout(() => {

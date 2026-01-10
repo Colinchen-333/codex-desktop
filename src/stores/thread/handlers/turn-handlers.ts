@@ -7,6 +7,7 @@
 
 import type { WritableDraft } from 'immer'
 import { handleAsyncError } from '../../../lib/errorUtils'
+import { log } from '../../../lib/logger'
 import { isAgentMessageContent } from '../../../lib/typeGuards'
 import type {
   TurnStartedEvent,
@@ -78,15 +79,15 @@ export function createHandleTurnStarted(
 ) {
   return (event: TurnStartedEvent) => {
     const threadId = event.threadId
-    console.log('[handleTurnStarted] Turn started - threadId:', threadId, 'turnId:', event.turn.id)
+    log.debug(`[handleTurnStarted] Turn started - threadId: ${threadId}, turnId: ${event.turn.id}`, 'turn-handlers')
 
     clearTurnTimeout(threadId)
 
     // Sync session status to 'running'
-    import('../../sessions').then(({ useSessionsStore }) => {
+    void import('../../sessions').then(async ({ useSessionsStore }) => {
       // Check thread still exists to prevent race condition with closeThread
       if (!getThreadStore().threads[threadId]) return
-      useSessionsStore.getState().updateSessionStatus(threadId, 'running')
+      await useSessionsStore.getState().updateSessionStatus(threadId, 'running')
     }).catch((err) => handleAsyncError(err, 'handleTurnStarted session sync', 'thread'))
 
     // Set turn timeout for this specific thread
@@ -98,10 +99,10 @@ export function createHandleTurnStarted(
         console.error('[handleTurnStarted] Turn timeout - no completion received for turnId:', turnId)
         performFullTurnCleanup(threadId)
         // Sync session status to 'failed' on timeout
-        import('../../sessions').then(({ useSessionsStore }) => {
+        void import('../../sessions').then(async ({ useSessionsStore }) => {
           // Check thread still exists and not being closed
           if (!getThreadStore().threads[threadId] || closingThreads.has(threadId)) return
-          useSessionsStore.getState().updateSessionStatus(threadId, 'failed')
+          await useSessionsStore.getState().updateSessionStatus(threadId, 'failed')
         }).catch((err) => handleAsyncError(err, 'handleTurnStarted timeout session sync', 'thread'))
         set((state) => {
           const threadState = state.threads[threadId]
@@ -176,13 +177,13 @@ export function createHandleTurnCompleted(
         : 'completed'
 
     // Sync session status based on turn result
-    import('../../sessions').then(({ useSessionsStore }) => {
+    void import('../../sessions').then(async ({ useSessionsStore }) => {
       // Check thread still exists to prevent race condition with closeThread
       if (!getThreadStore().threads[threadId]) return
       const sessionStatus = nextTurnStatus === 'failed' ? 'failed'
         : nextTurnStatus === 'interrupted' ? 'interrupted'
         : 'completed'
-      useSessionsStore.getState().updateSessionStatus(threadId, sessionStatus)
+      await useSessionsStore.getState().updateSessionStatus(threadId, sessionStatus)
     }).catch((err) => handleAsyncError(err, 'handleTurnCompleted session sync', 'thread'))
 
     set((state) => {
