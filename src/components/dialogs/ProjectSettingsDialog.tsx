@@ -58,7 +58,7 @@ export function ProjectSettingsDialog({
   // Fetch models on mount
   useEffect(() => {
     if (isOpen) {
-      useModelsStore.getState().fetchModels()
+      void useModelsStore.getState().fetchModels()
     }
   }, [isOpen]) // No fetchModels dependency - called via getState()
 

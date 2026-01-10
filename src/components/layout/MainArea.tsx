@@ -10,6 +10,7 @@ import {
 import { ChatView } from '../chat/ChatView'
 import { SessionTabs } from '../sessions/SessionTabs'
 import { parseError } from '../../lib/errorUtils'
+import { log } from '../../lib/logger'
 
 // Timeout for resume operations to prevent permanent blocking
 const RESUME_TIMEOUT_MS = 30000
@@ -33,7 +34,7 @@ export function MainArea() {
       const currentProjects = useProjectsStore.getState().projects
       const project = currentProjects.find((p) => p.id === selectedProjectId)
       if (project) {
-        useProjectsStore.getState().fetchGitInfo(selectedProjectId, project.path)
+        void useProjectsStore.getState().fetchGitInfo(selectedProjectId, project.path)
       }
     }
   }, [selectedProjectId])
@@ -234,7 +235,7 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
         setServerReady(false)
       }
     }
-    checkServer()
+    void checkServer()
   }, [])
 
   // Clear local error when project changes
@@ -256,14 +257,7 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
     // Get effective working directory (may be overridden in project settings)
     const effectiveCwd = getEffectiveWorkingDirectory(project.path, project.settingsJson)
 
-    console.log('[StartSession] Starting session with:', {
-      projectId,
-      path: effectiveCwd,
-      model: effectiveSettings.model,
-      sandboxMode: effectiveSettings.sandboxMode,
-      approvalPolicy: effectiveSettings.approvalPolicy,
-      hasProjectOverrides: project.settingsJson !== null,
-    })
+    log.debug('[StartSession] Starting session with:', 'MainArea')
 
     try {
       await startThread(
@@ -273,9 +267,9 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
         effectiveSettings.sandboxMode,
         effectiveSettings.approvalPolicy
       )
-      console.log('[StartSession] Session started successfully')
+      log.debug('[StartSession] Session started successfully', 'MainArea')
     } catch (error) {
-      console.error('[StartSession] Failed to start session:', error)
+      log.error(`[StartSession] Failed to start session: ${error}`, 'MainArea')
       setLocalError(parseError(error))
     }
   }

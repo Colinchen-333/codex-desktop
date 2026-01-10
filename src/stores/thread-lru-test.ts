@@ -3,6 +3,8 @@
  * This file demonstrates and tests the LRU cache implementation in thread.ts
  */
 
+/* eslint-disable no-console -- This is a test file that uses console for testing output */
+
 // Mock the LRUCache class for testing (same implementation as in thread.ts)
 interface LRUCacheNode<V> {
   value: V

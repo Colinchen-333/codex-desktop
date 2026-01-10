@@ -2,7 +2,7 @@
  * ChatView - Main chat interface component
  * Refactored to use modular sub-components for better maintainability
  */
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 import { X, Paperclip, Image as ImageIcon, StopCircle, ArrowUp } from 'lucide-react'
 import { List } from 'react-window'
 import type { ListImperativeAPI } from 'react-window'
@@ -641,9 +641,9 @@ export function ChatView() {
             }
           },
           quit: () => {
-            import('@tauri-apps/api/window')
-              .then(({ getCurrentWindow }) => {
-                getCurrentWindow().close()
+            void import('@tauri-apps/api/window')
+              .then(async ({ getCurrentWindow }) => {
+                await getCurrentWindow().close()
               })
               .catch((error) => {
                 log.error(`Failed to close window: ${error}`, 'ChatView')
@@ -804,7 +804,7 @@ export function ChatView() {
         return
       }
       e.preventDefault()
-      handleSend()
+      void handleSend()
     }
   }
 

@@ -59,7 +59,7 @@ export function FileMentionPopup({
     }
 
     debounceRef.current = setTimeout(() => {
-      fetchFiles(query)
+      void fetchFiles(query)
     }, 150)
 
     return () => {

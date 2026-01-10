@@ -42,7 +42,7 @@ const LazyCodeBlock = memo(function LazyCodeBlock({ language, children }: { lang
 
   useEffect(() => {
     if (!theme) {
-      loadTheme().then(setTheme)
+      void loadTheme().then(setTheme)
     }
   }, [theme])
 

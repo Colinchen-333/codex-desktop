@@ -36,3 +36,59 @@ tempfile = "3"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# Release optimizations for maximum performance
+[profile.release]
+# Maximum optimization level
+opt-level = 3
+
+# Enable Link Time Optimization for better cross-crate optimizations
+lto = true
+
+# Use a single codegen unit for maximum optimization
+# This reduces parallelism but improves optimization
+codegen-units = 1
+
+# Strip debug symbols to reduce binary size
+# Use "symbols" for maximum size reduction, or true for basic stripping
+strip = "symbols"
+
+# Use abort instead of unwind for smaller binary size
+panic = "abort"
+
+# Profile-guided optimization (PGO) preparation
+# Uncomment the following lines if you want to use PGO:
+# 1. Build with: RUSTFLAGS="-C profile-generate=/tmp/pgo-data" cargo build --release
+# 2. Run the binary with typical workloads
+# 3. Merge data: llvm-profdata merge -o /tmp/pgo-data/merged.profdata /tmp/pgo-data/
+# 4. Rebuild with: RUSTFLAGS="-C profile-use=/tmp/pgo-data/merged.profdata" cargo build --release
+
+# Optimize for specific CPU features
+# Uncomment if targeting modern CPUs (post-2015)
+# target-cpu = "native"
+
+# Profile for development builds (faster compilation, reasonable performance)
+[profile.dev]
+# Basic optimizations for dev builds
+opt-level = 1
+
+# Keep debug assertions in dev builds
+debug-assertions = true
+
+# Keep overflow checks in dev builds
+overflow-checks = true
+
+# Profile for test builds
+[profile.test]
+# Basic optimizations for test builds
+opt-level = 1
+
+# Keep debug info for better test failure reports
+debug = true
+
+# Benchmark profile for performance testing
+[profile.bench]
+# Maximum optimizations for benchmarks
+opt-level = 3
+lto = true
+codegen-units = 1

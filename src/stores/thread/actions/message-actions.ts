@@ -8,6 +8,7 @@
 import type { WritableDraft } from 'immer'
 import { threadApi, type SkillInput } from '../../../lib/api'
 import { parseError } from '../../../lib/errorUtils'
+import { log } from '../../../lib/logger'
 import {
   normalizeReasoningEffort,
   normalizeReasoningSummary,
@@ -115,7 +116,7 @@ export function createSendMessage(
 
     // Queue messages if a turn is running or if backlog exists
     if (threadState.turnStatus === 'running' || threadState.queuedMessages.length > 0) {
-      console.log('[sendMessage] Turn already running or backlog exists, queueing message')
+      log.debug('[sendMessage] Turn already running or backlog exists, queueing message', 'message-actions')
       const queuedMsg: QueuedMessage = {
         id: `queued-${Date.now()}`,
         text,
@@ -132,7 +133,7 @@ export function createSendMessage(
       return
     }
 
-    console.log('[sendMessage] Sending message to thread:', threadId)
+    log.debug(`[sendMessage] Sending message to thread: ${threadId}`, 'message-actions')
 
     // Add user message to items
     const userMessageId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`

@@ -1,15 +1,6 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { parseTheme } from './validation'
-
-export type Theme = 'light' | 'dark' | 'system'
-
-interface ThemeContextValue {
-  theme: Theme
-  resolvedTheme: 'light' | 'dark'
-  setTheme: (theme: Theme) => void
-}
-
-const ThemeContext = createContext<ThemeContextValue | null>(null)
+import { ThemeContext, type Theme } from './ThemeContext'
 
 const THEME_KEY = 'codex-desktop-theme'
 
@@ -60,12 +51,4 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       {children}
     </ThemeContext.Provider>
   )
-}
-
-export function useTheme() {
-  const context = useContext(ThemeContext)
-  if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider')
-  }
-  return context
 }

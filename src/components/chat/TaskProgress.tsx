@@ -3,7 +3,7 @@
  * Displays task progress with animated progress bar, percentage, and step information
  */
 
-import { useMemo, useEffect, useState } from 'react'
+import { useMemo, useState, useRef, useLayoutEffect } from 'react'
 import { Loader2, X, RotateCcw } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import type { SessionStatus } from '../../lib/types/thread'
@@ -103,6 +103,8 @@ export function TaskProgress({
   className,
 }: TaskProgressProps) {
   const [isAnimating, setIsAnimating] = useState(false)
+  const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const prevPercentageRef = useRef(percentage)
   const sizes = sizeConfig[size]
 
   // Parse and calculate progress
@@ -114,12 +116,24 @@ export function TaskProgress({
   // Determine if progress should be shown
   const shouldShow = status === 'running' && totalSteps > 0
 
-  // Trigger animation on percentage change
-  useEffect(() => {
-    if (shouldShow && percentage > 0) {
+  // Trigger animation on percentage change using useLayoutEffect to avoid flicker
+  useLayoutEffect(() => {
+    if (shouldShow && percentage > 0 && percentage !== prevPercentageRef.current) {
+      prevPercentageRef.current = percentage
       setIsAnimating(true)
-      const timer = setTimeout(() => setIsAnimating(false), 300)
-      return () => clearTimeout(timer)
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current)
+      }
+      animationTimeoutRef.current = setTimeout(() => {
+        setIsAnimating(false)
+        animationTimeoutRef.current = null
+      }, 300)
+    }
+    return () => {
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current)
+        animationTimeoutRef.current = null
+      }
     }
   }, [percentage, shouldShow])
 

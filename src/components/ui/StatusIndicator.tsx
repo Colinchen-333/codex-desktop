@@ -190,10 +190,4 @@ export function StatusIcon({ status, size = 'md', className }: StatusIconProps) 
   return null
 }
 
-// Get status label in Chinese
-export function getStatusLabel(status: SessionStatus, useChinese = true): string {
-  const config = statusConfig[status] || statusConfig.idle
-  return useChinese ? config.labelCn : config.label
-}
-
 export default StatusIndicator
