@@ -29,4 +29,12 @@ src-tauri/WixTools/
 
 # TypeScript
 *.tsbuildinfo
+
+# Backup files
+*.bak
+*.bak2
+*.bak3
+*.backup
+
+# Serena
 .serena/

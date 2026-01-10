@@ -64,6 +64,98 @@ fn validate_arg_safe(arg: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate git branch name
+/// Only allows safe characters: alphanumeric, underscore, hyphen, dot, and forward slash
+/// This prevents command injection through malicious branch names
+fn validate_branch_name(branch: &str) -> Result<()> {
+    if branch.is_empty() {
+        return Err(crate::Error::Other(
+            "Branch name cannot be empty".to_string(),
+        ));
+    }
+
+    // Maximum reasonable branch name length
+    const MAX_BRANCH_LENGTH: usize = 256;
+    if branch.len() > MAX_BRANCH_LENGTH {
+        return Err(crate::Error::Other(format!(
+            "Branch name exceeds maximum length of {} characters",
+            MAX_BRANCH_LENGTH
+        )));
+    }
+
+    // Only allow safe characters: alphanumeric, underscore, hyphen, dot, forward slash
+    // This is a strict allowlist approach for security
+    if !branch.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/')) {
+        return Err(crate::Error::Other(
+            "Branch name contains invalid characters (only alphanumeric, _, -, ., / allowed)".to_string(),
+        ));
+    }
+
+    // Prevent dangerous patterns
+    if branch.starts_with('-') || branch.starts_with('.') {
+        return Err(crate::Error::Other(
+            "Branch name cannot start with '-' or '.'".to_string(),
+        ));
+    }
+
+    // Prevent path traversal attempts
+    if branch.contains("..") {
+        return Err(crate::Error::Other(
+            "Branch name cannot contain '..'".to_string(),
+        ));
+    }
+
+    // Prevent ending with .lock (git restriction)
+    if branch.ends_with(".lock") {
+        return Err(crate::Error::Other(
+            "Branch name cannot end with '.lock'".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate git commit SHA (hexadecimal string only)
+fn validate_commit_sha(sha: &str) -> Result<()> {
+    // Only allow hexadecimal characters (0-9, a-f, A-F)
+    if !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(crate::Error::Other(
+            "Invalid commit SHA: contains non-hexadecimal characters".to_string(),
+        ));
+    }
+
+    // Reasonable length check (git SHAs are typically 40 chars, short SHAs are 7+)
+    if sha.len() < 7 || sha.len() > 64 {
+        return Err(crate::Error::Other(
+            "Invalid commit SHA: length must be between 7 and 64 characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate git file path argument
+/// Ensures the path is safe to use in git commands
+fn validate_git_file_path(path: &str) -> Result<()> {
+    if path.is_empty() {
+        return Err(crate::Error::Other(
+            "File path cannot be empty".to_string(),
+        ));
+    }
+
+    // Check for null bytes
+    if path.contains('\0') {
+        return Err(crate::Error::Other(
+            "File path cannot contain null bytes".to_string(),
+        ));
+    }
+
+    // Check for shell metacharacters
+    validate_arg_safe(path)?;
+
+    Ok(())
+}
+
 /// Validate and sanitize a numeric limit parameter
 fn validate_limit(limit: u32) -> Result<u32> {
     const MAX_LIMIT: u32 = 1000;
@@ -229,11 +321,12 @@ pub async fn get_project_git_diff(path: String) -> Result<GitDiff> {
     let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
     for file in untracked_output.lines().map(str::trim).filter(|s| !s.is_empty()) {
-        // Security: Validate file argument to prevent command injection
-        validate_arg_safe(file)?;
+        // Security: Validate file path argument to prevent command injection
+        validate_git_file_path(file)?;
 
-        let args = ["diff", "--no-index", "--", null_path, file];
-        if let Ok(diff) = run_git_capture_diff(&canonical_path, &args) {
+        // Use safe argument construction with "--" separator to prevent option injection
+        let diff_result = run_git_diff_file(&canonical_path, null_path, file);
+        if let Ok(diff) = diff_result {
             untracked_diff.push_str(&diff);
         }
     }
@@ -309,6 +402,30 @@ fn run_git_capture_diff(project_path: &Path, args: &[&str]) -> Result<String> {
         Err(crate::Error::Other(format!(
             "git {:?} failed with status {}",
             args, output.status
+        )))
+    }
+}
+
+/// Run git diff for a specific file against /dev/null (for untracked files)
+/// Uses individual .arg() calls to prevent any injection through shell interpretation
+fn run_git_diff_file(project_path: &Path, null_path: &str, file_path: &str) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .arg("diff")
+        .arg("--no-index")
+        .arg("--")  // Explicit end of options marker
+        .arg(null_path)
+        .arg(file_path)
+        .current_dir(project_path)
+        .output()
+        .map_err(|err| crate::Error::Other(format!("Failed to run git diff: {}", err)))?;
+
+    // git diff --no-index returns 1 when there are differences, which is expected
+    if output.status.success() || output.status.code() == Some(1) {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(crate::Error::Other(format!(
+            "git diff failed for file '{}' with status {}",
+            file_path, output.status
         )))
     }
 }
@@ -616,4 +733,249 @@ pub async fn get_git_commits(path: String, limit: Option<u32>) -> Result<Vec<Git
     }
 
     Ok(commits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== validate_arg_safe tests ====================
+
+    #[test]
+    fn test_validate_arg_safe_valid_inputs() {
+        assert!(validate_arg_safe("hello").is_ok());
+        assert!(validate_arg_safe("file.txt").is_ok());
+        assert!(validate_arg_safe("path/to/file").is_ok());
+        assert!(validate_arg_safe("my-file_name.rs").is_ok());
+        assert!(validate_arg_safe("123").is_ok());
+        assert!(validate_arg_safe("").is_ok()); // Empty is allowed
+    }
+
+    #[test]
+    fn test_validate_arg_safe_rejects_shell_metacharacters() {
+        // Test each dangerous character
+        assert!(validate_arg_safe("hello|world").is_err());
+        assert!(validate_arg_safe("cmd;ls").is_err());
+        assert!(validate_arg_safe("$(whoami)").is_err());
+        assert!(validate_arg_safe("`id`").is_err());
+        assert!(validate_arg_safe("a&b").is_err());
+        assert!(validate_arg_safe("a<b").is_err());
+        assert!(validate_arg_safe("a>b").is_err());
+        assert!(validate_arg_safe("a(b)").is_err());
+        assert!(validate_arg_safe("a\\b").is_err());
+        assert!(validate_arg_safe("a\nb").is_err());
+        assert!(validate_arg_safe("a\rb").is_err());
+        assert!(validate_arg_safe("a\0b").is_err());
+    }
+
+    #[test]
+    fn test_validate_arg_safe_rejects_flag_injection() {
+        assert!(validate_arg_safe("--exec").is_err());
+        assert!(validate_arg_safe("--config=/etc/passwd").is_err());
+        // Single "--" is allowed (used as argument separator)
+        assert!(validate_arg_safe("--").is_ok());
+    }
+
+    // ==================== validate_branch_name tests ====================
+
+    #[test]
+    fn test_validate_branch_name_valid() {
+        assert!(validate_branch_name("main").is_ok());
+        assert!(validate_branch_name("feature/new-thing").is_ok());
+        assert!(validate_branch_name("release-1.0.0").is_ok());
+        assert!(validate_branch_name("fix_bug_123").is_ok());
+        assert!(validate_branch_name("user/john/experiment").is_ok());
+        assert!(validate_branch_name("v2.0").is_ok());
+    }
+
+    #[test]
+    fn test_validate_branch_name_rejects_empty() {
+        assert!(validate_branch_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_branch_name_rejects_dangerous_start() {
+        assert!(validate_branch_name("-branch").is_err());
+        assert!(validate_branch_name(".hidden").is_err());
+    }
+
+    #[test]
+    fn test_validate_branch_name_rejects_path_traversal() {
+        assert!(validate_branch_name("../etc/passwd").is_err());
+        assert!(validate_branch_name("branch/../other").is_err());
+    }
+
+    #[test]
+    fn test_validate_branch_name_rejects_lock_suffix() {
+        assert!(validate_branch_name("branch.lock").is_err());
+    }
+
+    #[test]
+    fn test_validate_branch_name_rejects_special_chars() {
+        assert!(validate_branch_name("branch;ls").is_err());
+        assert!(validate_branch_name("branch$(cmd)").is_err());
+        assert!(validate_branch_name("branch`id`").is_err());
+        assert!(validate_branch_name("branch|pipe").is_err());
+        assert!(validate_branch_name("branch\nname").is_err());
+        assert!(validate_branch_name("branch name").is_err()); // Space not allowed
+    }
+
+    #[test]
+    fn test_validate_branch_name_length_limit() {
+        let long_name = "a".repeat(257);
+        assert!(validate_branch_name(&long_name).is_err());
+
+        let max_length_name = "a".repeat(256);
+        assert!(validate_branch_name(&max_length_name).is_ok());
+    }
+
+    // ==================== validate_commit_sha tests ====================
+
+    #[test]
+    fn test_validate_commit_sha_valid() {
+        // Short SHA (7 chars)
+        assert!(validate_commit_sha("abc1234").is_ok());
+        // Full SHA (40 chars)
+        assert!(validate_commit_sha("abc1234567890def1234567890abc1234567890a").is_ok());
+        // Mixed case hex
+        assert!(validate_commit_sha("AbCdEf1234567").is_ok());
+    }
+
+    #[test]
+    fn test_validate_commit_sha_rejects_non_hex() {
+        assert!(validate_commit_sha("abc123g").is_err()); // 'g' is not hex
+        assert!(validate_commit_sha("abc123!").is_err());
+        assert!(validate_commit_sha("abc 123").is_err());
+        assert!(validate_commit_sha("abc;123").is_err());
+    }
+
+    #[test]
+    fn test_validate_commit_sha_length_limits() {
+        // Too short
+        assert!(validate_commit_sha("abc123").is_err()); // 6 chars
+        // Too long
+        let too_long = "a".repeat(65);
+        assert!(validate_commit_sha(&too_long).is_err());
+    }
+
+    // ==================== validate_git_file_path tests ====================
+
+    #[test]
+    fn test_validate_git_file_path_valid() {
+        assert!(validate_git_file_path("file.txt").is_ok());
+        assert!(validate_git_file_path("path/to/file.rs").is_ok());
+        assert!(validate_git_file_path("my-file_name.txt").is_ok());
+    }
+
+    #[test]
+    fn test_validate_git_file_path_rejects_empty() {
+        assert!(validate_git_file_path("").is_err());
+    }
+
+    #[test]
+    fn test_validate_git_file_path_rejects_null_bytes() {
+        assert!(validate_git_file_path("file\0.txt").is_err());
+    }
+
+    #[test]
+    fn test_validate_git_file_path_rejects_shell_chars() {
+        assert!(validate_git_file_path("file;rm -rf /").is_err());
+        assert!(validate_git_file_path("file$(whoami)").is_err());
+        assert!(validate_git_file_path("file|cat /etc/passwd").is_err());
+    }
+
+    // ==================== validate_id tests ====================
+
+    #[test]
+    fn test_validate_id_valid() {
+        assert!(validate_id("abc123", "test").is_ok());
+        assert!(validate_id("my-project_id", "test").is_ok());
+        assert!(validate_id("a", "test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_id_rejects_empty() {
+        assert!(validate_id("", "test").is_err());
+    }
+
+    #[test]
+    fn test_validate_id_rejects_special_chars() {
+        assert!(validate_id("id;ls", "test").is_err());
+        assert!(validate_id("id$(cmd)", "test").is_err());
+        assert!(validate_id("id/path", "test").is_err());
+        assert!(validate_id("id.name", "test").is_err());
+    }
+
+    #[test]
+    fn test_validate_id_length_limit() {
+        let long_id = "a".repeat(257);
+        assert!(validate_id(&long_id, "test").is_err());
+
+        let max_id = "a".repeat(256);
+        assert!(validate_id(&max_id, "test").is_ok());
+    }
+
+    // ==================== validate_limit tests ====================
+
+    #[test]
+    fn test_validate_limit_valid() {
+        assert_eq!(validate_limit(1).unwrap(), 1);
+        assert_eq!(validate_limit(100).unwrap(), 100);
+        assert_eq!(validate_limit(1000).unwrap(), 1000);
+    }
+
+    #[test]
+    fn test_validate_limit_rejects_zero() {
+        assert!(validate_limit(0).is_err());
+    }
+
+    #[test]
+    fn test_validate_limit_rejects_too_large() {
+        assert!(validate_limit(1001).is_err());
+        assert!(validate_limit(u32::MAX).is_err());
+    }
+
+    // ==================== Integration security tests ====================
+
+    #[test]
+    fn test_command_injection_prevention() {
+        // These should all be rejected
+        let injection_attempts = [
+            "; rm -rf /",
+            "| cat /etc/passwd",
+            "$(whoami)",
+            "`id`",
+            "&& curl evil.com",
+            "\n whoami",
+            "--exec=bash",
+        ];
+
+        for attempt in injection_attempts {
+            assert!(
+                validate_arg_safe(attempt).is_err(),
+                "Should reject injection attempt: {}",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_branch_name_injection_prevention() {
+        let injection_attempts = [
+            "-c core.sshCommand=evil",
+            "--upload-pack=evil",
+            "$(curl evil.com)",
+            "`curl evil.com`",
+            "branch;ls",
+            "../../../etc/passwd",
+        ];
+
+        for attempt in injection_attempts {
+            assert!(
+                validate_branch_name(attempt).is_err(),
+                "Should reject branch injection: {}",
+                attempt
+            );
+        }
+    }
 }

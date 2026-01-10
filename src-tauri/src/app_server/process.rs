@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
@@ -14,6 +15,21 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{mpsc, oneshot, Mutex};
+
+/// Maximum number of pending requests allowed to prevent unbounded memory growth
+const MAX_PENDING_REQUESTS: usize = 1000;
+
+/// Threshold at which to trigger cleanup of stale requests (80% of max)
+const PENDING_CLEANUP_THRESHOLD: usize = 800;
+
+/// Maximum age for a pending request before it's considered stale (in seconds)
+const STALE_REQUEST_AGE_SECS: u64 = 60;
+
+/// Pending request entry with timestamp for cleanup
+struct PendingRequest {
+    sender: oneshot::Sender<Result<JsonValue>>,
+    created_at: Instant,
+}
 
 use crate::{Error, Result};
 
@@ -55,8 +71,8 @@ pub struct AppServerProcess {
     /// Request ID counter
     request_counter: AtomicU64,
 
-    /// Pending requests awaiting responses
-    pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<JsonValue>>>>>,
+    /// Pending requests awaiting responses (with timestamps for cleanup)
+    pending_requests: Arc<Mutex<HashMap<u64, PendingRequest>>>,
 
     /// Channel for shutdown signal
     shutdown_tx: Option<mpsc::Sender<()>>,
@@ -90,8 +106,8 @@ impl AppServerProcess {
             .take()
             .ok_or_else(|| Error::AppServer("Failed to capture stdout".to_string()))?;
 
-        let pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<JsonValue>>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending_requests: Arc<Mutex<HashMap<u64, PendingRequest>>> =
+            Arc::new(Mutex::new(HashMap::with_capacity(128)));
 
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
@@ -137,8 +153,8 @@ impl AppServerProcess {
                 let count = pending.len();
                 if count > 0 {
                     tracing::warn!("Cleaning up {} pending requests due to disconnect", count);
-                    for (id, sender) in pending.drain() {
-                        let _ = sender.send(Err(Error::AppServer(format!(
+                    for (id, pending_req) in pending.drain() {
+                        let _ = pending_req.sender.send(Err(Error::AppServer(format!(
                             "Request {} failed: {}",
                             id, reason
                         ))));
@@ -229,7 +245,7 @@ impl AppServerProcess {
     /// Handle an incoming JSON-RPC message
     async fn handle_message(
         line: &str,
-        pending_requests: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<JsonValue>>>>>,
+        pending_requests: &Arc<Mutex<HashMap<u64, PendingRequest>>>,
         app_handle: &AppHandle,
     ) {
         let message: JsonRpcMessage = match serde_json::from_str(line) {
@@ -245,7 +261,7 @@ impl AppServerProcess {
             // Response to our request (has id, has result or error, no method)
             (Some(id), None, _, _) => {
                 let mut pending = pending_requests.lock().await;
-                if let Some(sender) = pending.remove(&id) {
+                if let Some(pending_req) = pending.remove(&id) {
                     let result = if let Some(error) = message.error {
                         Err(Error::AppServer(format!(
                             "JSON-RPC error {}: {}",
@@ -254,7 +270,7 @@ impl AppServerProcess {
                     } else {
                         Ok(message.result.unwrap_or(JsonValue::Null))
                     };
-                    let _ = sender.send(result);
+                    let _ = pending_req.sender.send(result);
                 }
             }
             // Server-initiated request (has id AND method) - e.g., approval requests
@@ -311,11 +327,28 @@ impl AppServerProcess {
         let mut json = serde_json::to_string(&request)?;
         json.push('\n');
 
-        // Register pending request
+        // Register pending request with capacity check and cleanup
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending_requests.lock().await;
-            pending.insert(id, tx);
+
+            // Check if we need to cleanup stale requests
+            if pending.len() >= PENDING_CLEANUP_THRESHOLD {
+                Self::cleanup_stale_requests(&mut pending);
+            }
+
+            // Check capacity limit after cleanup
+            if pending.len() >= MAX_PENDING_REQUESTS {
+                return Err(Error::AppServer(format!(
+                    "Too many pending requests ({}). Server may be unresponsive.",
+                    pending.len()
+                )));
+            }
+
+            pending.insert(id, PendingRequest {
+                sender: tx,
+                created_at: Instant::now(),
+            });
         }
 
         // Send request
@@ -330,12 +363,49 @@ impl AppServerProcess {
             .map_err(|e| Error::AppServer(format!("Failed to flush stdin: {}", e)))?;
 
         // Wait for response with timeout
-        let result = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
-            .await
-            .map_err(|_| Error::AppServer("Request timeout".to_string()))?
-            .map_err(|_| Error::AppServer("Response channel closed".to_string()))??;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), rx).await;
 
-        serde_json::from_value(result).map_err(|e| Error::Json(e))
+        // Handle timeout - clean up the pending request
+        match result {
+            Ok(Ok(res)) => {
+                // Response received successfully
+                serde_json::from_value(res?).map_err(Error::Json)
+            }
+            Ok(Err(_)) => {
+                // Channel closed unexpectedly
+                Err(Error::AppServer("Response channel closed".to_string()))
+            }
+            Err(_) => {
+                // Timeout - remove the pending request to prevent memory leak
+                let mut pending = self.pending_requests.lock().await;
+                pending.remove(&id);
+                tracing::warn!("Request {} timed out and was cleaned up", id);
+                Err(Error::AppServer("Request timeout".to_string()))
+            }
+        }
+    }
+
+    /// Clean up stale pending requests that have exceeded the maximum age
+    fn cleanup_stale_requests(pending: &mut HashMap<u64, PendingRequest>) {
+        let now = Instant::now();
+        let stale_threshold = std::time::Duration::from_secs(STALE_REQUEST_AGE_SECS);
+
+        let stale_ids: Vec<u64> = pending
+            .iter()
+            .filter(|(_, req)| now.duration_since(req.created_at) > stale_threshold)
+            .map(|(id, _)| *id)
+            .collect();
+
+        if !stale_ids.is_empty() {
+            tracing::warn!("Cleaning up {} stale pending requests", stale_ids.len());
+            for id in stale_ids {
+                if let Some(pending_req) = pending.remove(&id) {
+                    let _ = pending_req.sender.send(Err(Error::AppServer(
+                        format!("Request {} expired (stale)", id)
+                    )));
+                }
+            }
+        }
     }
 
     /// Send a JSON-RPC response to a server-initiated request
