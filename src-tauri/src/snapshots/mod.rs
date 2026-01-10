@@ -15,6 +15,25 @@ use serde::{Deserialize, Serialize};
 use crate::database::{Database, Snapshot};
 use crate::{Error, Result};
 
+/// Validate that a commit SHA is safe (hexadecimal string only)
+fn validate_commit_sha(sha: &str) -> Result<()> {
+    // Only allow hexadecimal characters (0-9, a-f, A-F)
+    if !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Error::Other(format!(
+            "Invalid commit SHA: contains non-hexadecimal characters"
+        )));
+    }
+
+    // Reasonable length check (git SHAs are typically 40 chars, short SHAs are 7+)
+    if sha.len() < 7 || sha.len() > 64 {
+        return Err(Error::Other(format!(
+            "Invalid commit SHA: length must be between 7 and 64 characters"
+        )));
+    }
+
+    Ok(())
+}
+
 /// Metadata for file backup snapshots
 #[derive(Debug, Serialize, Deserialize)]
 struct FileBackupMetadata {
@@ -31,10 +50,15 @@ pub fn is_git_repo(path: &Path) -> bool {
 
 /// Create a snapshot before applying changes
 pub fn create_snapshot(db: &Database, session_id: &str, project_path: &Path) -> Result<Snapshot> {
-    if is_git_repo(project_path) {
-        create_git_snapshot(db, session_id, project_path)
+    // Security: Canonicalize path to prevent symlink attacks and traversal
+    let canonical_path = project_path
+        .canonicalize()
+        .map_err(|_| Error::Other(format!("Invalid or non-existent path")))?;
+
+    if is_git_repo(&canonical_path) {
+        create_git_snapshot(db, session_id, &canonical_path)
     } else {
-        create_file_backup_snapshot(db, session_id, project_path)
+        create_file_backup_snapshot(db, session_id, &canonical_path)
     }
 }
 
@@ -117,6 +141,18 @@ fn create_file_backup_snapshot(db: &Database, session_id: &str, project_path: &P
     let snapshot = Snapshot::new_file_backup(session_id, &metadata_json);
     db.insert_snapshot(&snapshot)?;
 
+    // Cleanup: Keep only 10 most recent snapshots per session
+    match db.cleanup_old_snapshots(session_id, 10) {
+        Ok(count) => {
+            if count > 0 {
+                tracing::info!("Cleaned up {} old snapshots for session {}", count, session_id);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to cleanup old snapshots: {}", e);
+        }
+    }
+
     tracing::info!(
         "Created file backup snapshot: {} ({} files)",
         snapshot.id,
@@ -160,6 +196,18 @@ fn create_git_snapshot(db: &Database, session_id: &str, project_path: &Path) -> 
     let snapshot = Snapshot::new_git_ghost(session_id, &ref_name);
     db.insert_snapshot(&snapshot)?;
 
+    // Cleanup: Keep only 10 most recent snapshots per session
+    match db.cleanup_old_snapshots(session_id, 10) {
+        Ok(count) => {
+            if count > 0 {
+                tracing::info!("Cleaned up {} old snapshots for session {}", count, session_id);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to cleanup old snapshots: {}", e);
+        }
+    }
+
     tracing::info!("Created git snapshot: {} -> {}", snapshot.id, ref_name);
 
     Ok(snapshot)
@@ -182,13 +230,18 @@ fn get_current_head(project_path: &Path) -> Result<String> {
 
 /// Revert to a snapshot
 pub fn revert_to_snapshot(db: &Database, snapshot_id: &str, project_path: &Path) -> Result<()> {
+    // Security: Canonicalize path to prevent symlink attacks and traversal
+    let canonical_path = project_path
+        .canonicalize()
+        .map_err(|_| Error::Other(format!("Invalid or non-existent path")))?;
+
     let snapshot = db
         .get_snapshot(snapshot_id)?
         .ok_or_else(|| Error::SnapshotNotFound(snapshot_id.to_string()))?;
 
     match snapshot.snapshot_type.as_str() {
-        "git_ghost" => revert_git_snapshot(&snapshot, project_path),
-        "file_backup" => revert_file_backup_snapshot(&snapshot, project_path),
+        "git_ghost" => revert_git_snapshot(&snapshot, &canonical_path),
+        "file_backup" => revert_file_backup_snapshot(&snapshot, &canonical_path),
         _ => Err(Error::Other(format!(
             "Unknown snapshot type: {}",
             snapshot.snapshot_type
@@ -209,7 +262,40 @@ fn revert_file_backup_snapshot(snapshot: &Snapshot, project_path: &Path) -> Resu
     let mut restored_count = 0;
 
     for (relative_path, base64_content) in &metadata.files {
+        // Security: Validate path to prevent traversal attacks
+        if relative_path.contains("..") || relative_path.starts_with('/') || relative_path.starts_with('\\') {
+            return Err(Error::Other(format!(
+                "Invalid relative path in snapshot: {}",
+                relative_path
+            )));
+        }
+
         let file_path = project_path.join(relative_path);
+
+        // Security: Ensure the resulting path is within project_path
+        let canonical_path = match file_path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                // Path doesn't exist yet, validate by checking if parent is within project
+                if let Some(parent) = file_path.parent() {
+                    if !parent.starts_with(project_path) {
+                        return Err(Error::Other(format!(
+                            "Path traversal attempt detected: {}",
+                            relative_path
+                        )));
+                    }
+                }
+                file_path.clone()
+            }
+        };
+
+        let canonical_project = project_path.canonicalize().unwrap_or(project_path.to_path_buf());
+        if canonical_path.exists() && !canonical_path.starts_with(&canonical_project) {
+            return Err(Error::Other(format!(
+                "Attempted path traversal in snapshot: {}",
+                relative_path
+            )));
+        }
 
         // Decode the base64 content
         let contents = BASE64
@@ -217,13 +303,13 @@ fn revert_file_backup_snapshot(snapshot: &Snapshot, project_path: &Path) -> Resu
             .map_err(|e| Error::Other(format!("Failed to decode file content: {}", e)))?;
 
         // Ensure parent directory exists
-        if let Some(parent) = file_path.parent() {
+        if let Some(parent) = canonical_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| Error::Other(format!("Failed to create directory: {}", e)))?;
         }
 
         // Write the file
-        fs::write(&file_path, &contents)
+        fs::write(&canonical_path, &contents)
             .map_err(|e| Error::Other(format!("Failed to write file {}: {}", relative_path, e)))?;
 
         restored_count += 1;
@@ -240,6 +326,11 @@ fn revert_file_backup_snapshot(snapshot: &Snapshot, project_path: &Path) -> Resu
 
 /// Revert to a git snapshot
 fn revert_git_snapshot(snapshot: &Snapshot, project_path: &Path) -> Result<()> {
+    // Security: Canonicalize path to prevent symlink attacks and traversal
+    let canonical_path = project_path
+        .canonicalize()
+        .map_err(|_| Error::Other(format!("Invalid or non-existent path")))?;
+
     let metadata: serde_json::Value = snapshot
         .metadata_json
         .as_ref()
@@ -251,10 +342,14 @@ fn revert_git_snapshot(snapshot: &Snapshot, project_path: &Path) -> Result<()> {
         .ok_or_else(|| Error::Other("Missing commit_sha in snapshot".to_string()))?;
 
     if commit_sha.starts_with("stash@") {
-        // Pop the stash
+        // Pop the stash - validate stash ref format
+        if !commit_sha.starts_with("stash@{") || !commit_sha.ends_with('}') {
+            return Err(Error::Other("Invalid stash reference format".to_string()));
+        }
+
         let output = Command::new("git")
             .args(["stash", "pop"])
-            .current_dir(project_path)
+            .current_dir(&canonical_path)
             .output()
             .map_err(|e| Error::Git(format!("Failed to pop stash: {}", e)))?;
 
@@ -263,10 +358,13 @@ fn revert_git_snapshot(snapshot: &Snapshot, project_path: &Path) -> Result<()> {
             return Err(Error::Git(format!("Failed to pop stash: {}", stderr)));
         }
     } else {
+        // Security: Validate commit SHA to prevent command injection
+        validate_commit_sha(commit_sha)?;
+
         // Reset to the commit
         let output = Command::new("git")
             .args(["reset", "--hard", commit_sha])
-            .current_dir(project_path)
+            .current_dir(&canonical_path)
             .output()
             .map_err(|e| Error::Git(format!("Failed to reset: {}", e)))?;
 

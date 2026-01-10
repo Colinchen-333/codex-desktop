@@ -9,6 +9,79 @@ use crate::database::{Project, ProjectSettings};
 use crate::state::AppState;
 use crate::Result;
 
+/// Validate ID parameter (project_id, session_id, thread_id, etc.)
+/// Prevents injection and ensures reasonable length
+pub fn validate_id(id: &str, field_name: &str) -> Result<()> {
+    const MAX_ID_LENGTH: usize = 256;
+
+    if id.len() > MAX_ID_LENGTH {
+        return Err(crate::Error::Other(format!(
+            "{} exceeds maximum length of {} characters",
+            field_name, MAX_ID_LENGTH
+        )));
+    }
+
+    if id.len() == 0 {
+        return Err(crate::Error::Other(format!(
+            "{} cannot be empty",
+            field_name
+        )));
+    }
+
+    // Allow alphanumeric, hyphens, underscores
+    if !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err(crate::Error::Other(format!(
+            "{} contains invalid characters (only alphanumeric, -, _ allowed)",
+            field_name
+        )));
+    }
+
+    Ok(())
+}
+
+/// Validate that a string is safe to use as a command argument
+/// Prevents command injection by checking for dangerous characters
+fn validate_arg_safe(arg: &str) -> Result<()> {
+    // Check for shell metacharacters and dangerous sequences
+    let dangerous_chars = ['\n', '\r', '\0', '|', '&', ';', '$', '`', '(', ')', '<', '>', '\\'];
+
+    for dangerous in dangerous_chars {
+        if arg.contains(dangerous) {
+            return Err(crate::Error::Other(format!(
+                "Invalid argument: contains unsafe character '{}'",
+                dangerous
+            )));
+        }
+    }
+
+    // Prevent argument injection with --
+    if arg.starts_with("--") && arg != "--" {
+        return Err(crate::Error::Other(
+            "Invalid argument: potentially unsafe flag".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate and sanitize a numeric limit parameter
+fn validate_limit(limit: u32) -> Result<u32> {
+    const MAX_LIMIT: u32 = 1000;
+
+    if limit == 0 {
+        return Err(crate::Error::Other("Limit must be greater than 0".to_string()));
+    }
+
+    if limit > MAX_LIMIT {
+        return Err(crate::Error::Other(format!(
+            "Limit exceeds maximum of {}",
+            MAX_LIMIT
+        )));
+    }
+
+    Ok(limit)
+}
+
 /// List all projects
 #[tauri::command]
 pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>> {
@@ -43,6 +116,7 @@ pub async fn add_project(state: State<'_, AppState>, path: String) -> Result<Pro
 /// Remove a project
 #[tauri::command]
 pub async fn remove_project(state: State<'_, AppState>, id: String) -> Result<()> {
+    validate_id(&id, "project_id")?;
     state.database.delete_project(&id)?;
     tracing::info!("Removed project: {}", id);
     Ok(())
@@ -56,6 +130,7 @@ pub async fn update_project(
     display_name: Option<String>,
     settings: Option<ProjectSettings>,
 ) -> Result<Project> {
+    validate_id(&id, "project_id")?;
     let project = state
         .database
         .get_project(&id)?
@@ -80,9 +155,10 @@ pub async fn update_project(
 /// Get git information for a project
 #[tauri::command]
 pub async fn get_project_git_info(path: String) -> Result<GitInfo> {
-    let project_path = Path::new(&path);
+    // Security: Canonicalize to prevent symlink attacks and traversal
+    let canonical_path = crate::utils::validate_and_canonicalize_path(&path)?;
 
-    if !project_path.join(".git").exists() {
+    if !canonical_path.join(".git").exists() {
         return Ok(GitInfo {
             is_git_repo: false,
             branch: None,
@@ -94,7 +170,7 @@ pub async fn get_project_git_info(path: String) -> Result<GitInfo> {
     // Get current branch
     let branch_output = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(project_path)
+        .current_dir(&canonical_path)
         .output()
         .ok();
 
@@ -105,7 +181,7 @@ pub async fn get_project_git_info(path: String) -> Result<GitInfo> {
     // Check if dirty
     let status_output = std::process::Command::new("git")
         .args(["status", "--porcelain"])
-        .current_dir(project_path)
+        .current_dir(&canonical_path)
         .output()
         .ok();
 
@@ -116,7 +192,7 @@ pub async fn get_project_git_info(path: String) -> Result<GitInfo> {
     // Get last commit message
     let log_output = std::process::Command::new("git")
         .args(["log", "-1", "--pretty=%s"])
-        .current_dir(project_path)
+        .current_dir(&canonical_path)
         .output()
         .ok();
 
@@ -135,31 +211,29 @@ pub async fn get_project_git_info(path: String) -> Result<GitInfo> {
 /// Get git diff for a project (tracked + untracked)
 #[tauri::command]
 pub async fn get_project_git_diff(path: String) -> Result<GitDiff> {
-    let project_path = Path::new(&path);
-    if !project_path.exists() {
-        return Err(crate::Error::InvalidPath(format!(
-            "Path does not exist: {}",
-            path
-        )));
-    }
+    // Security: Canonicalize to prevent symlink attacks and traversal
+    let canonical_path = crate::utils::validate_and_canonicalize_path(&path)?;
 
-    if !inside_git_repo(project_path)? {
+    if !inside_git_repo(&canonical_path)? {
         return Ok(GitDiff {
             is_git_repo: false,
             diff: String::new(),
         });
     }
 
-    let tracked_diff = run_git_capture_diff(project_path, &["diff"])?;
+    let tracked_diff = run_git_capture_diff(&canonical_path, &["diff"])?;
     let untracked_output =
-        run_git_capture_stdout(project_path, &["ls-files", "--others", "--exclude-standard"])?;
+        run_git_capture_stdout(&canonical_path, &["ls-files", "--others", "--exclude-standard"])?;
 
     let mut untracked_diff = String::new();
     let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
     for file in untracked_output.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        // Security: Validate file argument to prevent command injection
+        validate_arg_safe(file)?;
+
         let args = ["diff", "--no-index", "--", null_path, file];
-        if let Ok(diff) = run_git_capture_diff(project_path, &args) {
+        if let Ok(diff) = run_git_capture_diff(&canonical_path, &args) {
             untracked_diff.push_str(&diff);
         }
     }
@@ -258,13 +332,8 @@ pub async fn list_project_files(
     query: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<FileEntry>> {
-    let project_path = Path::new(&path);
-    if !project_path.exists() {
-        return Err(crate::Error::InvalidPath(format!(
-            "Path does not exist: {}",
-            path
-        )));
-    }
+    // Security: Canonicalize path to prevent traversal attacks
+    let canonical_path = crate::utils::validate_and_canonicalize_path(&path)?;
 
     // Directories to ignore
     let ignore_dirs: HashSet<&str> = [
@@ -301,8 +370,8 @@ pub async fn list_project_files(
 
     // Collect files recursively
     collect_files_recursive(
-        project_path,
-        project_path,
+        &canonical_path,
+        &canonical_path,
         &ignore_dirs,
         &query_lower,
         &mut files,
@@ -442,22 +511,17 @@ pub struct GitCommit {
 /// Get list of git branches for a project
 #[tauri::command]
 pub async fn get_git_branches(path: String) -> Result<Vec<GitBranch>> {
-    let project_path = Path::new(&path);
-    if !project_path.exists() {
-        return Err(crate::Error::InvalidPath(format!(
-            "Path does not exist: {}",
-            path
-        )));
-    }
+    // Security: Canonicalize to prevent symlink attacks and traversal
+    let canonical_path = crate::utils::validate_and_canonicalize_path(&path)?;
 
-    if !inside_git_repo(project_path)? {
+    if !inside_git_repo(&canonical_path)? {
         return Ok(Vec::new());
     }
 
     // Get all branches with current marker
     let output = std::process::Command::new("git")
         .args(["branch", "-a", "--format=%(HEAD) %(refname:short)"])
-        .current_dir(project_path)
+        .current_dir(&canonical_path)
         .output()
         .map_err(|err| crate::Error::Other(format!("Failed to run git: {}", err)))?;
 
@@ -514,24 +578,20 @@ pub async fn get_git_branches(path: String) -> Result<Vec<GitBranch>> {
 /// Get list of recent git commits for a project
 #[tauri::command]
 pub async fn get_git_commits(path: String, limit: Option<u32>) -> Result<Vec<GitCommit>> {
-    let project_path = Path::new(&path);
-    if !project_path.exists() {
-        return Err(crate::Error::InvalidPath(format!(
-            "Path does not exist: {}",
-            path
-        )));
-    }
+    // Security: Canonicalize to prevent symlink attacks and traversal
+    let canonical_path = crate::utils::validate_and_canonicalize_path(&path)?;
 
-    if !inside_git_repo(project_path)? {
+    if !inside_git_repo(&canonical_path)? {
         return Ok(Vec::new());
     }
 
-    let limit = limit.unwrap_or(20);
+    // Security: Validate limit parameter to prevent excessive resource usage
+    let limit = validate_limit(limit.unwrap_or(20))?;
     let format = "%H|%h|%s|%an|%ar";
 
     let output = std::process::Command::new("git")
         .args(["log", &format!("-{}", limit), &format!("--format={}", format)])
-        .current_dir(project_path)
+        .current_dir(&canonical_path)
         .output()
         .map_err(|err| crate::Error::Other(format!("Failed to run git: {}", err)))?;
 

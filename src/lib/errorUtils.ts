@@ -1,5 +1,7 @@
 // Error utilities for parsing Tauri errors
 
+import { log } from './logger'
+
 export interface TauriError {
   message: string
   errorInfo?: {
@@ -54,7 +56,7 @@ export function emitError(
     try {
       listener(notification)
     } catch (e) {
-      console.error('[emitError] Listener threw error:', e)
+      log.error(`Listener threw error: ${e}`, 'emitError')
     }
   })
 }
@@ -69,7 +71,7 @@ export function handleAsyncError(
   source?: string
 ): void {
   const message = parseError(error)
-  console.error(`[${context}] ${message}`, error)
+  log.error(`${message}`, context)
   emitError(message, 'error', source, context)
 }
 

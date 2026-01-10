@@ -23,8 +23,10 @@ import {
 // Internal - UI components
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
 import { RenameDialog } from '../ui/RenameDialog'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useToast } from '../ui/Toast'
 import { StatusIcon, getStatusLabel } from '../ui/StatusIndicator'
+import { TaskProgressIndicator } from '../chat/TaskProgress'
 
 // Internal - dialogs
 import { ProjectSettingsDialog } from '../dialogs/ProjectSettingsDialog'
@@ -104,6 +106,19 @@ export function Sidebar() {
   // Project settings dialog state
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   const [projectSettingsId, setProjectSettingsId] = useState<string | null>(null)
+
+  // Confirmation dialogs state
+  const [deleteProjectConfirm, setDeleteProjectConfirm] = useState<{
+    isOpen: boolean
+    projectId: string | null
+    projectName: string
+  }>({ isOpen: false, projectId: null, projectName: '' })
+
+  const [deleteSessionConfirm, setDeleteSessionConfirm] = useState<{
+    isOpen: boolean
+    sessionId: string | null
+    sessionName: string
+  }>({ isOpen: false, sessionId: null, sessionName: '' })
 
   // Search state with debounce
   const [localSearchQuery, setLocalSearchQuery] = useState('')
@@ -196,13 +211,25 @@ export function Sidebar() {
     setProjectSettingsOpen(true)
   }
 
-  const handleDeleteProject = async (id: string) => {
+  const handleDeleteProject = (id: string, name: string) => {
+    setDeleteProjectConfirm({
+      isOpen: true,
+      projectId: id,
+      projectName: name,
+    })
+  }
+
+  const confirmDeleteProject = async () => {
+    if (!deleteProjectConfirm.projectId) return
+
     try {
-      await removeProject(id)
+      await removeProject(deleteProjectConfirm.projectId)
       showToast('Project removed', 'success')
     } catch (error) {
       console.error('Failed to remove project:', error)
       showToast('Failed to remove project', 'error')
+    } finally {
+      setDeleteProjectConfirm({ isOpen: false, projectId: null, projectName: '' })
     }
   }
 
@@ -367,13 +394,12 @@ export function Sidebar() {
               }
             }}
             onRename={handleRenameSession}
-            onDelete={async (sessionId) => {
-              try {
-                await deleteSession(sessionId)
-                showToast('Session deleted', 'success')
-              } catch {
-                showToast('Failed to delete session', 'error')
-              }
+            onDelete={(sessionId, sessionName) => {
+              setDeleteSessionConfirm({
+                isOpen: true,
+                sessionId,
+                sessionName,
+              })
             }}
             isLoading={sessionsLoading || isSearching}
             hasProject={!!selectedProjectId}
@@ -426,6 +452,40 @@ export function Sidebar() {
         }}
         projectId={projectSettingsId}
       />
+
+      {/* Delete Project Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={deleteProjectConfirm.isOpen}
+        title="Remove Project"
+        message={`Are you sure you want to remove "${deleteProjectConfirm.projectName}"? This will only remove the project from your list and will not delete any files.`}
+        confirmText="Remove"
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={confirmDeleteProject}
+        onCancel={() => setDeleteProjectConfirm({ isOpen: false, projectId: null, projectName: '' })}
+      />
+
+      {/* Delete Session Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={deleteSessionConfirm.isOpen}
+        title="Delete Session"
+        message={`Are you sure you want to delete "${deleteSessionConfirm.sessionName}"? This action cannot be undone.`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={async () => {
+          if (!deleteSessionConfirm.sessionId) return
+          try {
+            await deleteSession(deleteSessionConfirm.sessionId)
+            showToast('Session deleted', 'success')
+          } catch {
+            showToast('Failed to delete session', 'error')
+          } finally {
+            setDeleteSessionConfirm({ isOpen: false, sessionId: null, sessionName: '' })
+          }
+        }}
+        onCancel={() => setDeleteSessionConfirm({ isOpen: false, sessionId: null, sessionName: '' })}
+      />
     </div>
   )
 }
@@ -441,7 +501,7 @@ interface ProjectListProps {
   selectedId: string | null
   onSelect: (id: string | null) => void
   onRename: (id: string, currentName: string) => void
-  onDelete: (id: string) => void
+  onDelete: (id: string, name: string) => void
   onSettings: (id: string) => void
 }
 
@@ -484,7 +544,7 @@ function ProjectList({ projects, selectedId, onSelect, onRename, onDelete, onSet
           {
             label: 'Remove',
             icon: '🗑️',
-            onClick: () => onDelete(project.id),
+            onClick: () => onDelete(project.id, displayName),
             variant: 'danger',
           },
         ]
@@ -533,7 +593,7 @@ interface SessionListProps {
   onSelect: (id: string | null, projectId?: string) => void
   onToggleFavorite: (sessionId: string, isFavorite: boolean) => void
   onRename: (sessionId: string, currentTitle: string) => void
-  onDelete: (sessionId: string) => void
+  onDelete: (sessionId: string, sessionName: string) => void
   isLoading: boolean
   hasProject: boolean
   isGlobalSearch?: boolean
@@ -550,6 +610,7 @@ function SessionList({
   hasProject,
   isGlobalSearch,
 }: SessionListProps) {
+  // Hooks must be called unconditionally at the top
   const { getSessionDisplayName } = useSessionsStore()
   const { projects } = useProjectsStore()
 
@@ -563,6 +624,25 @@ function SessionList({
     [projects]
   )
 
+  // Memoize sorted sessions to avoid recalculating on every render
+  // Sort order: running first, then favorites, then by last accessed or created time
+  const sortedSessions = useMemo(() => {
+    return [...sessions].sort((a, b) => {
+      // Running sessions always first
+      if (a.status === 'running' && b.status !== 'running') return -1
+      if (a.status !== 'running' && b.status === 'running') return 1
+      // Then favorites
+      if (a.isFavorite !== b.isFavorite) {
+        return a.isFavorite ? -1 : 1
+      }
+      // Then by time
+      const timeA = a.lastAccessedAt || a.createdAt
+      const timeB = b.lastAccessedAt || b.createdAt
+      return timeB - timeA
+    })
+  }, [sessions])
+
+  // Early returns after all hooks
   // When doing global search, don't require project selection
   if (!hasProject && !isGlobalSearch) {
     return (
@@ -590,24 +670,6 @@ function SessionList({
       </div>
     )
   }
-
-  // Memoize sorted sessions to avoid recalculating on every render
-  // Sort order: running first, then favorites, then by last accessed or created time
-  const sortedSessions = useMemo(() => {
-    return [...sessions].sort((a, b) => {
-      // Running sessions always first
-      if (a.status === 'running' && b.status !== 'running') return -1
-      if (a.status !== 'running' && b.status === 'running') return 1
-      // Then favorites
-      if (a.isFavorite !== b.isFavorite) {
-        return a.isFavorite ? -1 : 1
-      }
-      // Then by time
-      const timeA = a.lastAccessedAt || a.createdAt
-      const timeB = b.lastAccessedAt || b.createdAt
-      return timeB - timeA
-    })
-  }, [sessions])
 
   if (sessions.length === 0) {
     return (
@@ -643,7 +705,7 @@ function SessionList({
           {
             label: 'Delete',
             icon: '🗑️',
-            onClick: () => onDelete(session.sessionId),
+            onClick: () => onDelete(session.sessionId, displayName),
             variant: 'danger',
           },
         ]
@@ -662,13 +724,18 @@ function SessionList({
               role="option"
               aria-selected={isSelected}
             >
-              {/* First row: Status icon + Session name */}
+              {/* First row: Status icon + Session name + Task progress */}
               <div className="flex items-center gap-2">
                 <StatusIcon status={session.status} />
                 {session.isFavorite && <Star size={12} className="text-yellow-500 flex-shrink-0 fill-yellow-500" />}
                 <span className="truncate text-sm font-medium flex-1">
                   {displayName}
                 </span>
+                {/* Task progress indicator */}
+                <TaskProgressIndicator
+                  tasksJson={session.tasksJson}
+                  status={session.status}
+                />
               </div>
               {/* Second row: Status label + Timestamp + Project name (for global search) */}
               <div className="flex items-center gap-1.5 mt-1 text-xs">

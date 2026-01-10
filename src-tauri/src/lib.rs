@@ -11,6 +11,7 @@ pub mod snapshots;
 
 mod error;
 mod state;
+mod utils;
 
 pub use error::{CodexErrorInfo, CodexErrorType, Error, Result};
 pub use state::AppState;
@@ -120,6 +121,8 @@ pub fn run() {
             commands::snapshots::create_snapshot,
             commands::snapshots::revert_to_snapshot,
             commands::snapshots::list_snapshots,
+            commands::snapshots::cleanup_old_snapshots_by_age,
+            commands::snapshots::cleanup_session_snapshots,
             // App server commands
             commands::app_server::get_server_status,
             commands::app_server::restart_server,

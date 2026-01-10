@@ -9,7 +9,7 @@ pub use models::*;
 
 use rusqlite::{params, Connection};
 use std::path::Path;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use crate::Result;
 
@@ -87,6 +87,8 @@ impl Database {
                 ON session_metadata(last_accessed_at DESC);
             CREATE INDEX IF NOT EXISTS idx_session_metadata_status
                 ON session_metadata(status);
+            CREATE INDEX IF NOT EXISTS idx_session_metadata_project_status
+                ON session_metadata(project_id, status, last_accessed_at DESC);
             CREATE INDEX IF NOT EXISTS idx_snapshots_session
                 ON snapshots(session_id);
             "#,
@@ -120,11 +122,35 @@ impl Database {
         Ok(())
     }
 
+    /// Execute a closure within a database transaction
+    /// If the closure returns Ok, the transaction is committed
+    /// If the closure returns Err, the transaction is rolled back
+    pub fn with_transaction<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Connection) -> Result<T>,
+    {
+        let mut conn = self.conn.lock();
+        // Use IMMEDIATE transaction to prevent write conflicts
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        match f(&tx) {
+            Ok(result) => {
+                tx.commit()?;
+                Ok(result)
+            }
+            Err(e) => {
+                // Explicitly rollback to ensure cleanup
+                let _ = tx.rollback();
+                Err(e)
+            }
+        }
+    }
+
     // ==================== Project Operations ====================
 
     /// Insert a new project
     pub fn insert_project(&self, project: &Project) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"INSERT INTO projects (id, path, display_name, created_at, last_opened_at, settings_json)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
@@ -142,8 +168,8 @@ impl Database {
 
     /// Get all projects
     pub fn get_all_projects(&self) -> Result<Vec<Project>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare_cached(
             r#"SELECT id, path, display_name, created_at, last_opened_at, settings_json
                FROM projects ORDER BY last_opened_at DESC NULLS LAST"#,
         )?;
@@ -166,7 +192,7 @@ impl Database {
 
     /// Get a project by ID
     pub fn get_project(&self, id: &str) -> Result<Option<Project>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             r#"SELECT id, path, display_name, created_at, last_opened_at, settings_json
                FROM projects WHERE id = ?1"#,
@@ -189,7 +215,7 @@ impl Database {
 
     /// Update project's last opened time
     pub fn update_project_last_opened(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"UPDATE projects SET last_opened_at = strftime('%s', 'now') WHERE id = ?1"#,
             params![id],
@@ -199,7 +225,7 @@ impl Database {
 
     /// Delete a project
     pub fn delete_project(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -208,7 +234,7 @@ impl Database {
 
     /// Upsert session metadata
     pub fn upsert_session_metadata(&self, metadata: &SessionMetadata) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"INSERT INTO session_metadata
                (session_id, project_id, title, tags, is_favorite, is_archived, last_accessed_at, created_at, status, first_message, tasks_json)
@@ -241,8 +267,8 @@ impl Database {
 
     /// Get sessions for a project
     pub fn get_sessions_for_project(&self, project_id: &str) -> Result<Vec<SessionMetadata>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare_cached(
             r#"SELECT session_id, project_id, title, tags, is_favorite, is_archived,
                       last_accessed_at, created_at, status, first_message, tasks_json
                FROM session_metadata
@@ -274,7 +300,7 @@ impl Database {
 
     /// Update session status
     pub fn update_session_status(&self, session_id: &str, status: &SessionStatus) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"UPDATE session_metadata SET status = ?1, last_accessed_at = strftime('%s', 'now') WHERE session_id = ?2"#,
             params![status.as_str(), session_id],
@@ -282,9 +308,40 @@ impl Database {
         Ok(())
     }
 
+    /// Get a session by ID (optimized direct lookup)
+    pub fn get_session_by_id(&self, session_id: &str) -> Result<Option<SessionMetadata>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare_cached(
+            r#"SELECT session_id, project_id, title, tags, is_favorite, is_archived,
+                      last_accessed_at, created_at, status, first_message, tasks_json
+               FROM session_metadata
+               WHERE session_id = ?1"#,
+        )?;
+
+        let mut rows = stmt.query(params![session_id])?;
+
+        if let Some(row) = rows.next()? {
+            Ok(Some(SessionMetadata {
+                session_id: row.get(0)?,
+                project_id: row.get(1)?,
+                title: row.get(2)?,
+                tags: row.get(3)?,
+                is_favorite: row.get(4)?,
+                is_archived: row.get(5)?,
+                last_accessed_at: row.get(6)?,
+                created_at: row.get(7)?,
+                status: SessionStatus::from_str(row.get::<_, String>(8)?.as_str()),
+                first_message: row.get(9)?,
+                tasks_json: row.get(10)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Update session first message (only if not already set)
     pub fn update_session_first_message(&self, session_id: &str, first_message: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"UPDATE session_metadata SET first_message = ?1 WHERE session_id = ?2 AND first_message IS NULL"#,
             params![first_message, session_id],
@@ -294,7 +351,7 @@ impl Database {
 
     /// Update session tasks
     pub fn update_session_tasks(&self, session_id: &str, tasks_json: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"UPDATE session_metadata SET tasks_json = ?1, last_accessed_at = strftime('%s', 'now') WHERE session_id = ?2"#,
             params![tasks_json, session_id],
@@ -304,7 +361,7 @@ impl Database {
 
     /// Delete session metadata
     pub fn delete_session_metadata(&self, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "DELETE FROM session_metadata WHERE session_id = ?1",
             params![session_id],
@@ -316,7 +373,7 @@ impl Database {
 
     /// Insert a snapshot
     pub fn insert_snapshot(&self, snapshot: &Snapshot) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"INSERT INTO snapshots (id, session_id, created_at, snapshot_type, metadata_json)
                VALUES (?1, ?2, ?3, ?4, ?5)"#,
@@ -331,10 +388,57 @@ impl Database {
         Ok(())
     }
 
+    /// Delete old snapshots, keeping only N most recent per session
+    pub fn cleanup_old_snapshots(&self, session_id: &str, keep_count: usize) -> Result<usize> {
+        let conn = self.conn.lock();
+
+        // Get snapshots sorted by created_at descending
+        let mut stmt = conn.prepare(
+            "SELECT id FROM snapshots WHERE session_id = ?1 ORDER BY created_at DESC"
+        )?;
+
+        let snapshot_ids: Vec<String> = stmt.query(params![session_id])?
+            .mapped(|row| row.get(0))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // Keep only the first N snapshots
+        if snapshot_ids.len() <= keep_count {
+            return Ok(0);
+        }
+
+        let to_delete = &snapshot_ids[keep_count..];
+
+        // Delete old snapshots one by one to avoid SQL injection issues with dynamic IN clauses
+        let mut deleted_count = 0;
+        for id in to_delete {
+            match conn.execute("DELETE FROM snapshots WHERE id = ?1", params![id]) {
+                Ok(_) => deleted_count += 1,
+                Err(e) => {
+                    tracing::warn!("Failed to delete snapshot {}: {}", id, e);
+                }
+            }
+        }
+
+        Ok(deleted_count)
+    }
+
+    /// Delete all snapshots older than a specific date
+    pub fn cleanup_snapshots_older_than(&self, days: i64) -> Result<usize> {
+        let conn = self.conn.lock();
+        let cutoff = chrono::Utc::now().timestamp() - (days * 86400);
+
+        let count = conn.execute(
+            "DELETE FROM snapshots WHERE created_at < ?1",
+            params![cutoff],
+        )?;
+
+        Ok(count)
+    }
+
     /// Get snapshots for a session
     pub fn get_snapshots_for_session(&self, session_id: &str) -> Result<Vec<Snapshot>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare_cached(
             r#"SELECT id, session_id, created_at, snapshot_type, metadata_json
                FROM snapshots WHERE session_id = ?1 ORDER BY created_at DESC"#,
         )?;
@@ -356,7 +460,7 @@ impl Database {
 
     /// Get a snapshot by ID
     pub fn get_snapshot(&self, id: &str) -> Result<Option<Snapshot>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             r#"SELECT id, session_id, created_at, snapshot_type, metadata_json
                FROM snapshots WHERE id = ?1"#,
@@ -380,7 +484,7 @@ impl Database {
 
     /// Add command to allowlist
     pub fn add_to_allowlist(&self, project_id: &str, command_pattern: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"INSERT OR IGNORE INTO command_allowlist (project_id, command_pattern)
                VALUES (?1, ?2)"#,
@@ -391,7 +495,7 @@ impl Database {
 
     /// Get allowlist for a project
     pub fn get_allowlist(&self, project_id: &str) -> Result<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT command_pattern FROM command_allowlist WHERE project_id = ?1",
         )?;
@@ -405,7 +509,7 @@ impl Database {
 
     /// Remove command from allowlist
     pub fn remove_from_allowlist(&self, project_id: &str, command_pattern: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "DELETE FROM command_allowlist WHERE project_id = ?1 AND command_pattern = ?2",
             params![project_id, command_pattern],

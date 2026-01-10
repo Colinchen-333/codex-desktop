@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { log } from './logger'
 
 // ==================== Types ====================
 
@@ -113,14 +114,14 @@ export interface ThreadStartResponse {
 
 export interface ThreadResumeResponse {
   thread: ThreadInfo
-  items: unknown[]
+  items: Array<{ id: string; type: string } & Record<string, unknown>>
 }
 
 export interface TurnInfo {
   id: string
   status: string
-  items: unknown[]
-  error: unknown | null
+  items: Array<{ id: string; type: string } & Record<string, unknown>>
+  error: { message: string; code?: string } | null
 }
 
 export interface TurnStartResponse {
@@ -218,10 +219,10 @@ export interface SkillsListResponse {
 
 export interface McpServerStatus {
   name: string
-  tools: Record<string, unknown>
-  resources: unknown[]
-  resourceTemplates: unknown[]
-  authStatus: unknown
+  tools: Record<string, { name: string; description?: string }>
+  resources: Array<{ uri: string; name?: string }>
+  resourceTemplates: Array<{ uriTemplate: string; name?: string }>
+  authStatus: { isAuthenticated: boolean; error?: string } | null
 }
 
 export interface McpServerStatusResponse {
@@ -270,7 +271,7 @@ export interface GitCommit {
 export interface ConfigLayer {
   name: string
   path?: string
-  config: Record<string, unknown>
+  config: Record<string, string | number | boolean | null>
 }
 
 export interface ConfigOrigins {
@@ -281,7 +282,7 @@ export interface ConfigOrigins {
 }
 
 export interface ConfigReadResponse {
-  config: Record<string, unknown>
+  config: Record<string, string | number | boolean | null>
   origins: ConfigOrigins
   layers?: ConfigLayer[]
 }
@@ -303,7 +304,7 @@ export const projectApi = {
 
   remove: (id: string) => invoke<void>('remove_project', { id }),
 
-  update: (id: string, displayName?: string, settings?: unknown) =>
+  update: (id: string, displayName?: string, settings?: Record<string, unknown>) =>
     invoke<Project>('update_project', { id, displayName, settings }),
 
   getGitInfo: (path: string) => invoke<GitInfo>('get_project_git_info', { path }),
@@ -390,7 +391,7 @@ export const sessionApi = {
       const tasksJson = JSON.stringify(tasks)
       return invoke<void>('update_session_tasks', { sessionId, tasksJson })
     } catch (e) {
-      console.error('Failed to serialize tasks:', e)
+      log.error(`Failed to serialize tasks: ${e}`, 'API')
       return invoke<void>('update_session_tasks', { sessionId, tasksJson: '[]' })
     }
   },
@@ -511,7 +512,7 @@ export const configApi = {
   read: (includeLayers?: boolean) =>
     invoke<ConfigReadResponse>('read_config', { includeLayers }),
 
-  write: (key: string, value: unknown) =>
+  write: (key: string, value: string | number | boolean | null) =>
     invoke<void>('write_config', { key, value }),
 }
 

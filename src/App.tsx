@@ -6,6 +6,7 @@ import { OnboardingFlow } from './components/onboarding/OnboardingFlow'
 import { useNeedsOnboarding } from './components/onboarding/useNeedsOnboarding'
 import { ToastProvider } from './components/ui/Toast'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
+import { AsyncErrorBoundary } from './components/ui/AsyncErrorBoundary'
 import { ConnectionStatus } from './components/ui/ConnectionStatus'
 import { GlobalErrorHandler } from './components/ui/GlobalErrorHandler'
 import { KeyboardShortcuts } from './components/KeyboardShortcuts'
@@ -139,7 +140,13 @@ function App() {
 
           {/* Main Content Area */}
           <div className="flex flex-1 flex-col overflow-hidden rounded-2xl bg-card shadow-sm border border-border/50 relative">
-            <MainArea />
+            <AsyncErrorBoundary
+              onError={(error) => {
+                console.error('Async error in main area:', error)
+              }}
+            >
+              <MainArea />
+            </AsyncErrorBoundary>
             <StatusBar />
           </div>
         </div>

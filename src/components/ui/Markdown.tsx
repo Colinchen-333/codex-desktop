@@ -107,6 +107,24 @@ const markdownComponents = {
     return <>{children}</>
   },
   a({ href, children }: { href?: string; children?: React.ReactNode }) {
+    // Security: Validate URL to prevent javascript: and data: URL attacks
+    const isValidUrl = (url: string | undefined): boolean => {
+      if (!url) return false
+      try {
+        const parsed = new URL(url)
+        // Only allow safe protocols
+        return ['http:', 'https:', 'mailto:', 'tel:'].includes(parsed.protocol)
+      } catch {
+        // Invalid URL or relative path - allow relative paths but not absolute dangerous ones
+        return !url.startsWith('javascript:') && !url.startsWith('data:') && !url.startsWith('vbscript:')
+      }
+    }
+
+    if (!isValidUrl(href)) {
+      // Render as plain text for invalid URLs
+      return <span className="text-muted-foreground">{children}</span>
+    }
+
     return (
       <a
         href={href}

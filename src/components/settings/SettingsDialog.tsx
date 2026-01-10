@@ -15,7 +15,13 @@ import {
 import { cn } from '../../lib/utils'
 import { serverApi, allowlistApi, type AccountInfo } from '../../lib/api'
 import { useProjectsStore } from '../../stores/projects'
+import { log } from '../../lib/logger'
 import { useTheme } from '../../lib/theme'
+import {
+  parseSandboxMode,
+  parseApprovalPolicy,
+  parseReasoningEffort,
+} from '../../lib/validation'
 import {
   useSettingsStore,
   type Settings,
@@ -27,6 +33,8 @@ import {
 } from '../../stores/settings'
 import { useModelsStore, modelSupportsReasoning } from '../../stores/models'
 import { useAppStore } from '../../stores/app'
+import { useToast } from '../ui/Toast'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 
 interface SettingsDialogProps {
   isOpen: boolean
@@ -38,13 +46,21 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
   const { settingsTab: activeTab, setSettingsTab } = useAppStore()
   const { settings, updateSetting } = useSettingsStore()
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
+  const { showToast } = useToast()
 
   useEffect(() => {
     if (isOpen) {
       // Fetch account info when dialog opens
-      serverApi.getAccountInfo().then(setAccountInfo).catch(console.error)
+      serverApi
+        .getAccountInfo()
+        .then(setAccountInfo)
+        .catch((error) => {
+          log.error(`Failed to get account info: ${error}`, 'SettingsDialog')
+          showToast('Failed to load account information', 'error')
+        })
     }
-  }, [isOpen])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, showToast])
 
   if (!isOpen) return null
 
@@ -106,8 +122,14 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 <AccountSettings
                   accountInfo={accountInfo}
                   onRefresh={async () => {
-                    const info = await serverApi.getAccountInfo()
-                    setAccountInfo(info)
+                    try {
+                      const info = await serverApi.getAccountInfo()
+                      setAccountInfo(info)
+                    } catch (error) {
+                      log.error(`Failed to refresh account info: ${error}`, 'SettingsDialog')
+                      showToast('Failed to refresh account information', 'error')
+                      throw error
+                    }
                   }}
                 />
               )}
@@ -309,7 +331,10 @@ function ModelSettings({
                       ? 'border-primary bg-primary/10 text-primary'
                       : 'border-border hover:border-primary/50'
                   )}
-                  onClick={() => updateSetting('reasoningEffort', option.reasoningEffort as Settings['reasoningEffort'])}
+                  onClick={() => {
+                    const validated = parseReasoningEffort(option.reasoningEffort, settings.reasoningEffort)
+                    updateSetting('reasoningEffort', validated)
+                  }}
                 >
                   <div className="text-sm font-medium capitalize">{option.reasoningEffort.replace('_', ' ')}</div>
                   <div className="text-[10px] text-muted-foreground line-clamp-2">{option.description}</div>
@@ -380,7 +405,10 @@ function SafetySettings({
                 name="sandboxMode"
                 value={option.value}
                 checked={settings.sandboxMode === option.value}
-                onChange={(e) => updateSetting('sandboxMode', e.target.value as SandboxMode)}
+                onChange={(e) => {
+                  const validated = parseSandboxMode(e.target.value, settings.sandboxMode)
+                  updateSetting('sandboxMode', validated)
+                }}
                 className="h-4 w-4"
               />
               <div>
@@ -413,7 +441,10 @@ function SafetySettings({
                 name="approvalPolicy"
                 value={option.value}
                 checked={settings.approvalPolicy === option.value}
-                onChange={(e) => updateSetting('approvalPolicy', e.target.value as ApprovalPolicy)}
+                onChange={(e) => {
+                  const validated = parseApprovalPolicy(e.target.value, settings.approvalPolicy)
+                  updateSetting('approvalPolicy', validated)
+                }}
                 className="h-4 w-4"
               />
               <div>
@@ -444,6 +475,7 @@ function AccountSettings({
   const [showApiKeyInput, setShowApiKeyInput] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [apiKeyError, setApiKeyError] = useState<string | null>(null)
+  const [showClearDataConfirm, setShowClearDataConfirm] = useState(false)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -497,7 +529,7 @@ function AccountSettings({
             setIsLoggingIn(false)
           }
         } catch (pollError) {
-          console.error('Polling error:', pollError)
+          log.error(`Polling error: ${pollError}`, 'SettingsDialog')
         }
       }, 2000)
       // Stop polling after 60 seconds
@@ -509,7 +541,7 @@ function AccountSettings({
         setIsLoggingIn(false)
       }, 60000)
     } catch (error) {
-      console.error('Login failed:', error)
+      log.error(`Login failed: ${error}`, 'SettingsDialog')
       setIsLoggingIn(false)
     }
   }
@@ -528,7 +560,7 @@ function AccountSettings({
       setApiKey('')
       setShowApiKeyInput(false)
     } catch (error) {
-      console.error('API key login failed:', error)
+      log.error(`API key login failed: ${error}`, 'SettingsDialog')
       setApiKeyError('Invalid API key or login failed')
     } finally {
       setIsLoggingIn(false)
@@ -541,7 +573,7 @@ function AccountSettings({
       await serverApi.logout()
       await onRefresh()
     } catch (error) {
-      console.error('Logout failed:', error)
+      log.error(`Logout failed: ${error}`, 'SettingsDialog')
     } finally {
       setIsLoggingOut(false)
     }
@@ -656,10 +688,7 @@ function AccountSettings({
         <h4 className="mb-2 text-sm font-medium">Data & Privacy</h4>
         <button
           className="rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80"
-          onClick={() => {
-            localStorage.clear()
-            window.location.reload()
-          }}
+          onClick={() => setShowClearDataConfirm(true)}
         >
           Clear Local Data
         </button>
@@ -667,6 +696,21 @@ function AccountSettings({
           This will clear all local settings and data
         </p>
       </div>
+
+      {/* Clear Local Data Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={showClearDataConfirm}
+        title="Clear Local Data"
+        message="Are you sure you want to clear all local settings and data? This action cannot be undone and will reload the application."
+        confirmText="Clear Data"
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={() => {
+          localStorage.clear()
+          window.location.reload()
+        }}
+        onCancel={() => setShowClearDataConfirm(false)}
+      />
     </div>
   )
 }

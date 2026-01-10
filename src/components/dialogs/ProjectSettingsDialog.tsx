@@ -6,6 +6,7 @@ import {
   SANDBOX_MODE_OPTIONS,
   APPROVAL_POLICY_OPTIONS,
 } from '../../stores/settings'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 
 interface ProjectSettingsDialogProps {
   isOpen: boolean
@@ -33,6 +34,11 @@ export function ProjectSettingsDialog({
   const [isSaving, setIsSaving] = useState(false)
   const [newEnvKey, setNewEnvKey] = useState('')
   const [newEnvValue, setNewEnvValue] = useState('')
+  const [clearSettingConfirm, setClearSettingConfirm] = useState<{
+    isOpen: boolean
+    settingKey: keyof ProjectSettings | null
+    settingName: string
+  }>({ isOpen: false, settingKey: null, settingName: '' })
 
   const project = projects.find((p) => p.id === projectId)
 
@@ -91,12 +97,23 @@ export function ProjectSettingsDialog({
     })
   }
 
-  const clearSetting = <K extends keyof ProjectSettings>(key: K) => {
-    setSettings((prev) => {
-      const next = { ...prev }
-      delete next[key]
-      return next
+  const clearSetting = <K extends keyof ProjectSettings>(key: K, name: string) => {
+    setClearSettingConfirm({
+      isOpen: true,
+      settingKey: key,
+      settingName: name,
     })
+  }
+
+  const confirmClearSetting = () => {
+    if (clearSettingConfirm.settingKey) {
+      setSettings((prev) => {
+        const next = { ...prev }
+        delete next[clearSettingConfirm.settingKey!]
+        return next
+      })
+      setClearSettingConfirm({ isOpen: false, settingKey: null, settingName: '' })
+    }
   }
 
   if (!isOpen || !project) return null
@@ -129,7 +146,7 @@ export function ProjectSettingsDialog({
               {settings.model && (
                 <button
                   className="text-xs text-muted-foreground hover:text-foreground"
-                  onClick={() => clearSetting('model')}
+                  onClick={() => clearSetting('model', 'Model')}
                 >
                   Use default
                 </button>
@@ -161,7 +178,7 @@ export function ProjectSettingsDialog({
               {settings.sandboxMode && (
                 <button
                   className="text-xs text-muted-foreground hover:text-foreground"
-                  onClick={() => clearSetting('sandboxMode')}
+                  onClick={() => clearSetting('sandboxMode', 'Sandbox Mode')}
                 >
                   Use default
                 </button>
@@ -193,7 +210,7 @@ export function ProjectSettingsDialog({
               {settings.askForApproval && (
                 <button
                   className="text-xs text-muted-foreground hover:text-foreground"
-                  onClick={() => clearSetting('askForApproval')}
+                  onClick={() => clearSetting('askForApproval', 'Approval Policy')}
                 >
                   Use default
                 </button>
@@ -225,7 +242,7 @@ export function ProjectSettingsDialog({
               {settings.cwd && (
                 <button
                   className="text-xs text-muted-foreground hover:text-foreground"
-                  onClick={() => clearSetting('cwd')}
+                  onClick={() => clearSetting('cwd', 'Working Directory')}
                 >
                   Use default
                 </button>
@@ -314,6 +331,18 @@ export function ProjectSettingsDialog({
             {isSaving ? 'Saving...' : 'Save'}
           </button>
         </div>
+
+        {/* Clear Setting Confirmation Dialog */}
+        <ConfirmDialog
+          isOpen={clearSettingConfirm.isOpen}
+          title="Clear Setting"
+          message={`Are you sure you want to clear the "${clearSettingConfirm.settingName}" setting and use the default value?`}
+          confirmText="Clear"
+          cancelText="Cancel"
+          variant="warning"
+          onConfirm={confirmClearSetting}
+          onCancel={() => setClearSettingConfirm({ isOpen: false, settingKey: null, settingName: '' })}
+        />
       </div>
     </div>
   )

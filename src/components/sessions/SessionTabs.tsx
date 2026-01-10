@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useState, memo, useMemo, useCallback } from 'react'
 import { X, Plus, MessageSquare, Loader2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useThreadStore, type SingleThreadState } from '../../stores/thread'
 import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
 import { CloseSessionDialog } from './CloseSessionDialog'
+import { TaskProgressCompact } from '../chat/TaskProgress'
 
 interface SessionTabsProps {
   onNewSession?: () => void
@@ -100,34 +101,54 @@ interface SessionTabProps {
   onClose: (e: React.MouseEvent) => void
 }
 
-function SessionTab({ threadId, threadState, isActive, onClick, onClose }: SessionTabProps) {
+const SessionTab = memo(function SessionTab({ threadId, threadState, isActive, onClick, onClose }: SessionTabProps) {
   const { thread, turnStatus, pendingApprovals } = threadState
 
-  // Get project info for display
-  const projects = useProjectsStore((state) => state.projects)
-  const sessions = useSessionsStore((state) => state.sessions)
+  // Use selectors to only subscribe to needed data
+  const sessionMeta = useSessionsStore((state) =>
+    state.sessions.find(s => s.sessionId === threadId)
+  )
 
-  // Find session metadata for this thread
-  const sessionMeta = sessions.find((s) => s.sessionId === threadId)
+  const project = useProjectsStore((state) =>
+    state.projects.find(p => thread.cwd?.startsWith(p.path))
+  )
 
-  // Find project for this thread
-  const project = projects.find((p) => {
-    // Match by cwd containing project path
-    return thread.cwd?.startsWith(p.path)
-  })
+  // Memoize expensive label computation
+  const label = useMemo(() =>
+    sessionMeta?.title || project?.displayName || thread.cwd?.split('/').pop() || 'Session'
+  , [sessionMeta?.title, project?.displayName, thread.cwd])
 
-  // Determine tab label
-  const label = sessionMeta?.title || project?.displayName || thread.cwd?.split('/').pop() || 'Session'
+  const displayLabel = useMemo(() =>
+    label.length > 20 ? label.slice(0, 18) + '...' : label
+  , [label])
 
-  // Truncate label if too long
-  const displayLabel = label.length > 20 ? label.slice(0, 18) + '...' : label
+  // Memoize status indicators
+  const isRunning = useMemo(() =>
+    turnStatus === 'running'
+  , [turnStatus])
 
-  const isRunning = turnStatus === 'running'
-  const hasPendingApprovals = pendingApprovals.length > 0
+  const hasPendingApprovals = useMemo(() =>
+    pendingApprovals.length > 0
+  , [pendingApprovals.length])
+
+  // Get session status for task progress
+  const sessionStatus = useMemo(() =>
+    sessionMeta?.status || 'idle'
+  , [sessionMeta?.status])
+
+  // Wrap handlers in useCallback
+  const handleClick = useCallback(() => {
+    onClick()
+  }, [onClick])
+
+  const handleClose = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    onClose(e)
+  }, [onClose])
 
   return (
     <div
-      onClick={onClick}
+      onClick={handleClick}
       className={cn(
         'group flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer',
         'transition-all duration-150 min-w-[100px] max-w-[200px]',
@@ -153,9 +174,15 @@ function SessionTab({ threadId, threadState, isActive, onClick, onClose }: Sessi
       {/* Label */}
       <span className="truncate flex-1">{displayLabel}</span>
 
+      {/* Task progress indicator (compact) */}
+      <TaskProgressCompact
+        tasksJson={sessionMeta?.tasksJson || null}
+        status={sessionStatus}
+      />
+
       {/* Close button */}
       <button
-        onClick={onClose}
+        onClick={handleClose}
         className={cn(
           'flex-shrink-0 p-0.5 rounded hover:bg-destructive/20 hover:text-destructive',
           'opacity-0 group-hover:opacity-100 transition-opacity duration-150',
@@ -167,4 +194,19 @@ function SessionTab({ threadId, threadState, isActive, onClick, onClose }: Sessi
       </button>
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison for React.memo
+  const arePropsEqual = prevProps.threadId === nextProps.threadId &&
+                       prevProps.isActive === nextProps.isActive &&
+                       prevProps.threadState.turnStatus === nextProps.threadState.turnStatus &&
+                       prevProps.threadState.pendingApprovals.length === nextProps.threadState.pendingApprovals.length &&
+                       prevProps.threadState.thread.cwd === nextProps.threadState.thread.cwd
+
+  // Compare session metadata for task progress updates
+  const prevSession = useSessionsStore.getState().sessions.find(s => s.sessionId === prevProps.threadId)
+  const nextSession = useSessionsStore.getState().sessions.find(s => s.sessionId === nextProps.threadId)
+  const isSessionEqual = prevSession?.tasksJson === nextSession?.tasksJson &&
+                        prevSession?.status === nextSession?.status
+
+  return arePropsEqual && isSessionEqual
+})

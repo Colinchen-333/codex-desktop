@@ -1,4 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { log } from './logger'
 
 // ==================== Event Types ====================
 
@@ -265,7 +266,7 @@ export type EventHandlers = {
 export async function setupEventListeners(
   handlers: EventHandlers
 ): Promise<UnlistenFn[]> {
-  console.log('[Events] setupEventListeners called')
+  log.info('setupEventListeners called', 'Events')
 
   // Define all event-handler pairs for parallel registration
   const eventHandlerPairs: Array<[string, EventHandlers[keyof EventHandlers]]> = [
@@ -310,10 +311,10 @@ export async function setupEventListeners(
         const unlisten = await listen(eventName, (event) => {
           handler(event.payload as never)
         })
-        console.log(`[Events] Listener registered for: ${eventName}`)
+        log.debug(`Listener registered for: ${eventName}`, 'Events')
         return unlisten
       } catch (error) {
-        console.error(`[Events] Failed to register listener for ${eventName}:`, error)
+        log.error(`Failed to register listener for ${eventName}: ${error}`, 'Events')
         return null
       }
     })
@@ -322,7 +323,7 @@ export async function setupEventListeners(
   // Filter out nulls (failed or skipped handlers)
   const validUnlisteners = unlisteners.filter((u): u is UnlistenFn => u !== null)
 
-  console.log(`[Events] setupEventListeners completed - ${validUnlisteners.length} listeners registered`)
+  log.info(`setupEventListeners completed - ${validUnlisteners.length} listeners registered`, 'Events')
   return validUnlisteners
 }
 
@@ -332,7 +333,7 @@ export function cleanupEventListeners(unlisteners: UnlistenFn[]) {
     try {
       unlisten()
     } catch (error) {
-      console.error('Failed to cleanup event listener:', error)
+      log.error(`Failed to cleanup event listener: ${error}`, 'Events')
     }
   })
 }

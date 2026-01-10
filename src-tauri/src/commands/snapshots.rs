@@ -38,3 +38,28 @@ pub async fn list_snapshots(
 ) -> Result<Vec<Snapshot>> {
     state.database.get_snapshots_for_session(&session_id)
 }
+
+/// Clean up old snapshots by age
+#[tauri::command]
+pub async fn cleanup_old_snapshots_by_age(
+    state: State<'_, AppState>,
+    max_age_days: Option<i64>,
+) -> Result<String> {
+    let days = max_age_days.unwrap_or(30); // Default 30 days
+    let count = state.database.cleanup_snapshots_older_than(days)?;
+
+    Ok(format!("Deleted {} old snapshots (older than {} days)", count, days))
+}
+
+/// Clean up old snapshots for a specific session
+#[tauri::command]
+pub async fn cleanup_session_snapshots(
+    state: State<'_, AppState>,
+    session_id: String,
+    keep_count: Option<usize>,
+) -> Result<String> {
+    let keep = keep_count.unwrap_or(10); // Default keep 10 most recent
+    let count = state.database.cleanup_old_snapshots(&session_id, keep)?;
+
+    Ok(format!("Deleted {} old snapshots for session {} (kept {} most recent)", count, session_id, keep))
+}

@@ -123,6 +123,7 @@ export interface ProjectSettings {
   model?: string
   sandboxMode?: string
   askForApproval?: string // maps to approvalPolicy
+  [key: string]: unknown // Index signature to allow additional properties from JSON
 }
 
 // Helper to merge project settings with global settings

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { serverApi, type ServerStatus } from '../../lib/api'
+import { useToast } from '../ui/Toast'
 
 interface AboutDialogProps {
   isOpen: boolean
@@ -8,12 +9,19 @@ interface AboutDialogProps {
 
 export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
+  const { showToast } = useToast()
 
   useEffect(() => {
     if (isOpen) {
-      serverApi.getStatus().then(setServerStatus).catch(console.error)
+      serverApi
+        .getStatus()
+        .then(setServerStatus)
+        .catch((error) => {
+          console.error('Failed to get server status:', error)
+          showToast('Failed to load server status information', 'error')
+        })
     }
-  }, [isOpen])
+  }, [isOpen, showToast])
 
   if (!isOpen) return null
 

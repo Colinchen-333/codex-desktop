@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { parseTheme } from './validation'
 
 export type Theme = 'light' | 'dark' | 'system'
 
@@ -15,7 +16,7 @@ const THEME_KEY = 'codex-desktop-theme'
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
     const saved = localStorage.getItem(THEME_KEY)
-    return (saved as Theme) || 'system'
+    return parseTheme(saved, 'system')
   })
 
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark')

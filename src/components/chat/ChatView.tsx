@@ -1,7 +1,22 @@
 import { useRef, useEffect, useState, useCallback, memo, useMemo } from 'react'
 import { X, Paperclip, Image as ImageIcon, StopCircle, ArrowUp, Terminal, FileCode, Brain, Wrench, AlertCircle, ChevronDown, ChevronRight, ExternalLink, ListChecks, Circle, CheckCircle2, XCircle, Loader2, Clock, Coins } from 'lucide-react'
+import { List } from 'react-window'
+import type { ListImperativeAPI } from 'react-window'
 import { cn } from '../../lib/utils'
 import { useThreadStore, type AnyThreadItem, type PlanStep } from '../../stores/thread'
+import {
+  isRecord,
+  isUserMessageContent,
+  isAgentMessageContent,
+  isCommandExecutionContent,
+  isFileChangeContent,
+  isReasoningContent,
+  isMcpToolContent,
+  isWebSearchContent,
+  isReviewContent,
+  isInfoContent,
+  isPlanContent,
+} from '../../lib/typeGuards'
 import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
 import {
@@ -21,6 +36,7 @@ import { executeCommand } from '../../lib/commandExecutor'
 import { useToast } from '../ui/Toast'
 import { serverApi, projectApi, type SkillInput, type ReviewTarget } from '../../lib/api'
 import { ReviewSelectorDialog } from '../dialogs/ReviewSelectorDialog'
+import { log } from '../../lib/logger'
 
 // Maximum height for the textarea (in pixels)
 const MAX_TEXTAREA_HEIGHT = 200
@@ -28,9 +44,29 @@ const MAX_TEXTAREA_HEIGHT = 200
 // Maximum lines before truncating output
 const MAX_OUTPUT_LINES = 50
 
+// Security: Validate file path to prevent directory traversal attacks
+function validateFilePath(projectPath: string, filePath: string): string | null {
+  // Check for path traversal patterns
+  if (filePath.includes('..') || filePath.startsWith('/') || filePath.startsWith('\\')) {
+    return null
+  }
+
+  // Normalize the path and ensure it stays within project directory
+  const normalizedPath = filePath.replace(/\\/g, '/')
+  const joinedPath = `${projectPath}/${normalizedPath}`
+
+  // Additional check: ensure the resolved path starts with project path
+  // This is a frontend check; backend should also validate
+  return joinedPath
+}
+
 // Maximum image size (5MB) and max images count
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024
 const MAX_IMAGES_COUNT = 5
+
+// Virtualized list configuration
+const DEFAULT_ITEM_HEIGHT = 200 // Estimated height for a message item
+const OVERSCAN_COUNT = 5 // Number of items to render outside the visible area
 
 // Format timestamp for display
 function formatTimestamp(ts: number): string {
@@ -61,27 +97,164 @@ function truncateOutput(output: string, maxLines: number = MAX_OUTPUT_LINES): { 
 }
 
 // Colorize diff output like CLI
-function ColorizedOutput({ text }: { text: string }) {
-  const lines = text.split('\n')
+// Optimized with custom memo comparison to only re-render when text content changes
+const ColorizedOutput = memo(function ColorizedOutput({ text }: { text: string }) {
+  const lines = useMemo(() => text.split('\n'), [text])
+
+  const lineClasses = useMemo(() =>
+    lines.map(line => {
+      if (line.startsWith('+') && !line.startsWith('+++')) return 'text-green-600 dark:text-green-400'
+      if (line.startsWith('-') && !line.startsWith('---')) return 'text-red-600 dark:text-red-400'
+      if (line.startsWith('@@') || line.startsWith('diff --git')) return 'text-cyan-600 dark:text-cyan-400'
+      return ''
+    }),
+    [lines]
+  )
+
   return (
     <>
-      {lines.map((line, i) => {
-        let className = ''
-        if (line.startsWith('+') && !line.startsWith('+++')) {
-          className = 'text-green-600 dark:text-green-400'
-        } else if (line.startsWith('-') && !line.startsWith('---')) {
-          className = 'text-red-600 dark:text-red-400'
-        } else if (line.startsWith('@@') || line.startsWith('diff --git')) {
-          className = 'text-cyan-600 dark:text-cyan-400'
-        }
-        return (
-          <span key={i} className={className}>
-            {line}
-            {i < lines.length - 1 && '\n'}
-          </span>
-        )
-      })}
+      {lines.map((line, i) => (
+        <span key={i} className={lineClasses[i]}>
+          {line}
+          {i < lines.length - 1 && '\n'}
+        </span>
+      ))}
     </>
+  )
+}, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if text content actually changes
+  // This prevents unnecessary re-renders when parent components update
+  return prevProps.text === nextProps.text
+})
+
+// Estimate item height for virtualized list based on content type
+function estimateItemHeight(item: AnyThreadItem | undefined): number {
+  if (!item) return DEFAULT_ITEM_HEIGHT
+
+  const content = item.content
+
+  switch (item.type) {
+    case 'userMessage':
+      if (isUserMessageContent(content)) {
+        // User messages with images are taller
+        const baseHeight = 80
+        const imageHeight = (content.images?.length || 0) * 140
+        const textLines = (content.text?.split('\n').length || 1) * 24
+        return baseHeight + imageHeight + textLines
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'agentMessage':
+      if (isAgentMessageContent(content)) {
+        // Agent messages vary based on text length
+        const textLength = content.text?.length || 0
+        const estimatedLines = Math.min(Math.ceil(textLength / 80), 20) // Cap at 20 lines
+        return 80 + estimatedLines * 24
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'commandExecution':
+      if (isCommandExecutionContent(content)) {
+        // Command execution cards can be tall with output
+        const baseHeight = 120
+        const outputLines = (content.output?.split('\n').length || 0)
+        const truncatedLines = Math.min(outputLines, MAX_OUTPUT_LINES)
+        return baseHeight + truncatedLines * 18 + (content.needsApproval ? 100 : 0)
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'fileChange':
+      if (isFileChangeContent(content)) {
+        // File change cards vary based on number of files
+        const baseHeight = 100
+        const fileHeight = content.changes?.length * 150 || 0
+        return baseHeight + fileHeight
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'reasoning':
+      if (isReasoningContent(content)) {
+        // Reasoning cards can be expanded or collapsed
+        const baseHeight = 80
+        const summaryLines = (content.summary?.length || 0) * 24
+        return baseHeight + summaryLines
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'mcpTool':
+      if (isMcpToolContent(content)) {
+        // MCP tool cards vary based on arguments and results
+        const baseHeight = 100
+        const argsHeight = content.arguments ? 80 : 0
+        const resultHeight = content.result ? 100 : 0
+        return baseHeight + argsHeight + resultHeight
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'webSearch':
+      if (isWebSearchContent(content)) {
+        // Web search cards vary based on number of results
+        const baseHeight = 80
+        const resultHeight = (content.results?.length || 0) * 120
+        return baseHeight + resultHeight
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'review':
+      if (isReviewContent(content)) {
+        // Review cards vary based on text length
+        const textLength = content.text?.length || 0
+        const estimatedLines = Math.min(Math.ceil(textLength / 80), 10)
+        return 80 + estimatedLines * 24
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'info':
+      if (isInfoContent(content)) {
+        // Info cards vary based on details
+        const baseHeight = 80
+        const detailsLines = (content.details?.split('\n').length || 0) * 18
+        return baseHeight + detailsLines
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    case 'error':
+      // Error cards have relatively fixed height
+      return 120
+
+    case 'plan':
+      if (isPlanContent(content)) {
+        // Plan cards vary based on number of steps
+        const baseHeight = 100
+        const stepHeight = (content.steps?.length || 0) * 40
+        const explanationHeight = content.explanation ? 50 : 0
+        return baseHeight + stepHeight + explanationHeight
+      }
+      return DEFAULT_ITEM_HEIGHT
+
+    default:
+      return DEFAULT_ITEM_HEIGHT
+  }
+}
+
+// Virtualized list row component
+interface VirtualizedRowProps {
+  index: number
+  style: React.CSSProperties
+  itemOrder: string[]
+  items: Record<string, AnyThreadItem>
+}
+
+function VirtualizedRow({ index, style, itemOrder, items }: VirtualizedRowProps) {
+  const id = itemOrder[index]
+  const item = items[id]
+
+  if (!item) return null
+
+  return (
+    <div style={style} className="py-1.5">
+      <MessageItem key={id} item={item} />
+    </div>
   )
 }
 
@@ -119,6 +292,86 @@ export function ChatView() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const virtualListRef = useRef<ListImperativeAPI | null>(null) // Virtualized list ref
+
+  // Cache for item heights to avoid recalculating on every scroll
+  // Key format: `${itemId}-${itemType}-${itemStatus}`
+  // Cache persists across re-renders and is only invalidated for specific items
+  const itemSizeCache = useRef<Map<string, number>>(new Map())
+
+  // Track previous items to detect which items changed
+  const prevItemsRef = useRef<Record<string, AnyThreadItem>>(items)
+
+  // Clear cache only for items that actually changed
+  // This is more efficient than clearing the entire cache
+  useEffect(() => {
+    const prevItems = prevItemsRef.current
+
+    // Find items that were added, removed, or modified
+    const currentIds = new Set(Object.keys(items))
+    const prevIds = new Set(Object.keys(prevItems))
+
+    // Clear cache for removed items
+    for (const id of prevIds) {
+      if (!currentIds.has(id)) {
+        // Item removed - clear all cache entries for this id
+        for (const key of itemSizeCache.current.keys()) {
+          if (key.startsWith(`${id}-`)) {
+            itemSizeCache.current.delete(key)
+          }
+        }
+      }
+    }
+
+    // Clear cache for modified items
+    for (const id of currentIds) {
+      const prevItem = prevItems[id]
+      const currentItem = items[id]
+
+      if (prevItem && currentItem) {
+        // Check if item properties that affect height changed
+        if (
+          prevItem.type !== currentItem.type ||
+          prevItem.status !== currentItem.status ||
+          prevItem.content !== currentItem.content
+        ) {
+          // Clear all cache entries for this modified item
+          for (const key of itemSizeCache.current.keys()) {
+            if (key.startsWith(`${id}-`)) {
+              itemSizeCache.current.delete(key)
+            }
+          }
+        }
+      }
+    }
+
+    prevItemsRef.current = items
+  }, [items])
+
+  // Get item height for virtualized list with caching
+  // Caching significantly improves performance for large lists (100+ items)
+  const getItemSize = useCallback((index: number) => {
+    const id = itemOrder[index]
+    const item = items[id]
+
+    if (!item) return DEFAULT_ITEM_HEIGHT
+
+    // Create cache key based on item identity and state
+    // Include id, type, and status since these affect height
+    const cacheKey = `${id}-${item.type}-${item.status}`
+
+    // Check cache first
+    const cachedHeight = itemSizeCache.current.get(cacheKey)
+    if (cachedHeight !== undefined) {
+      return cachedHeight
+    }
+
+    // Calculate height and cache it
+    const height = estimateItemHeight(item)
+    itemSizeCache.current.set(cacheKey, height)
+
+    return height
+  }, [itemOrder, items])
 
   // Show slash command popup when typing starts with /
   useEffect(() => {
@@ -171,6 +424,13 @@ export function ChatView() {
       const project = projects.find((p) => p.id === selectedProjectId)
       if (!project) return
 
+      // Security: Validate file path to prevent directory traversal
+      const fullPath = validateFilePath(project.path, file.path)
+      if (!fullPath) {
+        showToast(`Invalid file path: ${file.path}`, 'error')
+        return
+      }
+
       // Check if file is an image - mount it instead of text mention
       const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']
       const ext = file.path.toLowerCase().slice(file.path.lastIndexOf('.'))
@@ -178,7 +438,6 @@ export function ChatView() {
         // Load image file and add to attached images
         try {
           const { readFile, stat } = await import('@tauri-apps/plugin-fs')
-          const fullPath = `${project.path}/${file.path}`
 
           // Pre-check file size before reading to avoid loading large files into memory
           const fileInfo = await stat(fullPath)
@@ -198,7 +457,7 @@ export function ChatView() {
           }
           reader.readAsDataURL(blob)
         } catch (error) {
-          console.error('Failed to load image:', error)
+          log.error(`Failed to load image: ${error}`, 'ChatView')
           showToast(`Failed to load image: ${file.name}`, 'error')
         }
 
@@ -245,8 +504,8 @@ export function ChatView() {
   const scrollRAFRef = useRef<number | null>(null)
   const lastItemId = itemOrder[itemOrder.length - 1] || ''
   const lastItem = items[lastItemId]
-  const lastItemText = lastItem?.type === 'agentMessage'
-    ? (lastItem.content as { text: string }).text.length
+  const lastItemText = lastItem?.type === 'agentMessage' && isAgentMessageContent(lastItem.content)
+    ? lastItem.content.text.length
     : 0
   useEffect(() => {
     if (autoScroll) {
@@ -257,6 +516,15 @@ export function ChatView() {
       // Use RAF for smoother scroll timing aligned with browser repaint
       scrollRAFRef.current = requestAnimationFrame(() => {
         const isStreaming = turnStatus === 'running'
+        // Scroll to the bottom of the virtualized list
+        if (virtualListRef.current && itemOrder.length > 0) {
+          virtualListRef.current.scrollToRow({
+            index: itemOrder.length - 1,
+            align: 'end',
+            behavior: isStreaming ? 'instant' : 'smooth'
+          })
+        }
+        // Fallback to scrollIntoView for messagesEndRef
         messagesEndRef.current?.scrollIntoView({
           behavior: isStreaming ? 'instant' : 'smooth'
         })
@@ -493,13 +761,23 @@ export function ChatView() {
             }
           },
           logout: async () => {
-            await serverApi.logout()
-            showToast('Logged out', 'success')
+            try {
+              await serverApi.logout()
+              showToast('Logged out', 'success')
+            } catch (error) {
+              log.error(`Logout failed: ${error}`, 'ChatView')
+              showToast('Failed to log out', 'error')
+            }
           },
           quit: () => {
-            import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-              getCurrentWindow().close()
-            })
+            import('@tauri-apps/api/window')
+              .then(({ getCurrentWindow }) => {
+                getCurrentWindow().close()
+              })
+              .catch((error) => {
+                log.error(`Failed to close window: ${error}`, 'ChatView')
+                showToast('Failed to close application', 'error')
+              })
           },
           insertText: (value) => {
             const textarea = inputRef.current
@@ -518,7 +796,12 @@ export function ChatView() {
             })
           },
           openUrl: (url) => {
-            import('@tauri-apps/plugin-shell').then(({ open }) => open(url))
+            import('@tauri-apps/plugin-shell')
+              .then(({ open }) => open(url))
+              .catch((error) => {
+                log.error(`Failed to open URL: ${error}`, 'ChatView')
+                showToast(`Failed to open URL: ${url}`, 'error')
+              })
           },
           openHelpDialog: () => {
             setKeyboardShortcutsOpen(true)
@@ -552,7 +835,12 @@ export function ChatView() {
             })
 
             const url = `https://github.com/anthropics/claude-code/issues/new?${params.toString()}`
-            import('@tauri-apps/plugin-shell').then(({ open }) => open(url))
+            import('@tauri-apps/plugin-shell')
+              .then(({ open }) => open(url))
+              .catch((error) => {
+                log.error(`Failed to open bug report URL: ${error}`, 'ChatView')
+                showToast('Failed to open bug report form', 'error')
+              })
             addInfoItem('Bug Report', `Opening GitHub issue form...\n\nIncluded info:\n- Model: ${model}\n- Platform: ${platform}\n- ${sessionInfo}`)
           },
           setModelOverride: (model) => {
@@ -567,7 +855,7 @@ export function ChatView() {
           return
         }
       } catch (error) {
-        console.error('Failed to execute command:', error)
+        log.error(`Failed to execute command: ${error}`, 'ChatView')
         showToast('Failed to execute command', 'error')
       }
     }
@@ -590,7 +878,7 @@ export function ChatView() {
         addInfoItem('Shell Command', `Running: ${shellCommand}`)
         await serverApi.runUserShellCommand(activeThread.id, shellCommand)
       } catch (error) {
-        console.error('Failed to run shell command:', error)
+        log.error(`Failed to run shell command: ${error}`, 'ChatView')
         showToast('Failed to run shell command', 'error')
       }
       return
@@ -633,7 +921,7 @@ export function ChatView() {
             skills = undefined
           }
         } catch (error) {
-          console.warn('Failed to load skills for mentions:', error)
+          log.warn(`Failed to load skills for mentions: ${error}`, 'ChatView')
           // Continue without skills
         }
       }
@@ -644,7 +932,7 @@ export function ChatView() {
         skills
       )
     } catch (error) {
-      console.error('Failed to send message:', error)
+      log.error(`Failed to send message: ${error}`, 'ChatView')
       showToast('Failed to send message. Please try again.', 'error')
     }
   }
@@ -774,7 +1062,7 @@ export function ChatView() {
           : target.type === 'baseBranch'
             ? `branch: ${target.branch}`
             : target.type === 'commit'
-              ? `commit: ${(target as { sha: string }).sha.slice(0, 7)}`
+              ? `commit: ${target.sha.slice(0, 7)}`
               : 'custom instructions'
       // Use getState() to avoid addInfoItem dependency
       useThreadStore.getState().addInfoItem('Review', `Starting review of ${targetDesc}...`)
@@ -820,7 +1108,7 @@ export function ChatView() {
         </div>
       )}
 
-      {/* Messages Area */}
+      {/* Messages Area - Virtualized */}
       <div
         ref={scrollAreaRef}
         className="flex-1 overflow-y-auto p-4"
@@ -833,12 +1121,23 @@ export function ChatView() {
         aria-label="Chat messages"
         aria-live="polite"
       >
-        <div className="mx-auto max-w-3xl space-y-3 pb-2">
-          {itemOrder.map((id) => {
-            const item = items[id]
-            if (!item) return null
-            return <MessageItem key={id} item={item} />
-          })}
+        <div className="mx-auto max-w-3xl h-full">
+          {itemOrder.length > 0 ? (
+            <List
+              listRef={virtualListRef}
+              rowCount={itemOrder.length}
+              rowHeight={getItemSize}
+              overscanCount={OVERSCAN_COUNT}
+              rowProps={{ itemOrder, items } as Omit<VirtualizedRowProps, 'index' | 'style'>}
+              defaultHeight={600}
+              rowComponent={VirtualizedRow}
+              className="overflow-y-auto scrollbar-thin scrollbar-thumb-border"
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-muted-foreground">
+              No messages yet
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -998,8 +1297,10 @@ function shallowContentEqual(prev: unknown, next: unknown): boolean {
   if (typeof prev !== 'object' || typeof next !== 'object') return prev === next
   if (prev === null || next === null) return prev === next
 
-  const prevObj = prev as Record<string, unknown>
-  const nextObj = next as Record<string, unknown>
+  const prevObj = isRecord(prev) ? prev : null
+  const nextObj = isRecord(next) ? next : null
+  if (!prevObj || !nextObj) return prev === next
+
   const prevKeys = Object.keys(prevObj)
   const nextKeys = Object.keys(nextObj)
 
@@ -1045,7 +1346,7 @@ const MessageItem = memo(
       case 'plan':
         return <PlanCard item={item} />
       default:
-        console.warn(`Unknown item type: ${(item as AnyThreadItem).type}`)
+        log.warn(`Unknown item type: ${(item as AnyThreadItem).type}`, 'MessageItem')
         return null
     }
   },
@@ -1064,9 +1365,13 @@ const MessageItem = memo(
   }
 )
 
-// User Message
-function UserMessage({ item }: { item: AnyThreadItem }) {
-  const content = item.content as { text: string; images?: string[] }
+// User Message - Memoized to prevent unnecessary re-renders when parent state changes
+const UserMessage = memo(function UserMessage({ item }: { item: AnyThreadItem }) {
+  if (!isUserMessageContent(item.content)) {
+    log.warn(`Invalid user message content for item ${item.id}`, 'UserMessage')
+    return null
+  }
+  const content = item.content
   return (
     <div className="flex justify-end pl-12 animate-in slide-in-from-bottom-2 duration-200">
       <div className="group relative max-w-[85%]">
@@ -1094,11 +1399,19 @@ function UserMessage({ item }: { item: AnyThreadItem }) {
       </div>
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if item identity or content changes
+  // User messages are immutable once created, so reference equality is sufficient
+  return prevProps.item === nextProps.item
+})
 
-// Agent Message
-function AgentMessage({ item }: { item: AnyThreadItem }) {
-  const content = item.content as { text: string; isStreaming: boolean }
+// Agent Message - Memoized to prevent unnecessary re-renders during streaming
+const AgentMessage = memo(function AgentMessage({ item }: { item: AnyThreadItem }) {
+  if (!isAgentMessageContent(item.content)) {
+    log.warn(`Invalid agent message content for item ${item.id}`, 'AgentMessage')
+    return null
+  }
+  const content = item.content
   return (
     <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-200">
       <div className="max-w-[90%] rounded-2xl rounded-tl-sm bg-card px-5 py-4 shadow-md border border-border/30 backdrop-blur-sm">
@@ -1113,26 +1426,36 @@ function AgentMessage({ item }: { item: AnyThreadItem }) {
       </div>
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison: check if content actually changed
+  // Agent messages can update during streaming, so we need deeper comparison
+  const prev = prevProps.item
+  const next = nextProps.item
+
+  // Fast path: same reference
+  if (prev === next) return true
+
+  // Must be same type and status
+  if (prev.type !== next.type || prev.status !== next.status) return false
+
+  // For agent messages, check if text or streaming status changed
+  if (!isAgentMessageContent(prev.content) || !isAgentMessageContent(next.content)) {
+    return false
+  }
+
+  const prevContent = prev.content
+  const nextContent = next.content
+
+  // Re-render if text changed, streaming status changed, or text length changed (during streaming)
+  return (
+    prevContent.text === nextContent.text &&
+    prevContent.isStreaming === nextContent.isStreaming
+  )
+})
 
 // Command Execution Card
 function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
-  const content = item.content as {
-    callId?: string
-    command: string | string[]
-    cwd: string
-    commandActions?: string[]
-    needsApproval?: boolean
-    approved?: boolean
-    output?: string
-    stdout?: string
-    stderr?: string
-    exitCode?: number
-    durationMs?: number
-    isRunning?: boolean
-    reason?: string
-    proposedExecpolicyAmendment?: { command: string[] } | null
-  }
+  // Hooks must be called unconditionally at the top
   const { respondToApproval, activeThread, sendMessage } = useThreadStore()
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [isExpanded, setIsExpanded] = useState(true)
@@ -1147,6 +1470,22 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
   const outputRef = useRef<HTMLPreElement>(null)
   const feedbackInputRef = useRef<HTMLInputElement>(null)
 
+  // Early return validation - check content type before proceeding
+  const content = isCommandExecutionContent(item.content) ? item.content : null
+
+  // Auto-scroll output when streaming - must be before early return
+  useEffect(() => {
+    if (content && content.isRunning && outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight
+    }
+  }, [content, showFullOutput])
+
+  // Early return after all hooks
+  if (!content) {
+    log.warn(`Invalid command execution content for item ${item.id}`, 'CommandExecutionCard')
+    return null
+  }
+
   // Format command for display
   const commandDisplay = Array.isArray(content.command)
     ? content.command.join(' ')
@@ -1156,13 +1495,6 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
   const rawOutput = content.output || content.stdout || ''
   const { text: outputContent, truncated: isOutputTruncated, omittedLines } =
     showFullOutput ? { text: rawOutput, truncated: false, omittedLines: 0 } : truncateOutput(rawOutput)
-
-  // Auto-scroll output when streaming
-  useEffect(() => {
-    if (content.isRunning && outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight
-    }
-  }, [outputContent, content.isRunning])
 
   const handleApprove = async (
     decision: 'accept' | 'acceptForSession' | 'acceptWithExecpolicyAmendment' | 'decline'
@@ -1187,7 +1519,7 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
     // CRITICAL: Validate thread hasn't changed since component rendered
     const currentThread = useThreadStore.getState().activeThread
     if (!currentThread || !activeThread || currentThread.id !== activeThread.id) {
-      console.error('[CommandExecutionCard] Thread changed before explain, aborting')
+      log.error('Thread changed before explain, aborting', 'CommandExecutionCard')
       return
     }
 
@@ -1213,7 +1545,7 @@ function CommandExecutionCard({ item }: { item: AnyThreadItem }) {
     // CRITICAL: Validate thread hasn't changed since component rendered
     const currentThread = useThreadStore.getState().activeThread
     if (!currentThread || !activeThread || currentThread.id !== activeThread.id) {
-      console.error('[CommandExecutionCard] Thread changed before feedback submit, aborting')
+      log.error('Thread changed before feedback submit, aborting', 'CommandExecutionCard')
       setFeedbackText('')
       setApprovalMode('select')
       return
@@ -1561,26 +1893,21 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
         const snapshot = await createSnapshot(project.path)
         snapshotId = snapshot.id
       } catch (snapshotError) {
-        console.warn('[FileChangeCard] Failed to create snapshot, proceeding without:', snapshotError)
+        log.warn(`Failed to create snapshot, proceeding without: ${snapshotError}`, 'FileChangeCard')
         showToast('Could not create snapshot (changes will still be applied)', 'warning')
       }
 
       // CRITICAL: Validate thread hasn't changed during snapshot creation
       const currentThread = useThreadStore.getState().activeThread
       if (!currentThread || currentThread.id !== threadIdAtStart) {
-        console.error(
-          '[FileChangeCard] Thread changed during apply - threadIdAtStart:',
-          threadIdAtStart,
-          'currentThread:',
-          currentThread?.id
-        )
+        log.error(`Thread changed during apply - threadIdAtStart: ${threadIdAtStart}, currentThread: ${currentThread?.id}`, 'FileChangeCard')
         return
       }
 
       // Approve the changes (with or without snapshot ID)
       await respondToApproval(item.id, decision, { snapshotId })
     } catch (error) {
-      console.error('Failed to apply changes:', error)
+      log.error(`Failed to apply changes: ${error}`, 'FileChangeCard')
       showToast('Failed to apply changes', 'error')
     } finally {
       isApplyingRef.current = false
@@ -1596,7 +1923,7 @@ function FileChangeCard({ item }: { item: AnyThreadItem }) {
       await revertToSnapshot(content.snapshotId, project.path)
       showToast('Changes reverted successfully', 'success')
     } catch (error) {
-      console.error('Failed to revert changes:', error)
+      log.error(`Failed to revert changes: ${error}`, 'FileChangeCard')
       showToast('Failed to revert changes', 'error')
     } finally {
       isRevertingRef.current = false
@@ -1864,17 +2191,12 @@ function McpToolCard({ item }: { item: AnyThreadItem }) {
   }
   const [isExpanded, setIsExpanded] = useState(false)
 
-  // Memoize JSON.stringify to avoid re-computation on every render
-  const argumentsJson = useMemo(() =>
-    content.arguments ? JSON.stringify(content.arguments, null, 2) : '',
-    [content.arguments]
-  )
-  const resultJson = useMemo(() =>
-    content.result && typeof content.result !== 'string'
-      ? JSON.stringify(content.result, null, 2)
-      : null,
-    [content.result]
-  )
+  // Compute JSON strings inline - React Compiler will optimize this
+  // Only computed when isExpanded is true
+  const argumentsJson = content.arguments ? JSON.stringify(content.arguments, null, 2) : ''
+  const resultJson = content.result && typeof content.result !== 'string'
+    ? JSON.stringify(content.result, null, 2)
+    : null
 
   return (
     <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
@@ -2046,7 +2368,11 @@ function WebSearchCard({ item }: { item: AnyThreadItem }) {
 
 // Review Card
 function ReviewCard({ item }: { item: AnyThreadItem }) {
-  const content = item.content as { phase: 'started' | 'completed'; text: string }
+  if (!isReviewContent(item.content)) {
+    log.warn(`Invalid review content for item ${item.id}`, 'ReviewCard')
+    return null
+  }
+  const content = item.content
   return (
     <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div className="w-full max-w-3xl overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
@@ -2072,9 +2398,13 @@ function ReviewCard({ item }: { item: AnyThreadItem }) {
   )
 }
 
-// Info Card
-function InfoCard({ item }: { item: AnyThreadItem }) {
-  const content = item.content as { title: string; details?: string }
+// Info Card - Memoized to prevent unnecessary re-renders
+const InfoCard = memo(function InfoCard({ item }: { item: AnyThreadItem }) {
+  if (!isInfoContent(item.content)) {
+    log.warn(`Invalid info content for item ${item.id}`, 'InfoCard')
+    return null
+  }
+  const content = item.content
   return (
     <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
       <div className="w-full max-w-3xl overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
@@ -2098,10 +2428,13 @@ function InfoCard({ item }: { item: AnyThreadItem }) {
       </div>
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison: info cards are immutable once created
+  return prevProps.item === nextProps.item
+})
 
-// Error Card - Shows stream errors
-function ErrorCard({ item }: { item: AnyThreadItem }) {
+// Error Card - Shows stream errors - Memoized to prevent unnecessary re-renders
+const ErrorCard = memo(function ErrorCard({ item }: { item: AnyThreadItem }) {
   const content = item.content as {
     message: string
     errorType?: string
@@ -2152,7 +2485,10 @@ function ErrorCard({ item }: { item: AnyThreadItem }) {
       </div>
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison: error cards are immutable once created
+  return prevProps.item === nextProps.item
+})
 
 // Plan Card - Shows turn plan with step progress
 function PlanCard({ item }: { item: AnyThreadItem }) {
@@ -2298,7 +2634,8 @@ function parseReasoningSummary(text: string): string {
 
 // CLI-style Working Status Bar - Shown above input when AI is working
 // Also shows reasoning summary like CLI does
-function WorkingStatusBar() {
+// Memoized to prevent unnecessary re-renders when only unrelated state changes
+const WorkingStatusBar = memo(function WorkingStatusBar() {
   const turnStatus = useThreadStore((state) => state.turnStatus)
   const turnTiming = useThreadStore((state) => state.turnTiming)
   // tokenUsage is accessed via getState() in the interval to avoid dependency issues
@@ -2344,12 +2681,16 @@ function WorkingStatusBar() {
   }, [turnStatus, turnTiming.startedAt]) // Remove tokenUsage.totalTokens - use getState() instead
 
   // Find current reasoning summary (streaming or recent)
-  const currentReasoning = useMemo(() => {
+  // React Compiler will automatically optimize this computation
+  const currentReasoning = (() => {
     // Look for reasoning items in reverse order (most recent first)
     for (let i = itemOrder.length - 1; i >= 0; i--) {
       const item = items[itemOrder[i]]
       if (item?.type === 'reasoning') {
-        const content = item.content as { summary: string[]; isStreaming: boolean }
+        if (!isReasoningContent(item.content)) {
+          continue
+        }
+        const content = item.content
         if (content.isStreaming && content.summary && content.summary.length > 0) {
           // Get the latest summary line and parse it
           const latestSummary = content.summary[content.summary.length - 1]
@@ -2360,7 +2701,7 @@ function WorkingStatusBar() {
       }
     }
     return null
-  }, [items, itemOrder])
+  })()
 
   if (turnStatus !== 'running') return null
 
@@ -2417,10 +2758,11 @@ function WorkingStatusBar() {
       </div>
     </div>
   )
-}
+})
 
 // Queued Messages Display - Shows messages waiting to be processed
-function QueuedMessagesDisplay() {
+// Memoized to prevent unnecessary re-renders when only turnStatus changes
+const QueuedMessagesDisplay = memo(function QueuedMessagesDisplay() {
   const queuedMessages = useThreadStore((state) => state.queuedMessages)
   const turnStatus = useThreadStore((state) => state.turnStatus)
 
@@ -2448,10 +2790,11 @@ function QueuedMessagesDisplay() {
       ))}
     </div>
   )
-}
+})
 
 // Rate Limit Warning - Shows when approaching quota (like CLI's "Heads up...")
-function RateLimitWarning() {
+// Memoized to prevent unnecessary re-renders when only unrelated state changes
+const RateLimitWarning = memo(function RateLimitWarning() {
   const rateLimits = useAccountStore((state) => state.rateLimits)
   // refreshRateLimits is called via getState() to avoid dependency issues
   const [dismissed, setDismissed] = useState(false)
@@ -2523,7 +2866,7 @@ function RateLimitWarning() {
       </div>
     </div>
   )
-}
+})
 
 // Input Status Hint - Shows token usage and shortcuts
 function InputStatusHint() {

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { immer } from 'zustand/middleware/immer'
 import { threadApi, snapshotApi, type ThreadInfo, type Snapshot, type SkillInput } from '../lib/api'
 import { parseError, handleAsyncError } from '../lib/errorUtils'
 import { useSettingsStore } from './settings'
@@ -8,6 +9,23 @@ import {
   normalizeReasoningSummary,
   normalizeSandboxMode,
 } from '../lib/normalize'
+import {
+  isRecord,
+  isStringArray,
+  isAgentMessageContent,
+  isCommandExecutionContent,
+  isFileChangeContent,
+  isReasoningContent,
+  isMcpToolContent,
+  isWebSearchContent,
+  isReviewContent,
+  isInfoContent,
+  isErrorContent,
+  isPlanContent,
+  hasTextContent,
+  hasImagesContent,
+} from '../lib/typeGuards'
+import type { ContentRecord } from '../lib/types/thread'
 import type {
   ItemStartedEvent,
   ItemCompletedEvent,
@@ -40,6 +58,194 @@ const TURN_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - generous timeout for long o
 const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes - generous timeout for user decisions
 const APPROVAL_CLEANUP_INTERVAL_MS = 60 * 1000 // Check every minute
 
+// LRU Cache configuration
+const MAX_LRU_CACHE_SIZE = 500 // Maximum number of entries in LRU cache
+const LRU_CLEANUP_BATCH_SIZE = 50 // Number of entries to clean when cache is full
+
+// ==================== LRU Cache Implementation ====================
+// Simple LRU cache to prevent memory leaks from unbounded Map growth
+// Automatically removes least recently used entries when capacity is reached
+
+interface LRUCacheNode<V> {
+  value: V
+  prev: string | null
+  next: string | null
+  lastAccess: number
+}
+
+class LRUCache<K extends string, V> {
+  private cache: Map<K, LRUCacheNode<V>>
+  private head: K | null = null
+  private tail: K | null = null
+  private maxSize: number
+
+  constructor(maxSize: number) {
+    this.cache = new Map()
+    this.maxSize = maxSize
+  }
+
+  /** Get value by key and update access time */
+  get(key: K): V | undefined {
+    const node = this.cache.get(key)
+    if (!node) return undefined
+
+    // Update last access time and move to front
+    node.lastAccess = Date.now()
+    this.moveToFront(key)
+    return node.value
+  }
+
+  /** Set value for key, evicting LRU entries if necessary */
+  set(key: K, value: V): void {
+    const existingNode = this.cache.get(key)
+
+    if (existingNode) {
+      // Update existing node
+      existingNode.value = value
+      existingNode.lastAccess = Date.now()
+      this.moveToFront(key)
+    } else {
+      // Create new node
+      const newNode: LRUCacheNode<V> = {
+        value,
+        prev: null,
+        next: null,
+        lastAccess: Date.now(),
+      }
+
+      // Add to cache
+      this.cache.set(key, newNode)
+
+      // Add to front of list
+      if (!this.head) {
+        this.head = key
+        this.tail = key
+      } else {
+        newNode.next = this.head
+        if (this.head) {
+          const headNode = this.cache.get(this.head)
+          if (headNode) headNode.prev = key
+        }
+        this.head = key
+      }
+
+      // Check if we need to evict
+      if (this.cache.size > this.maxSize) {
+        this.evictLRU()
+      }
+    }
+  }
+
+  /** Check if key exists */
+  has(key: K): boolean {
+    return this.cache.has(key)
+  }
+
+  /** Delete key and return value */
+  delete(key: K): boolean {
+    const node = this.cache.get(key)
+    if (!node) return false
+
+    // Remove from linked list
+    if (node.prev) {
+      const prevNode = this.cache.get(node.prev as K)
+      if (prevNode) prevNode.next = node.next
+    } else {
+      this.head = node.next as K | null
+    }
+
+    if (node.next) {
+      const nextNode = this.cache.get(node.next as K)
+      if (nextNode) nextNode.prev = node.prev
+    } else {
+      this.tail = node.prev as K | null
+    }
+
+    return this.cache.delete(key)
+  }
+
+  /** Clear all entries */
+  clear(): void {
+    this.cache.clear()
+    this.head = null
+    this.tail = null
+  }
+
+  /** Get current size */
+  get size(): number {
+    return this.cache.size
+  }
+
+  /** Get all keys */
+  keys(): K[] {
+    return Array.from(this.cache.keys())
+  }
+
+  /** Get all entries as [key, value] pairs */
+  entries(): [K, V][] {
+    return Array.from(this.cache.entries()).map(([key, node]) => [key, node.value])
+  }
+
+  /** Move key to front of LRU list */
+  private moveToFront(key: K): void {
+    const node = this.cache.get(key)
+    if (!node || !this.head || this.head === key) return
+
+    // Remove from current position
+    if (node.prev) {
+      const prevNode = this.cache.get(node.prev as K)
+      if (prevNode) prevNode.next = node.next
+    }
+    if (node.next) {
+      const nextNode = this.cache.get(node.next as K)
+      if (nextNode) nextNode.prev = node.prev
+    } else {
+      this.tail = node.prev as K | null
+    }
+
+    // Move to front
+    node.prev = null
+    node.next = this.head
+    const headNode = this.cache.get(this.head)
+    if (headNode) headNode.prev = key
+    this.head = key
+  }
+
+  /** Evict least recently used entries */
+  private evictLRU(): void {
+    if (!this.tail) return
+
+    // Evict batch of entries for efficiency
+    let evicted = 0
+    let currentKey: K | null = this.tail
+
+    while (currentKey && evicted < LRU_CLEANUP_BATCH_SIZE && this.cache.size > this.maxSize) {
+      const node = this.cache.get(currentKey)
+      const prevKey = node?.prev || null
+
+      if (this.delete(currentKey)) {
+        evicted++
+      }
+
+      currentKey = prevKey as K | null
+    }
+
+    console.debug(
+      `[LRUCache] Evicted ${evicted} entries to maintain max size of ${this.maxSize}. Current size: ${this.cache.size}`
+    )
+  }
+
+  /** Get statistics for debugging */
+  getStats(): { size: number; maxSize: number; head: K | null; tail: K | null } {
+    return {
+      size: this.cache.size,
+      maxSize: this.maxSize,
+      head: this.head,
+      tail: this.tail,
+    }
+  }
+}
+
 // ==================== Operation Sequence Tracking ====================
 // Prevents race conditions when switching threads during async operations
 
@@ -65,14 +271,14 @@ interface DeltaBuffer {
   mcpProgress: Map<string, string[]> // itemId -> accumulated progress messages
 }
 
-// Per-thread delta buffers
-const deltaBuffers: Map<string, DeltaBuffer> = new Map()
+// Per-thread delta buffers - using LRU cache to prevent unbounded growth
+const deltaBuffers = new LRUCache<string, DeltaBuffer>(MAX_LRU_CACHE_SIZE)
 
-// Per-thread flush timers
-const flushTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
+// Per-thread flush timers - using LRU cache to prevent unbounded growth
+const flushTimers = new LRUCache<string, ReturnType<typeof setTimeout>>(MAX_LRU_CACHE_SIZE)
 
-// Per-thread turn timeout timers
-const turnTimeoutTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
+// Per-thread turn timeout timers - using LRU cache to prevent unbounded growth
+const turnTimeoutTimers = new LRUCache<string, ReturnType<typeof setTimeout>>(MAX_LRU_CACHE_SIZE)
 
 // Set of threads currently being closed - prevents race conditions
 // where delta events might recreate buffers during closeThread
@@ -80,6 +286,9 @@ const closingThreads: Set<string> = new Set()
 
 // Global approval cleanup timer
 let approvalCleanupTimer: ReturnType<typeof setInterval> | null = null
+
+// Global timer cleanup interval - cleans up orphaned timers
+let timerCleanupInterval: ReturnType<typeof setInterval> | null = null
 
 function createEmptyDeltaBuffer(): DeltaBuffer {
   return {
@@ -123,6 +332,7 @@ function clearDeltaBuffer(threadId: string) {
   if (timer) {
     clearTimeout(timer)
     flushTimers.delete(threadId)
+    console.debug('[clearDeltaBuffer] Cleared flush timer for thread:', threadId)
   }
 }
 
@@ -131,6 +341,7 @@ function clearTurnTimeout(threadId: string) {
   if (timer) {
     clearTimeout(timer)
     turnTimeoutTimers.delete(threadId)
+    console.debug('[clearTurnTimeout] Cleared timeout timer for thread:', threadId)
   }
 }
 
@@ -200,6 +411,51 @@ function performFullTurnCleanup(threadId: string) {
   clearTurnTimeout(threadId)
 }
 
+// ==================== Thread Timer Cleanup ====================
+// Comprehensive cleanup function for all timers associated with a thread
+// This prevents memory leaks by ensuring all timers are properly cleared
+
+export function clearThreadTimers(threadId: string): void {
+  // Clear flush timer if exists
+  const flushTimer = flushTimers.get(threadId)
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimers.delete(threadId)
+    console.debug('[clearThreadTimers] Cleared flush timer for thread:', threadId)
+  }
+
+  // Clear turn timeout timer if exists
+  const timeoutTimer = turnTimeoutTimers.get(threadId)
+  if (timeoutTimer) {
+    clearTimeout(timeoutTimer)
+    turnTimeoutTimers.delete(threadId)
+    console.debug('[clearThreadTimers] Cleared timeout timer for thread:', threadId)
+  }
+}
+
+// Get statistics about active timers for debugging
+export function getTimerStats(): {
+  flushTimers: number
+  timeoutTimers: number
+  total: number
+  lruStats: {
+    deltaBuffers: ReturnType<typeof deltaBuffers.getStats>
+    flushTimers: ReturnType<typeof flushTimers.getStats>
+    turnTimeoutTimers: ReturnType<typeof turnTimeoutTimers.getStats>
+  }
+} {
+  return {
+    flushTimers: flushTimers.size,
+    timeoutTimers: turnTimeoutTimers.size,
+    total: flushTimers.size + turnTimeoutTimers.size,
+    lruStats: {
+      deltaBuffers: deltaBuffers.getStats(),
+      flushTimers: flushTimers.getStats(),
+      turnTimeoutTimers: turnTimeoutTimers.getStats(),
+    },
+  }
+}
+
 // ==================== Approval Cleanup ====================
 
 // Clean up stale pending approvals that have exceeded the timeout
@@ -234,49 +490,48 @@ async function cleanupStaleApprovals() {
     }
   })
 
-  // Update state to remove stale approvals
+  // Update state to remove stale approvals - Using Immer for efficient nested updates
   useThreadStore.setState((state) => {
-    const updatedThreads = { ...state.threads }
     let hasChanges = false
 
-    Object.entries(updatedThreads).forEach(([threadId, threadState]) => {
-      const validApprovals = threadState.pendingApprovals.filter(
-        (approval) => now - approval.createdAt <= APPROVAL_TIMEOUT_MS
+    Object.entries(state.threads).forEach(([threadId, threadState]) => {
+      // Find stale approvals first
+      const staleApprovals = threadState.pendingApprovals.filter(
+        (approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS
       )
 
-      if (validApprovals.length !== threadState.pendingApprovals.length) {
+      if (staleApprovals.length > 0) {
         hasChanges = true
-        const updatedItems = { ...threadState.items }
 
-        // Update items for stale approvals
-        threadState.pendingApprovals
-          .filter((approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS)
-          .forEach((approval) => {
-            const item = updatedItems[approval.itemId]
-            if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
-              const content = item.content as Record<string, unknown>
-              updatedItems[approval.itemId] = {
-                ...item,
-                status: 'failed',
-                content: {
-                  ...content,
-                  needsApproval: false,
-                  approved: false,
-                  reason: 'Approval request timed out',
-                },
-              } as AnyThreadItem
-            }
-          })
+        // Immer allows direct mutation of draft state
+        // Filter out stale approvals
+        threadState.pendingApprovals = threadState.pendingApprovals.filter(
+          (approval) => now - approval.createdAt <= APPROVAL_TIMEOUT_MS
+        )
 
-        updatedThreads[threadId] = {
-          ...threadState,
-          items: updatedItems,
-          pendingApprovals: validApprovals,
-        }
+        // Update items for stale approvals using type guards
+        staleApprovals.forEach((approval) => {
+          const item = threadState.items[approval.itemId]
+          // Use type guards for runtime type safety
+          if (isCommandExecutionContent(item?.content)) {
+            // Direct mutation with Immer - no need to spread
+            item.status = 'failed'
+            item.content.needsApproval = false
+            item.content.approved = false
+            item.content.reason = 'Approval request timed out'
+          } else if (isFileChangeContent(item?.content)) {
+            // Direct mutation with Immer - no need to spread
+            item.status = 'failed'
+            item.content.needsApproval = false
+            item.content.approved = false
+            item.content.reason = 'Approval request timed out'
+          }
+        })
       }
     })
 
-    return hasChanges ? { threads: updatedThreads } : state
+    // If no changes, return original state (Immer optimization)
+    return hasChanges ? state : { threads: state.threads }
   })
 }
 
@@ -293,19 +548,83 @@ function stopApprovalCleanupTimer() {
   }
 }
 
+// ==================== Periodic Timer Cleanup ====================
+// Cleans up orphaned timers for threads that no longer exist
+// This prevents memory leaks from timers that weren't properly cleared
+
+function cleanupStaleTimers() {
+  const state = useThreadStore.getState()
+  const { threads } = state
+  const activeThreadIds = new Set(Object.keys(threads))
+
+  // Clean up orphaned flush timers
+  let flushCleanups = 0
+  const flushEntries = flushTimers.entries()
+  for (const [threadId, timer] of flushEntries) {
+    if (!activeThreadIds.has(threadId) || closingThreads.has(threadId)) {
+      clearTimeout(timer)
+      flushTimers.delete(threadId)
+      flushCleanups++
+    }
+  }
+
+  // Clean up orphaned timeout timers
+  let timeoutCleanups = 0
+  const timeoutEntries = turnTimeoutTimers.entries()
+  for (const [threadId, timer] of timeoutEntries) {
+    if (!activeThreadIds.has(threadId) || closingThreads.has(threadId)) {
+      clearTimeout(timer)
+      turnTimeoutTimers.delete(threadId)
+      timeoutCleanups++
+    }
+  }
+
+  if (flushCleanups > 0 || timeoutCleanups > 0) {
+    console.debug(
+      '[cleanupStaleTimers] Cleaned up',
+      flushCleanups,
+      'flush timers and',
+      timeoutCleanups,
+      'timeout timers'
+    )
+  }
+}
+
+function startTimerCleanupInterval() {
+  if (timerCleanupInterval === null) {
+    // Run cleanup every 60 seconds
+    timerCleanupInterval = setInterval(cleanupStaleTimers, 60000)
+    console.debug('[startTimerCleanupInterval] Started periodic timer cleanup')
+  }
+}
+
+function stopTimerCleanupInterval() {
+  if (timerCleanupInterval !== null) {
+    clearInterval(timerCleanupInterval)
+    timerCleanupInterval = null
+    console.debug('[stopTimerCleanupInterval] Stopped periodic timer cleanup')
+  }
+}
+
 // Export cleanup function for App.tsx unmount cleanup
 // This prevents memory leaks when the app is unmounted
 export function cleanupThreadResources() {
   stopApprovalCleanupTimer()
-  // Clear all delta buffers and timers
-  deltaBuffers.forEach((_, threadId) => {
+  stopTimerCleanupInterval()
+
+  // Clear all delta buffers and timers using the comprehensive cleanup
+  const bufferKeys = deltaBuffers.keys()
+  for (const threadId of bufferKeys) {
+    clearThreadTimers(threadId)
     clearDeltaBuffer(threadId)
     clearTurnTimeout(threadId)
-  })
+  }
   deltaBuffers.clear()
   flushTimers.clear()
   turnTimeoutTimers.clear()
   closingThreads.clear()
+
+  console.debug('[cleanupThreadResources] Cleaned up all thread resources')
 }
 
 // ==================== Thread Item Types ====================
@@ -673,7 +992,9 @@ function normalizeStatus(status?: string | null): ThreadItem['status'] {
 
 function stringifyCommandAction(action: unknown): string {
   if (!action || typeof action !== 'object') return 'unknown'
-  const record = action as Record<string, unknown>
+  const record = isRecord(action) ? action : null
+  if (!record) return 'unknown'
+
   const type = String(record.type || record.kind || record.action || 'action')
   const command = typeof record.command === 'string' ? record.command : ''
   const path = typeof record.path === 'string' ? record.path : ''
@@ -911,8 +1232,12 @@ function getFocusedThreadState(state: ThreadState): SingleThreadState | undefine
 }
 
 // ==================== Store ====================
+// Using Immer middleware for efficient immutable updates
+// Immer allows us to write code that looks like mutations, but produces immutable state
+// This significantly reduces memory allocations and GC pressure during streaming
 
-export const useThreadStore = create<ThreadState>((set, get) => {
+export const useThreadStore = create<ThreadState>()(
+  immer((set, get) => {
   const enqueueQueuedMessage = (threadId: string, message: QueuedMessage) => {
     set((state) => {
       const threadState = state.threads[threadId]
@@ -1083,7 +1408,8 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     // This prevents getDeltaBuffer from recreating buffers during cleanup
     closingThreads.add(threadId)
 
-    // Clean up thread-specific resources
+    // Clean up all thread-specific timers comprehensively
+    clearThreadTimers(threadId)
     clearDeltaBuffer(threadId)
     clearTurnTimeout(threadId)
     deltaBuffers.delete(threadId)
@@ -1107,6 +1433,10 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     // Stop approval cleanup if no threads left
     if (Object.keys(updatedThreads).length === 0) {
       stopApprovalCleanupTimer()
+      stopTimerCleanupInterval()
+    } else {
+      // Start periodic cleanup if there are still threads
+      startTimerCleanupInterval()
     }
 
     // Remove from closing set after a short delay to ensure all pending events are handled
@@ -1120,6 +1450,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
     // Clean up all thread-specific resources
     Object.keys(threads).forEach((threadId) => {
+      clearThreadTimers(threadId)
       clearDeltaBuffer(threadId)
       clearTurnTimeout(threadId)
       deltaBuffers.delete(threadId)
@@ -1131,8 +1462,9 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       focusedThreadId: null,
     })
 
-    // Stop approval cleanup timer
+    // Stop cleanup timers
     stopApprovalCleanupTimer()
+    stopTimerCleanupInterval()
   },
 
   getActiveThreadIds: () => {
@@ -1156,6 +1488,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
     const opSeq = getNextOperationSequence()
     startApprovalCleanupTimer()
+    startTimerCleanupInterval()
 
     set({ isLoading: true, globalError: null })
     try {
@@ -1214,6 +1547,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
     const opSeq = getNextOperationSequence()
     startApprovalCleanupTimer()
+    startTimerCleanupInterval()
 
     set({ isLoading: true, globalError: null })
     try {
@@ -1330,20 +1664,15 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       createdAt: Date.now(),
     }
 
+    // Immer-optimized: direct mutation instead of spreading
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      return {
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: { ...threadState.items, [userMessageId]: userMessage },
-            itemOrder: [...threadState.itemOrder, userMessageId],
-            turnStatus: 'running',
-          },
-        },
-      }
+      // Direct mutation with Immer
+      threadState.items[userMessageId] = userMessage
+      threadState.itemOrder.push(userMessageId)
+      threadState.turnStatus = 'running'
+      return state
     })
 
     try {
@@ -1552,31 +1881,53 @@ export const useThreadStore = create<ThreadState>((set, get) => {
         if (!threadState) return state
 
         const item = threadState.items[itemId]
-        if (item && (item.type === 'commandExecution' || item.type === 'fileChange')) {
-          const content = item.content as Record<string, unknown>
+        // Use type guards for runtime type safety
+        if (isCommandExecutionContent(item?.content)) {
           const isApproved =
             decision === 'accept' ||
             decision === 'acceptForSession' ||
             decision === 'acceptWithExecpolicyAmendment'
 
-          const extraFields =
-            item.type === 'fileChange' && isApproved
-              ? {
-                  applied: true,
-                  snapshotId: options?.snapshotId,
-                }
-              : {}
+          const updatedItem = {
+            ...item,
+            content: {
+              ...item.content,
+              needsApproval: false,
+              approved: isApproved,
+            },
+          }
+          return {
+            threads: {
+              ...state.threads,
+              [threadId]: {
+                ...threadState,
+                items: { ...threadState.items, [itemId]: updatedItem },
+                pendingApprovals: threadState.pendingApprovals.filter((p) => p.itemId !== itemId),
+              },
+            },
+          }
+        } else if (isFileChangeContent(item?.content)) {
+          const isApproved =
+            decision === 'accept' ||
+            decision === 'acceptForSession' ||
+            decision === 'acceptWithExecpolicyAmendment'
+
+          const extraFields = isApproved
+            ? {
+                applied: true,
+                snapshotId: options?.snapshotId,
+              }
+            : {}
 
           const updatedItem = {
             ...item,
             content: {
-              ...content,
+              ...item.content,
               needsApproval: false,
               approved: isApproved,
               ...extraFields,
             },
-          } as AnyThreadItem
-
+          }
           return {
             threads: {
               ...state.threads,
@@ -1668,7 +2019,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
       // Apply agent message deltas
       buffer.agentMessages.forEach((text, itemId) => {
-        const existing = updatedItems[itemId] as AgentMessageItem | undefined
+        const existing = updatedItems[itemId]
         if (existing && existing.type === 'agentMessage') {
           updatedItems[itemId] = {
             ...existing,
@@ -1694,7 +2045,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
       // Apply command output deltas
       buffer.commandOutputs.forEach((output, itemId) => {
-        const existing = updatedItems[itemId] as CommandExecutionItem | undefined
+        const existing = updatedItems[itemId]
         if (existing && existing.type === 'commandExecution') {
           updatedItems[itemId] = {
             ...existing,
@@ -1709,7 +2060,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
       // Apply file change output deltas
       buffer.fileChangeOutputs.forEach((output, itemId) => {
-        const existing = updatedItems[itemId] as FileChangeItem | undefined
+        const existing = updatedItems[itemId]
         if (existing && existing.type === 'fileChange') {
           updatedItems[itemId] = {
             ...existing,
@@ -1723,7 +2074,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
       // Apply reasoning summary deltas
       buffer.reasoningSummaries.forEach((updates, itemId) => {
-        const existing = updatedItems[itemId] as ReasoningItem | undefined
+        const existing = updatedItems[itemId]
         if (existing && existing.type === 'reasoning') {
           const summary = [...existing.content.summary]
           updates.forEach(({ index, text }) => {
@@ -1760,7 +2111,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
       // Apply reasoning content deltas
       buffer.reasoningContents.forEach((updates, itemId) => {
-        const existing = updatedItems[itemId] as ReasoningItem | undefined
+        const existing = updatedItems[itemId]
         if (existing && existing.type === 'reasoning') {
           const fullContent = existing.content.fullContent ? [...existing.content.fullContent] : []
           updates.forEach(({ index, text }) => {
@@ -1778,7 +2129,7 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
       // Apply MCP progress
       buffer.mcpProgress.forEach((messages, itemId) => {
-        const existing = updatedItems[itemId] as McpToolItem | undefined
+        const existing = updatedItems[itemId]
         if (existing && existing.type === 'mcpTool') {
           updatedItems[itemId] = {
             ...existing,
@@ -1824,19 +2175,13 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       createdAt: Date.now(),
     }
 
+    // Immer-optimized: direct mutation
     set((state) => {
       const threadState = state.threads[focusedThreadId]
       if (!threadState) return state
-      return {
-        threads: {
-          ...state.threads,
-          [focusedThreadId]: {
-            ...threadState,
-            items: { ...threadState.items, [infoItem.id]: infoItem },
-            itemOrder: [...threadState.itemOrder, infoItem.id],
-          },
-        },
-      }
+      threadState.items[infoItem.id] = infoItem
+      threadState.itemOrder.push(infoItem.id)
+      return state
     })
   },
 
@@ -1844,21 +2189,12 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     const { focusedThreadId } = get()
     if (!focusedThreadId) return
 
+    // Immer-optimized: direct mutation
     set((state) => {
       const threadState = state.threads[focusedThreadId]
       if (!threadState) return state
-      return {
-        threads: {
-          ...state.threads,
-          [focusedThreadId]: {
-            ...threadState,
-            sessionOverrides: {
-              ...threadState.sessionOverrides,
-              [key]: value,
-            },
-          },
-        },
-      }
+      threadState.sessionOverrides[key] = value
+      return state
     })
   },
 
@@ -1920,13 +2256,13 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     const inProgressItem = {
       ...item,
       status: 'inProgress',
-    } as AnyThreadItem
-
+    }
     // If this is a user message, try to set it as the session's first message
     // Note: setSessionFirstMessage internally checks if firstMessage is already set,
     // but we also check here to avoid unnecessary async imports and store lookups
     if (inProgressItem.type === 'userMessage') {
-      const userMsg = inProgressItem as UserMessageItem
+      if (!hasTextContent(inProgressItem.content)) return
+      const userMsg = inProgressItem
       if (userMsg.content.text) {
         import('../stores/sessions').then(({ useSessionsStore }) => {
           // Check thread still exists to prevent race condition with closeThread
@@ -1942,59 +2278,52 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       }
     }
 
+    // Immer-optimized: direct mutation instead of spreading
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
 
       const existing = threadState.items[item.id]
       if (existing) {
-        return {
-          threads: {
-            ...state.threads,
-            [threadId]: {
-              ...threadState,
-              itemOrder: threadState.itemOrder.includes(item.id)
-                ? threadState.itemOrder
-                : [...threadState.itemOrder, item.id],
-            },
-          },
+        if (!threadState.itemOrder.includes(item.id)) {
+          threadState.itemOrder.push(item.id)
         }
+        return state
       }
 
       let isDuplicateUserMessage = false
       if (inProgressItem.type === 'userMessage') {
-        const recentUserIds = [...threadState.itemOrder]
+        const recentUserIds = threadState.itemOrder
           .slice(-10)
           .filter((id) => threadState.items[id]?.type === 'userMessage')
-        const nextUser = inProgressItem as UserMessageItem
 
-        for (const userId of recentUserIds) {
-          const existingUser = threadState.items[userId] as UserMessageItem
-          if (existingUser && existingUser.content.text === nextUser.content.text) {
-            const existingImagesCount = existingUser.content.images?.length || 0
-            const nextImagesCount = nextUser.content.images?.length || 0
-            if (existingImagesCount === nextImagesCount) {
-              isDuplicateUserMessage = true
-              break
+        // Use type guard for safe access
+        if (!hasTextContent(inProgressItem.content)) {
+          // Skip if no text content
+        } else {
+          const nextUserText = inProgressItem.content.text
+          const nextUserImages = inProgressItem.content.images?.length || 0
+
+          for (const userId of recentUserIds) {
+            const existingUser = threadState.items[userId]
+            if (existingUser?.type === 'userMessage' && hasTextContent(existingUser.content)) {
+              if (existingUser.content.text === nextUserText) {
+                const existingImagesCount = existingUser.content.images?.length || 0
+                if (existingImagesCount === nextUserImages) {
+                  isDuplicateUserMessage = true
+                  break
+                }
+              }
             }
           }
         }
       }
 
-      return {
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: isDuplicateUserMessage
-              ? threadState.items
-              : { ...threadState.items, [item.id]: inProgressItem },
-            itemOrder: isDuplicateUserMessage
-              ? threadState.itemOrder
-              : [...threadState.itemOrder, item.id],
-          },
-        },
+      if (!isDuplicateUserMessage) {
+        threadState.items[item.id] = inProgressItem
+        threadState.itemOrder.push(item.id)
       }
+      return state
     })
   },
 
@@ -2009,61 +2338,55 @@ export const useThreadStore = create<ThreadState>((set, get) => {
       const existing = threadState.items[nextItem.id]
 
       if (nextItem.type === 'userMessage') {
-        const nextUser = nextItem as UserMessageItem
         const recentUserIds = [...threadState.itemOrder]
           .slice(-10)
           .filter((id) => threadState.items[id]?.type === 'userMessage')
 
-        for (const userId of recentUserIds) {
-          const existingUser = threadState.items[userId] as UserMessageItem
-          if (existingUser && existingUser.content.text === nextUser.content.text) {
-            const existingImagesCount = existingUser.content.images?.length || 0
-            const nextImagesCount = nextUser.content.images?.length || 0
-            if (existingImagesCount === nextImagesCount) {
-              return state
+        // Use type guard for safe access
+        if (hasTextContent(nextItem.content)) {
+          const nextUserText = nextItem.content.text
+          const nextUserImages = nextItem.content.images?.length || 0
+
+          for (const userId of recentUserIds) {
+            const existingUser = threadState.items[userId]
+            if (existingUser?.type === 'userMessage' && hasTextContent(existingUser.content)) {
+              if (existingUser.content.text === nextUserText) {
+                const existingImagesCount = existingUser.content.images?.length || 0
+                if (existingImagesCount === nextUserImages) {
+                  return state
+                }
+              }
             }
           }
         }
       }
 
       if (existing) {
-        const existingContent = existing.content as Record<string, unknown>
-        const nextContent = nextItem.content as Record<string, unknown>
-        const updatedItem = {
-          ...nextItem,
-          status: nextItem.status === 'inProgress' ? 'completed' : nextItem.status,
-          content: {
-            ...nextContent,
-            needsApproval: existingContent.needsApproval ?? nextContent.needsApproval,
-            approved: existingContent.approved ?? nextContent.approved,
-            applied: existingContent.applied ?? nextContent.applied,
-            snapshotId: existingContent.snapshotId ?? nextContent.snapshotId,
-            output: existingContent.output ?? nextContent.output,
-          },
-        } as AnyThreadItem
-        return {
-          threads: {
-            ...state.threads,
-            [threadId]: {
-              ...threadState,
-              items: { ...threadState.items, [nextItem.id]: updatedItem },
-            },
-          },
+        // Immer-optimized: direct mutation instead of creating new objects
+        Object.assign(existing, nextItem)
+        existing.status = nextItem.status === 'inProgress' ? 'completed' : nextItem.status
+        Object.assign(existing.content, nextItem.content)
+        
+        // Use type guards to safely merge content fields
+        if (isCommandExecutionContent(existing.content) && isCommandExecutionContent(nextItem.content)) {
+          existing.content.needsApproval = existing.content.needsApproval ?? nextItem.content.needsApproval
+          existing.content.approved = existing.content.approved ?? nextItem.content.approved
+          existing.content.output = existing.content.output ?? nextItem.content.output
+        }
+        if (isFileChangeContent(existing.content) && isFileChangeContent(nextItem.content)) {
+          existing.content.needsApproval = existing.content.needsApproval ?? nextItem.content.needsApproval
+          existing.content.approved = existing.content.approved ?? nextItem.content.approved
+          existing.content.applied = existing.content.applied ?? nextItem.content.applied
+          existing.content.snapshotId = existing.content.snapshotId ?? nextItem.content.snapshotId
+          existing.content.output = existing.content.output ?? nextItem.content.output
+        }
+      } else {
+        threadState.items[nextItem.id] = nextItem
+        if (!threadState.itemOrder.includes(nextItem.id)) {
+          threadState.itemOrder.push(nextItem.id)
         }
       }
-
-      return {
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: { ...threadState.items, [nextItem.id]: nextItem },
-            itemOrder: threadState.itemOrder.includes(nextItem.id)
-              ? threadState.itemOrder
-              : [...threadState.itemOrder, nextItem.id],
-          },
-        },
-      }
+      return state
     })
   },
 
@@ -2108,13 +2431,12 @@ export const useThreadStore = create<ThreadState>((set, get) => {
           createdAt: Date.now(),
         }),
         content: {
-          ...((existing?.content || {}) as Record<string, unknown>),
+          ...(isRecord(existing?.content) ? existing.content : {}),
           needsApproval: true,
           reason: event.reason,
           proposedExecpolicyAmendment: event.proposedExecpolicyAmendment,
         },
-      } as AnyThreadItem
-
+      }
       return {
         threads: {
           ...state.threads,
@@ -2160,12 +2482,11 @@ export const useThreadStore = create<ThreadState>((set, get) => {
           createdAt: Date.now(),
         }),
         content: {
-          ...((existing?.content || {}) as Record<string, unknown>),
+          ...(isRecord(existing?.content) ? existing.content : {}),
           needsApproval: true,
           reason: event.reason,
         },
-      } as AnyThreadItem
-
+      }
       return {
         threads: {
           ...state.threads,
@@ -2243,24 +2564,16 @@ export const useThreadStore = create<ThreadState>((set, get) => {
     }, TURN_TIMEOUT_MS)
     turnTimeoutTimers.set(threadId, timeoutTimer)
 
+    // Immer-optimized: direct mutation
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      return {
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            turnStatus: 'running',
-            currentTurnId: event.turn.id,
-            error: null,
-            turnTiming: {
-              startedAt: Date.now(),
-              completedAt: null,
-            },
-          },
-        },
-      }
+      threadState.turnStatus = 'running'
+      threadState.currentTurnId = event.turn.id
+      threadState.error = null
+      threadState.turnTiming.startedAt = Date.now()
+      threadState.turnTiming.completedAt = null
+      return state
     })
   },
 
@@ -2305,15 +2618,16 @@ export const useThreadStore = create<ThreadState>((set, get) => {
 
       const updatedItems = { ...threadState.items }
       Object.entries(updatedItems).forEach(([id, item]) => {
-        if (item.type === 'agentMessage' && (item as AgentMessageItem).content.isStreaming) {
+        // Type guard ensures content is AgentMessageContent
+        if (item.type === 'agentMessage' && isAgentMessageContent(item.content) && item.content.isStreaming) {
           updatedItems[id] = {
             ...item,
             status: 'completed',
             content: {
-              ...(item as AgentMessageItem).content,
+              ...item.content,
               isStreaming: false,
             },
-          } as AgentMessageItem
+          }
         }
       })
 
@@ -2559,37 +2873,21 @@ export const useThreadStore = create<ThreadState>((set, get) => {
   handleTokenUsage: (event) => {
     const threadId = event.threadId
 
+    // Immer-optimized: direct mutation
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
 
       const totals = event.tokenUsage?.total
-      const fallbackInput = threadState.tokenUsage.inputTokens
-      const fallbackCached = threadState.tokenUsage.cachedInputTokens
-      const fallbackOutput = threadState.tokenUsage.outputTokens
+      const tokenUsage = threadState.tokenUsage
 
-      const newInput = totals?.inputTokens ?? fallbackInput
-      const newCached = totals?.cachedInputTokens ?? fallbackCached
-      const newOutput = totals?.outputTokens ?? fallbackOutput
-      const totalTokens = totals?.totalTokens ?? newInput + newOutput
+      tokenUsage.inputTokens = totals?.inputTokens ?? tokenUsage.inputTokens
+      tokenUsage.cachedInputTokens = totals?.cachedInputTokens ?? tokenUsage.cachedInputTokens
+      tokenUsage.outputTokens = totals?.outputTokens ?? tokenUsage.outputTokens
+      tokenUsage.totalTokens = totals?.totalTokens ?? (tokenUsage.inputTokens + tokenUsage.outputTokens)
+      tokenUsage.modelContextWindow = event.tokenUsage?.modelContextWindow ?? tokenUsage.modelContextWindow
 
-      const modelContextWindow = event.tokenUsage?.modelContextWindow ?? threadState.tokenUsage.modelContextWindow
-
-      return {
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            tokenUsage: {
-              inputTokens: newInput,
-              cachedInputTokens: newCached,
-              outputTokens: newOutput,
-              totalTokens,
-              modelContextWindow,
-            },
-          },
-        },
-      }
+      return state
     })
   },
 
@@ -2759,3 +3057,4 @@ export const useThreadStore = create<ThreadState>((set, get) => {
   },
   }
 })
+)

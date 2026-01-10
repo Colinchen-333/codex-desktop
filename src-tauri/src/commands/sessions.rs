@@ -6,6 +6,9 @@ use crate::database::{SessionMetadata, SessionStatus};
 use crate::state::AppState;
 use crate::Result;
 
+// Import validation function from projects module
+use crate::commands::projects::validate_id;
+
 /// List sessions for a project
 #[tauri::command]
 pub async fn list_sessions(
@@ -21,18 +24,9 @@ pub async fn get_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Option<SessionMetadata>> {
-    // We need to iterate through all projects to find the session
-    // This is not efficient, but works for now
-    let projects = state.database.get_all_projects()?;
-
-    for project in projects {
-        let sessions = state.database.get_sessions_for_project(&project.id)?;
-        if let Some(session) = sessions.into_iter().find(|s| s.session_id == session_id) {
-            return Ok(Some(session));
-        }
-    }
-
-    Ok(None)
+    validate_id(&session_id, "session_id")?;
+    // Use optimized direct lookup
+    state.database.get_session_by_id(&session_id)
 }
 
 /// Update session metadata
@@ -114,6 +108,7 @@ pub async fn update_session_metadata(
 /// Delete session metadata
 #[tauri::command]
 pub async fn delete_session(state: State<'_, AppState>, session_id: String) -> Result<()> {
+    validate_id(&session_id, "session_id")?;
     state.database.delete_session_metadata(&session_id)?;
     Ok(())
 }
@@ -125,6 +120,7 @@ pub async fn update_session_status(
     session_id: String,
     status: String,
 ) -> Result<()> {
+    validate_id(&session_id, "session_id")?;
     let status_enum = SessionStatus::from_str(&status);
     state.database.update_session_status(&session_id, &status_enum)?;
     Ok(())
@@ -137,6 +133,7 @@ pub async fn set_session_first_message(
     session_id: String,
     first_message: String,
 ) -> Result<()> {
+    validate_id(&session_id, "session_id")?;
     state.database.update_session_first_message(&session_id, &first_message)?;
     Ok(())
 }
@@ -148,6 +145,7 @@ pub async fn update_session_tasks(
     session_id: String,
     tasks_json: String,
 ) -> Result<()> {
+    validate_id(&session_id, "session_id")?;
     state.database.update_session_tasks(&session_id, &tasks_json)?;
     Ok(())
 }
@@ -232,32 +230,32 @@ pub async fn search_sessions(
 
     let query_lower = query.to_lowercase();
 
-    // Filter and score sessions
+    // Filter and score sessions - calculate score once per session
     let mut scored_sessions: Vec<(SessionMetadata, i32)> = all_sessions
         .into_iter()
-        .filter(|s| {
+        .filter_map(|s| {
             // Filter by tags first
             if let Some(ref filter_tags) = tags_filter {
                 let session_tags = s.get_tags();
                 if !filter_tags.iter().all(|ft| session_tags.contains(ft)) {
-                    return false;
+                    return None;
                 }
             }
 
             // Filter by favorites
             if let Some(true) = favorites_only {
                 if !s.is_favorite {
-                    return false;
+                    return None;
                 }
             }
 
-            // Check if any field matches
-            let score = calculate_relevance_score(s, &query_lower);
-            score > 0
-        })
-        .map(|s| {
+            // Calculate score once and check if matches
             let score = calculate_relevance_score(&s, &query_lower);
-            (s, score)
+            if score > 0 {
+                Some((s, score))
+            } else {
+                None
+            }
         })
         .collect();
 
