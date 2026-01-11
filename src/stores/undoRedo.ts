@@ -94,6 +94,13 @@ export interface UndoRedoState {
 // ==================== Constants ====================
 
 export const MAX_HISTORY_SIZE = 50
+
+/**
+ * P1 Fix: Time window for operation merging (2 seconds)
+ * Operations of the same type within this window will be merged
+ */
+export const OPERATION_MERGE_WINDOW_MS = 2000
+
 export const OPERATION_DESCRIPTIONS: Record<UndoableOperationType, string> = {
   sendMessage: 'Send message',
   deleteMessage: 'Delete message',
@@ -101,6 +108,13 @@ export const OPERATION_DESCRIPTIONS: Record<UndoableOperationType, string> = {
   revertSnapshot: 'Restore snapshot',
   clearThread: 'Clear thread',
 }
+
+/**
+ * P1 Fix: Operations that can be merged within the time window
+ */
+const MERGEABLE_OPERATIONS: Set<UndoableOperationType> = new Set([
+  'editMessage',  // Multiple edits to the same message can be merged
+])
 
 // ==================== Store Creation ====================
 
@@ -122,7 +136,8 @@ export const useUndoRedoStore = create<UndoRedoState>()(
 
     pushOperation: (operation: Omit<UndoableOperation, 'id' | 'timestamp'>) => {
       set((state) => {
-        const { threadId } = operation
+        const { threadId, type } = operation
+        const now = Date.now()
 
         // Initialize history for this thread if needed
         if (!state.history[threadId]) {
@@ -135,11 +150,34 @@ export const useUndoRedoStore = create<UndoRedoState>()(
         // Clear redo stack when new operation is pushed
         state.redoStack[threadId] = []
 
+        const threadHistory = state.history[threadId]
+
+        // P1 Fix: Attempt to merge with last operation if within time window
+        if (
+          MERGEABLE_OPERATIONS.has(type) &&
+          threadHistory.length > 0
+        ) {
+          const lastOp = threadHistory[threadHistory.length - 1]
+          const timeSinceLastOp = now - lastOp.timestamp
+
+          // Check if operations can be merged
+          if (
+            lastOp.type === type &&
+            timeSinceLastOp <= OPERATION_MERGE_WINDOW_MS &&
+            lastOp.previousState.itemId === operation.previousState.itemId
+          ) {
+            // Merge: update the nextState of last operation
+            lastOp.nextState = operation.nextState
+            lastOp.timestamp = now // Update timestamp to latest
+            return // Skip adding new operation
+          }
+        }
+
         // Create full operation
         const fullOperation: UndoableOperation = {
           ...operation,
-          id: `op-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          timestamp: Date.now(),
+          id: `op-${now}-${Math.random().toString(36).slice(2)}`,
+          timestamp: now,
         }
 
         // Add to history

@@ -385,13 +385,14 @@ function clearCacheForItemOptimized(
  * Clear all cache entries for a given item ID (legacy O(n) implementation)
  * Kept for backwards compatibility but not used when index is available
  */
-function clearCacheForItem(cache: LRUCache<string, HeightCacheEntry>, id: string): void {
-  for (const key of cache.keys()) {
-    if (key.startsWith(`${id}-`)) {
-      cache.delete(key)
-    }
-  }
-}
+// Unused helper function - kept for reference
+// function clearCacheForItem(cache: LRUCache<string, HeightCacheEntry>, id: string): void {
+//   for (const key of cache.keys()) {
+//     if (key.startsWith(`${id}-`)) {
+//       cache.delete(key)
+//     }
+//   }
+// }
 
 /**
  * Check if item has meaningfully changed

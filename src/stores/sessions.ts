@@ -118,6 +118,15 @@ let fetchSessionsSeq = 0
 let searchSessionsSeq = 0
 const statusUpdateSeq = new Map<string, number>()
 
+/**
+ * P1 Fix: Helper to clear all sequence numbers
+ */
+function clearAllSequences(): void {
+  fetchSessionsSeq = 0
+  searchSessionsSeq = 0
+  statusUpdateSeq.clear()
+}
+
 export const useSessionsStore = create<SessionsState>((set, get) => {
   // P1 Fix: Event listener cleanup handlers
   let cleanupHandlers: (() => void)[] = []
@@ -207,6 +216,8 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
   deleteSession: async (sessionId: string) => {
     try {
       await sessionApi.delete(sessionId)
+      // P1 Fix: Clear status update sequence for deleted session
+      statusUpdateSeq.delete(sessionId)
       set((state) => ({
         sessions: state.sessions.filter((s) => s.sessionId !== sessionId),
         selectedSessionId:
@@ -510,6 +521,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
   cleanup: () => {
     cleanupHandlers.forEach((cleanup) => cleanup())
     cleanupHandlers = []
-    log.debug('[SessionsStore] Event listeners cleaned up', 'sessions')
+    // P1 Fix: Clear all sequence numbers on cleanup
+    clearAllSequences()
+    log.debug('[SessionsStore] Event listeners and sequences cleaned up', 'sessions')
   },
-}))
+  }
+})

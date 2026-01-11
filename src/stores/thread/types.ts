@@ -408,9 +408,9 @@ export interface DeltaBuffer {
 
 // ==================== LRU Cache Types ====================
 
-export interface LRUCacheNode<V> {
+export interface LRUCacheNode<K extends string, V> {
   value: V
-  prev: string | null
-  next: string | null
+  prev: K | null
+  next: K | null
   lastAccess: number
 }

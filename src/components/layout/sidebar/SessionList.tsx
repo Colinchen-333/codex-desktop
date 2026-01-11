@@ -1,5 +1,7 @@
-import { memo, useMemo, useCallback, useRef, useEffect } from 'react'
+import { memo, useMemo, useCallback } from 'react'
 import { Star } from 'lucide-react'
+import { FixedSizeList as List } from 'react-window'
+import { AutoSizer } from 'react-virtualized-auto-sizer'
 import { cn, formatAbsoluteTime } from '../../../lib/utils'
 import type { SessionStatus } from '../../../lib/api'
 import { useSessionsStore } from '../../../stores/sessions'
@@ -7,8 +9,6 @@ import { useProjectsStore } from '../../../stores/projects'
 import { ContextMenu, type ContextMenuItem } from '../../ui/ContextMenu'
 import { StatusIcon, getStatusLabel } from '../../ui/StatusIndicator'
 import { TaskProgressIndicator } from '../../chat/TaskProgress'
-import { VariableSizeList as List } from 'react-window'
-import AutoSizer from 'react-window/dist/core/AutoSizer'
 
 export interface Session {
   sessionId: string
@@ -45,8 +45,7 @@ export interface SessionListProps {
 }
 
 /**
- * SessionRow - Individual row component for virtualized list
- * Memoized to prevent unnecessary re-renders during scrolling
+ * P0 Fix: SessionRow component for virtualized rendering
  */
 interface SessionRowProps {
   index: number
@@ -60,7 +59,7 @@ interface SessionRowProps {
     onDelete: (sessionId: string, sessionName: string) => void
     getSessionDisplayName: (session: Session) => string
     getProjectName: (projectId: string) => string | null
-    isGlobalSearch?: boolean
+    isGlobalSearch: boolean
   }
 }
 
@@ -78,8 +77,6 @@ const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowPr
   } = data
 
   const session = sessions[index]
-  if (!session) return null
-
   const displayName = getSessionDisplayName(session)
   const timestamp = session.lastAccessedAt || session.createdAt
   const timeStr = formatAbsoluteTime(timestamp)
@@ -108,11 +105,11 @@ const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowPr
   ]
 
   return (
-    <div style={style}>
-      <ContextMenu key={session.sessionId} items={contextMenuItems}>
+    <div style={style} className="px-1">
+      <ContextMenu items={contextMenuItems}>
         <button
           className={cn(
-            'w-full rounded-lg px-3 py-2.5 text-left transition-all mb-1',
+            'w-full rounded-lg px-3 py-2.5 text-left transition-all',
             isSelected
               ? 'bg-primary text-primary-foreground shadow-sm'
               : 'text-foreground hover:bg-secondary/50',
@@ -120,9 +117,7 @@ const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowPr
               !isSelected &&
               'border border-blue-400/30 bg-blue-50/10 dark:bg-blue-950/20'
           )}
-          onClick={() =>
-            onSelect(session.sessionId, isGlobalSearch ? session.projectId : undefined)
-          }
+          onClick={() => onSelect(session.sessionId, isGlobalSearch ? session.projectId : undefined)}
           role="option"
           aria-selected={isSelected}
         >
@@ -130,21 +125,12 @@ const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowPr
           <div className="flex items-center gap-2">
             <StatusIcon status={session.status} />
             {session.isFavorite && (
-              <Star
-                size={12}
-                className="text-yellow-500 flex-shrink-0 fill-yellow-500"
-              />
+              <Star size={12} className="text-yellow-500 flex-shrink-0 fill-yellow-500" />
             )}
-            <span className="truncate text-sm font-medium flex-1">
-              {displayName}
-            </span>
-            {/* Task progress indicator */}
-            <TaskProgressIndicator
-              tasksJson={session.tasksJson}
-              status={session.status}
-            />
+            <span className="truncate text-sm font-medium flex-1">{displayName}</span>
+            <TaskProgressIndicator tasksJson={session.tasksJson} status={session.status} />
           </div>
-          {/* Second row: Status label + Timestamp + Project name (for global search) */}
+          {/* Second row: Status label + Timestamp + Project name */}
           <div className="flex items-center gap-1.5 mt-1 text-xs">
             <span
               className={cn(
@@ -174,7 +160,6 @@ const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowPr
                 </span>
               </>
             )}
-            {/* Show project name in global search results */}
             {projectName && (
               <>
                 <span
@@ -188,8 +173,7 @@ const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowPr
                 <span
                   className={cn(
                     'px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground truncate max-w-[80px]',
-                    isSelected &&
-                      'bg-primary-foreground/20 text-primary-foreground/80'
+                    isSelected && 'bg-primary-foreground/20 text-primary-foreground/80'
                   )}
                 >
                   {projectName}
@@ -226,7 +210,7 @@ export const SessionList = memo(function SessionList({
   isLoading,
   hasProject,
   isGlobalSearch,
-  virtualizationThreshold = 50, // Enable virtualization for 50+ sessions
+  virtualizationThreshold = 50,
 }: SessionListProps) {
   // Hooks must be called unconditionally at the top
   const { getSessionDisplayName } = useSessionsStore()
@@ -260,10 +244,10 @@ export const SessionList = memo(function SessionList({
     })
   }, [sessions])
 
-  // Determine if virtualization should be enabled
+  // P0 Fix: Enable virtualization for large lists
   const shouldVirtualize = sortedSessions.length > virtualizationThreshold
 
-  // Create item data for virtualized rows
+  // Memoize item data to prevent re-renders
   const itemData = useMemo(
     () => ({
       sessions: sortedSessions,
@@ -274,7 +258,7 @@ export const SessionList = memo(function SessionList({
       onDelete,
       getSessionDisplayName,
       getProjectName,
-      isGlobalSearch,
+      isGlobalSearch: !!isGlobalSearch,
     }),
     [
       sortedSessions,
@@ -289,27 +273,8 @@ export const SessionList = memo(function SessionList({
     ]
   )
 
-  // Ref for the virtualized list to allow programmatic scrolling
-  const listRef = useRef<List>(null)
-
-  // Reset scroll position when sessions change significantly
-  const prevSessionsLengthRef = useRef(0)
-  const sessionsLengthChanged = sortedSessions.length !== prevSessionsLengthRef.current
-
-  // Update ref and scroll to top when sessions change
-  useEffect(() => {
-    if (sessionsLengthChanged && listRef.current) {
-      listRef.current.scrollToItem(0)
-      prevSessionsLengthRef.current = sortedSessions.length
-    }
-  }, [sortedSessions.length, sessionsLengthChanged])
-
-  // Size calculator for dynamic row heights
-  const getItemSize = useCallback((index: number) => {
-    // Base height: padding + content + margin
-    // Each session row is approximately 70-80px depending on content
-    return 80 // Fixed height for simplicity, can be made dynamic if needed
-  }, [])
+  // Item size: 80px per row (consistent height)
+  const itemSize = 80
 
   // Render non-virtualized list for small datasets
   const renderStandardList = () => {
@@ -455,32 +420,27 @@ export const SessionList = memo(function SessionList({
     )
   }
 
-  // Render virtualized list for large datasets
+  // P0 Fix: Virtualized list for large datasets
   const renderVirtualizedList = () => {
     return (
-      <div
-        role="listbox"
-        aria-label="Sessions list"
-        id="sessions-panel"
-        aria-labelledby="sessions-tab"
-        className="h-full"
-      >
-        <AutoSizer>
-          {({ height, width }) => (
-            <List
-              ref={listRef}
-              height={height}
-              width={width}
-              itemCount={sortedSessions.length}
-              itemSize={getItemSize}
-              itemData={itemData}
-              overscanCount={5} // Render 5 extra items above/below viewport
-            >
-              {SessionRow}
-            </List>
-          )}
-        </AutoSizer>
-      </div>
+      <AutoSizer>
+        {({ height, width }: { height: number; width: number }) => (
+          <List
+            height={height}
+            width={width}
+            itemCount={sortedSessions.length}
+            itemSize={itemSize}
+            itemData={itemData}
+            overscanCount={5}
+            role="listbox"
+            aria-label="Sessions list (virtualized)"
+            id="sessions-panel"
+            aria-labelledby="sessions-tab"
+          >
+            {SessionRow}
+          </List>
+        )}
+      </AutoSizer>
     )
   }
 
@@ -533,5 +493,6 @@ export const SessionList = memo(function SessionList({
   }
 
   // Choose rendering method based on dataset size
+  // P0 Fix: Use virtualization for large lists to improve performance
   return shouldVirtualize ? renderVirtualizedList() : renderStandardList()
 })

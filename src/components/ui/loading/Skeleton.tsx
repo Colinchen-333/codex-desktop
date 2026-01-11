@@ -1,10 +1,10 @@
-import { cn } from '../../lib/utils'
+import { cn } from '../../../lib/utils'
 
 /**
  * Base Skeleton component for loading states
  * Provides a shimmer animation effect for placeholder content
  */
-interface SkeletonProps {
+export interface SkeletonProps {
   className?: string
   animate?: boolean
 }
@@ -24,7 +24,7 @@ export function Skeleton({ className, animate = true }: SkeletonProps) {
 /**
  * Text line skeleton for simulating text content
  */
-interface SkeletonTextProps {
+export interface SkeletonTextProps {
   lines?: number
   className?: string
 }
@@ -50,7 +50,7 @@ export function SkeletonText({ lines = 3, className }: SkeletonTextProps) {
  * Dialog skeleton for lazy-loaded dialog components
  * Provides a consistent loading state while dialogs are being loaded
  */
-interface DialogSkeletonProps {
+export interface DialogSkeletonProps {
   title?: string
   className?: string
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ReactNode, type MouseEvent } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, type ReactNode, type MouseEvent } from 'react'
 import { cn } from '../../lib/utils'
 
 export interface ContextMenuItem {
@@ -64,7 +64,7 @@ export function ContextMenu({ items, children, className }: ContextMenuProps) {
   }, [isOpen])
 
   // Adjust position if menu would overflow viewport - legitimate DOM measurement update
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isOpen || !menuRef.current) {
       return
     }

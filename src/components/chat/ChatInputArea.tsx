@@ -4,7 +4,7 @@
  */
 import React, { useCallback, useEffect, memo } from 'react'
 import { X, Paperclip, StopCircle, ArrowUp } from 'lucide-react'
-import { shallow } from 'zustand/shallow'
+import { useShallow } from 'zustand/react/shallow'
 import { cn } from '../../lib/utils'
 import { useThreadStore, type ThreadState } from '../../stores/thread'
 import { SlashCommandPopup } from './SlashCommandPopup'
@@ -128,14 +128,10 @@ export default memo(function ChatInputArea({
 }: ChatInputAreaProps) {
   // P1 Fix: Combine selector to prevent multiple subscriptions
   const { turnStatus, interrupt } = useThreadStore(
-    useCallback(
-      (state: ThreadState) => ({
-        turnStatus: state.turnStatus,
-        interrupt: state.interrupt,
-      }),
-      []
-    ),
-    shallow
+    useShallow((state: ThreadState) => ({
+      turnStatus: state.turnStatus,
+      interrupt: state.interrupt,
+    }))
   )
 
   const {

@@ -80,15 +80,11 @@ impl Database {
                 PRIMARY KEY (project_id, command_pattern)
             );
 
-            -- Indexes for common queries
+            -- Indexes for common queries (non-status columns)
             CREATE INDEX IF NOT EXISTS idx_session_metadata_project
                 ON session_metadata(project_id);
             CREATE INDEX IF NOT EXISTS idx_session_metadata_last_accessed
                 ON session_metadata(last_accessed_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_session_metadata_status
-                ON session_metadata(status);
-            CREATE INDEX IF NOT EXISTS idx_session_metadata_project_status
-                ON session_metadata(project_id, status, last_accessed_at DESC);
             CREATE INDEX IF NOT EXISTS idx_snapshots_session
                 ON snapshots(session_id);
             "#,
@@ -96,6 +92,16 @@ impl Database {
 
         // Run migrations for existing databases
         Self::run_migrations(conn)?;
+
+        // Create status-dependent indexes after migrations
+        conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_session_metadata_status
+                ON session_metadata(status);
+            CREATE INDEX IF NOT EXISTS idx_session_metadata_project_status
+                ON session_metadata(project_id, status, last_accessed_at DESC);
+            "#,
+        )?;
 
         Ok(())
     }

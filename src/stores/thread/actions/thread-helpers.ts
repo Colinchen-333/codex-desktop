@@ -59,7 +59,7 @@ export async function withThreadOperation<T>(
   options: ThreadOperationOptions,
   set: (fn: (state: WritableDraft<ThreadState>) => ThreadState | void) => void,
   get: () => ThreadState,
-  getThreadStore: () => ThreadState,
+  _getThreadStore: () => ThreadState,
   operation: (opSeq: number) => Promise<T>
 ): Promise<T | undefined> {
   const { name, checkCapacity = false, captureInitialState = false } = options

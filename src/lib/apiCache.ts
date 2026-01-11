@@ -8,14 +8,23 @@
  * - listMcpServers: MCP 服务器列表较稳定，缓存 2 分钟
  */
 
+/**
+ * P1 Fix: Enhanced cache entry with error support
+ */
 interface CacheEntry<T> {
   data: T
   expiry: number
+  isError?: boolean  // P1 Fix: Flag to indicate if this is an error response
 }
 
 // 使用 Map 存储缓存，key 为缓存键，value 为缓存条目
 const cache = new Map<string, CacheEntry<unknown>>()
 const inFlight = new Map<string, Promise<unknown>>()
+
+/**
+ * P1 Fix: Error TTL (5 seconds) - much shorter than success responses
+ */
+const ERROR_TTL_MS = 5000
 
 /**
  * 使用缓存包装 API 调用
@@ -33,13 +42,18 @@ const inFlight = new Map<string, Promise<unknown>>()
 export async function withCache<T>(
   key: string,
   fetcher: () => Promise<T>,
-  ttlMs: number = 60000
+  ttlMs: number = 60000,
+  cacheErrors: boolean = true  // P1 Fix: New parameter to control error caching
 ): Promise<T> {
   const now = Date.now()
   const cached = cache.get(key) as CacheEntry<T> | undefined
 
-  // 如果缓存存在且未过期，直接返回缓存数据
+  // 如果缓存存在且未过期
   if (cached && cached.expiry > now) {
+    // P1 Fix: If cached entry is an error, re-throw it
+    if (cached.isError) {
+      throw cached.data
+    }
     return cached.data
   }
 
@@ -51,11 +65,19 @@ export async function withCache<T>(
   // 调用实际的 API 获取数据
   const request = fetcher()
     .then((data) => {
-      cache.set(key, { data, expiry: now + ttlMs })
+      cache.set(key, { data, expiry: now + ttlMs, isError: false })
       inFlight.delete(key)
       return data
     })
     .catch((error) => {
+      // P1 Fix: Cache error responses with shorter TTL
+      if (cacheErrors) {
+        cache.set(key, {
+          data: error,
+          expiry: now + ERROR_TTL_MS,
+          isError: true,
+        })
+      }
       inFlight.delete(key)
       throw error
     })

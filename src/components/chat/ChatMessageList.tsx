@@ -11,7 +11,7 @@
 import React, { memo, useMemo, useDeferredValue, useCallback, useRef, useEffect } from 'react'
 import { List } from 'react-window'
 import type { ListImperativeAPI } from 'react-window'
-import { shallow } from 'zustand/shallow'
+import { useShallow } from 'zustand/react/shallow'
 import { type ThreadState, useThreadStore } from '../../stores/thread'
 import { isUserMessageContent, isAgentMessageContent } from '../../lib/typeGuards'
 import { MessageItem } from './messages'
@@ -87,15 +87,11 @@ export default memo(function ChatMessageList({
 }: ChatMessageListProps) {
   // P1 Fix: Use shallow selector to prevent re-renders when only values change
   const messageListData = useThreadStore(
-    useCallback(
-      (state: ThreadState) => ({
-        items: state.items,
-        itemOrder: state.itemOrder,
-        turnStatus: state.turnStatus,
-      }),
-      []
-    ),
-    shallow
+    useShallow((state: ThreadState) => ({
+      items: state.items,
+      itemOrder: state.itemOrder,
+      turnStatus: state.turnStatus,
+    }))
   )
 
   const { items, itemOrder, turnStatus } = messageListData

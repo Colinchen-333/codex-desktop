@@ -6,6 +6,7 @@ import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
 import { CloseSessionDialog } from './CloseSessionDialog'
 import { TaskProgressCompact } from '../chat/TaskProgress'
+import type { SessionStatus } from '../../lib/api'
 
 interface SessionTabsProps {
   onNewSession?: () => void
@@ -18,6 +19,7 @@ export function SessionTabs({ onNewSession }: SessionTabsProps) {
   const canAddSession = useThreadStore((state) => state.canAddSession)
   const maxSessions = useThreadStore((state) => state.maxSessions)
   const isLoading = useThreadStore((state) => state.isLoading)
+  const sessions = useSessionsStore((state) => state.sessions)
 
   const [closeDialogOpen, setCloseDialogOpen] = useState(false)
   const [threadToClose, setThreadToClose] = useState<string | null>(null)
@@ -85,18 +87,24 @@ export function SessionTabs({ onNewSession }: SessionTabsProps) {
   return (
     <>
       <div className="flex items-center gap-1 px-3 py-2 border-b border-border/50 bg-card/30 backdrop-blur-sm overflow-x-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border/50">
-        {threadEntries.map(([threadId, threadState]) => (
-          <SessionTab
-            key={threadId}
-            threadId={threadId}
-            threadState={threadState}
-            isActive={threadId === focusedThreadId}
-            isSwitching={threadId === switchingTabId}
-            isGloballyLoading={isLoading}
-            onClick={() => handleTabClick(threadId)}
-            onClose={(e) => handleCloseClick(e, threadId)}
-          />
-        ))}
+        {threadEntries.map(([threadId, threadState]) => {
+          const sessionMeta = sessions.find(s => s.sessionId === threadId)
+          return (
+            <SessionTab
+              key={threadId}
+              threadId={threadId}
+              threadState={threadState}
+              isActive={threadId === focusedThreadId}
+              isSwitching={threadId === switchingTabId}
+              isGloballyLoading={isLoading}
+              onClick={() => handleTabClick(threadId)}
+              onClose={(e) => handleCloseClick(e, threadId)}
+              sessionTitle={sessionMeta?.title || null}
+              sessionTasksJson={sessionMeta?.tasksJson || null}
+              sessionStatus={sessionMeta?.status || 'idle'}
+            />
+          )
+        })}
 
         {/* Add new session button */}
         {canAddSession() && onNewSession && (
@@ -139,23 +147,23 @@ interface SessionTabProps {
   isGloballyLoading: boolean
   onClick: () => void
   onClose: (e: React.MouseEvent) => void
+  sessionTitle: string | null
+  sessionTasksJson: string | null
+  sessionStatus: SessionStatus
 }
 
 const SessionTab = memo(function SessionTab({
-  threadId,
   threadState,
   isActive,
   isSwitching,
   isGloballyLoading,
   onClick,
-  onClose
+  onClose,
+  sessionTitle,
+  sessionTasksJson,
+  sessionStatus
 }: SessionTabProps) {
   const { thread, turnStatus, pendingApprovals } = threadState
-
-  // Use selectors to only subscribe to needed data
-  const sessionMeta = useSessionsStore((state) =>
-    state.sessions.find(s => s.sessionId === threadId)
-  )
 
   const project = useProjectsStore((state) =>
     state.projects.find(p => thread.cwd?.startsWith(p.path))
@@ -163,8 +171,8 @@ const SessionTab = memo(function SessionTab({
 
   // Memoize expensive label computation
   const label = useMemo(() =>
-    sessionMeta?.title || project?.displayName || thread.cwd?.split('/').pop() || 'Session'
-  , [sessionMeta?.title, project?.displayName, thread.cwd])
+    sessionTitle || project?.displayName || thread.cwd?.split('/').pop() || 'Session'
+  , [sessionTitle, project?.displayName, thread.cwd])
 
   const displayLabel = useMemo(() =>
     label.length > 20 ? label.slice(0, 18) + '...' : label
@@ -178,11 +186,6 @@ const SessionTab = memo(function SessionTab({
   const hasPendingApprovals = useMemo(() =>
     pendingApprovals.length > 0
   , [pendingApprovals.length])
-
-  // Get session status for task progress
-  const sessionStatus = useMemo(() =>
-    sessionMeta?.status || 'idle'
-  , [sessionMeta?.status])
 
   // Wrap handlers in useCallback
   const handleClick = useCallback(() => {
@@ -238,7 +241,7 @@ const SessionTab = memo(function SessionTab({
       {/* Task progress indicator (compact) */}
       <span className={cn(isLoading && 'opacity-0')}>
         <TaskProgressCompact
-          tasksJson={sessionMeta?.tasksJson || null}
+          tasksJson={sessionTasksJson}
           status={sessionStatus}
         />
       </span>
@@ -260,20 +263,17 @@ const SessionTab = memo(function SessionTab({
     </div>
   )
 }, (prevProps, nextProps) => {
-  // Custom comparison for React.memo
-  const arePropsEqual = prevProps.threadId === nextProps.threadId &&
-                       prevProps.isActive === nextProps.isActive &&
-                       prevProps.isSwitching === nextProps.isSwitching &&
-                       prevProps.isGloballyLoading === nextProps.isGloballyLoading &&
-                       prevProps.threadState.turnStatus === nextProps.threadState.turnStatus &&
-                       prevProps.threadState.pendingApprovals.length === nextProps.threadState.pendingApprovals.length &&
-                       prevProps.threadState.thread.cwd === nextProps.threadState.thread.cwd
-
-  // Compare session metadata for task progress updates
-  const prevSession = useSessionsStore.getState().sessions.find(s => s.sessionId === prevProps.threadId)
-  const nextSession = useSessionsStore.getState().sessions.find(s => s.sessionId === nextProps.threadId)
-  const isSessionEqual = prevSession?.tasksJson === nextSession?.tasksJson &&
-                        prevSession?.status === nextSession?.status
-
-  return arePropsEqual && isSessionEqual
+  // Custom comparison for React.memo - pure function without side effects
+  return (
+    prevProps.threadId === nextProps.threadId &&
+    prevProps.isActive === nextProps.isActive &&
+    prevProps.isSwitching === nextProps.isSwitching &&
+    prevProps.isGloballyLoading === nextProps.isGloballyLoading &&
+    prevProps.threadState.turnStatus === nextProps.threadState.turnStatus &&
+    prevProps.threadState.pendingApprovals.length === nextProps.threadState.pendingApprovals.length &&
+    prevProps.threadState.thread.cwd === nextProps.threadState.thread.cwd &&
+    prevProps.sessionTitle === nextProps.sessionTitle &&
+    prevProps.sessionTasksJson === nextProps.sessionTasksJson &&
+    prevProps.sessionStatus === nextProps.sessionStatus
+  )
 })
