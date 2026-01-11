@@ -5,19 +5,19 @@
  */
 import { memo, useState, useEffect, useRef } from 'react'
 import { Clock } from 'lucide-react'
-import { useThreadStore } from '../../../stores/thread'
-import { useAppStore } from '../../../stores/app'
+import { useThreadStore, type ThreadState } from '../../../stores/thread'
+import { useAppStore, type AppState } from '../../../stores/app'
 import { isReasoningContent } from '../../../lib/typeGuards'
 import { parseReasoningSummary } from '../utils'
 
 export const WorkingStatusBar = memo(function WorkingStatusBar() {
-  const turnStatus = useThreadStore((state) => state.turnStatus)
-  const turnTiming = useThreadStore((state) => state.turnTiming)
+  const turnStatus = useThreadStore((state: ThreadState) => state.turnStatus)
+  const turnTiming = useThreadStore((state: ThreadState) => state.turnTiming)
   // tokenUsage is accessed via getState() in the interval to avoid dependency issues
-  const pendingApprovals = useThreadStore((state) => state.pendingApprovals)
-  const items = useThreadStore((state) => state.items)
-  const itemOrder = useThreadStore((state) => state.itemOrder)
-  const escapePending = useAppStore((state) => state.escapePending)
+  const pendingApprovals = useThreadStore((state: ThreadState) => state.pendingApprovals)
+  const items = useThreadStore((state: ThreadState) => state.items)
+  const itemOrder = useThreadStore((state: ThreadState) => state.itemOrder)
+  const escapePending = useAppStore((state: AppState) => state.escapePending)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [tokenRate, setTokenRate] = useState(0)
   const prevTokensRef = useRef(0)

@@ -1,5 +1,6 @@
-import React, { ReactElement } from 'react';
-import { render, RenderOptions } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import React from 'react';
+import { render, type RenderOptions } from '@testing-library/react';
 
 // Add any custom providers or setup here
 const AllTheProviders = ({ children }: { children: React.ReactNode }) => {

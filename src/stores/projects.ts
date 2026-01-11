@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import { projectApi, type Project, type GitInfo } from '../lib/api'
-import { parseError } from '../lib/errorUtils'
+import { parseError, logError } from '../lib/errorUtils'
 
-interface ProjectsState {
+export interface ProjectsState {
   projects: Project[]
   selectedProjectId: string | null
   gitInfo: Record<string, GitInfo>
@@ -87,7 +87,11 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
         gitInfo: { ...state.gitInfo, [projectId]: info },
       }))
     } catch (error) {
-      console.error('Failed to fetch git info:', error)
+      logError(error, {
+        context: 'fetchGitInfo',
+        source: 'projects',
+        details: 'Failed to fetch git info'
+      })
     }
   },
 }))

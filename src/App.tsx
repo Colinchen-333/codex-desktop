@@ -11,9 +11,11 @@ import { ConnectionStatus } from './components/ui/ConnectionStatus'
 import { GlobalErrorHandler } from './components/ui/GlobalErrorHandler'
 import { KeyboardShortcuts } from './components/KeyboardShortcuts'
 import { useProjectsStore } from './stores/projects'
-import { useThreadStore, cleanupThreadResources } from './stores/thread'
+import { useSessionsStore } from './stores/sessions'
+import { useThreadStore, cleanupThreadResources } from './stores/thread/index'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
 import { log } from './lib/logger'
+import { logError } from './lib/errorUtils'
 
 function App() {
   const fetchProjects = useProjectsStore((state) => state.fetchProjects)
@@ -33,6 +35,15 @@ function App() {
   useEffect(() => {
     void fetchProjects()
   }, [fetchProjects])
+
+  // P1 Fix: Initialize and cleanup sessions store event listeners
+  useEffect(() => {
+    useSessionsStore.getState().initialize()
+
+    return () => {
+      useSessionsStore.getState().cleanup()
+    }
+  }, [])
 
   // Setup event listeners - only once on mount
   // Note: With multi-session support, event handlers now route by threadId internally
@@ -100,7 +111,11 @@ function App() {
         }
       })
       .catch((error) => {
-        console.error('Failed to setup event listeners:', error)
+        logError(error, {
+          context: 'App',
+          source: 'event-listeners',
+          details: 'Failed to setup event listeners'
+        })
         // Reset flag so setup can be retried on next mount
         listenersSetupRef.current = false
       })
@@ -143,7 +158,11 @@ function App() {
           <div className="flex flex-1 flex-col overflow-hidden rounded-2xl bg-card shadow-sm border border-border/50 relative">
             <AsyncErrorBoundary
               onError={(error) => {
-                console.error('Async error in main area:', error)
+                logError(error, {
+                  context: 'App',
+                  source: 'AsyncErrorBoundary',
+                  details: 'Async error in main area'
+                })
               }}
             >
               <MainArea />

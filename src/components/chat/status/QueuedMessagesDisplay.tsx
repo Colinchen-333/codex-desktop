@@ -4,11 +4,11 @@
  */
 import { memo } from 'react'
 import { ListChecks, Clock } from 'lucide-react'
-import { useThreadStore } from '../../../stores/thread'
+import { useThreadStore, type ThreadState, type QueuedMessage } from '../../../stores/thread'
 
 export const QueuedMessagesDisplay = memo(function QueuedMessagesDisplay() {
-  const queuedMessages = useThreadStore((state) => state.queuedMessages)
-  const turnStatus = useThreadStore((state) => state.turnStatus)
+  const queuedMessages = useThreadStore((state: ThreadState) => state.queuedMessages)
+  const turnStatus = useThreadStore((state: ThreadState) => state.turnStatus)
 
   if (queuedMessages.length === 0) return null
 
@@ -18,7 +18,7 @@ export const QueuedMessagesDisplay = memo(function QueuedMessagesDisplay() {
         <ListChecks size={12} className="inline mr-1.5" />
         Queued messages{turnStatus === 'running' ? '' : ' (pending)'} ({queuedMessages.length}):
       </div>
-      {queuedMessages.map((msg) => (
+      {queuedMessages.map((msg: QueuedMessage) => (
         <div
           key={msg.id}
           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-secondary/60 border border-border/30 text-sm"

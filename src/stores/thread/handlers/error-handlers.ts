@@ -6,6 +6,7 @@
  */
 
 import type { WritableDraft } from 'immer'
+import { log } from '../../../lib/logger'
 import type {
   TokenUsageEvent,
   StreamErrorEvent,
@@ -58,11 +59,12 @@ export function createHandleStreamError(
             try {
               return JSON.stringify(event.error.codexErrorInfo)
             } catch (e) {
-              console.error('[handleStreamError] Failed to serialize codexErrorInfo:', e)
+              log.error(`[handleStreamError] Failed to serialize codexErrorInfo: ${e}`, 'error-handlers')
               return '[Serialization failed]'
             }
           })()
         : event.error.codexErrorInfo
+    // P1 Fix: Use milliseconds timestamp consistently
     const errorItem: ErrorItem = {
       id: `error-${Date.now()}`,
       type: 'error',
@@ -78,19 +80,12 @@ export function createHandleStreamError(
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: { ...threadState.items, [errorItem.id]: errorItem },
-            itemOrder: [...threadState.itemOrder, errorItem.id],
-            error: event.error.message,
-            turnStatus: event.willRetry ? threadState.turnStatus : 'failed',
-          },
-        },
-      }
+      
+      // P2: Immer optimization - direct mutation instead of spreading
+      threadState.items[errorItem.id] = errorItem
+      threadState.itemOrder.push(errorItem.id)
+      threadState.error = event.error.message
+      threadState.turnStatus = event.willRetry ? threadState.turnStatus : 'failed'
     })
   }
 }
@@ -106,7 +101,7 @@ export function createHandleRateLimitExceeded(
     const { threads } = get()
     if (!threads[threadId]) return
 
-    console.warn('[handleRateLimitExceeded] Rate limit exceeded:', event)
+    log.warn(`[handleRateLimitExceeded] Rate limit exceeded: ${JSON.stringify(event)}`, 'error-handlers')
 
     performFullTurnCleanup(threadId)
 
@@ -117,23 +112,13 @@ export function createHandleRateLimitExceeded(
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            turnStatus: 'failed',
-            error: errorMessage,
-            currentTurnId: null,
-            pendingApprovals: [],
-            turnTiming: {
-              ...threadState.turnTiming,
-              completedAt: Date.now(),
-            },
-          },
-        },
-      }
+      
+      // P2: Immer optimization - direct mutation instead of spreading
+      threadState.turnStatus = 'failed'
+      threadState.error = errorMessage
+      threadState.currentTurnId = null
+      threadState.pendingApprovals = []
+      threadState.turnTiming.completedAt = Date.now()
     })
   }
 }
@@ -145,7 +130,7 @@ export function createHandleServerDisconnected(
   get: () => ThreadState
 ) {
   return () => {
-    console.warn('[handleServerDisconnected] Server disconnected')
+    log.warn('[handleServerDisconnected] Server disconnected', 'error-handlers')
 
     // Clean up all threads
     const { threads } = get()
@@ -154,33 +139,20 @@ export function createHandleServerDisconnected(
     })
 
     set((state) => {
-      const updatedThreads = { ...state.threads }
-      Object.keys(updatedThreads).forEach((threadId) => {
-        const threadState = updatedThreads[threadId]
+      // P2: Immer optimization - direct mutation instead of spreading
+      Object.keys(state.threads).forEach((threadId) => {
+        const threadState = state.threads[threadId]
         if (threadState.turnStatus === 'running') {
-          updatedThreads[threadId] = {
-            ...threadState,
-            turnStatus: 'failed',
-            error: 'Server disconnected. Please try again.',
-            currentTurnId: null,
-            pendingApprovals: [],
-            turnTiming: {
-              ...threadState.turnTiming,
-              completedAt: Date.now(),
-            },
-          }
+          threadState.turnStatus = 'failed'
+          threadState.error = 'Server disconnected. Please try again.'
+          threadState.currentTurnId = null
+          threadState.pendingApprovals = []
+          threadState.turnTiming.completedAt = Date.now()
         } else {
-          updatedThreads[threadId] = {
-            ...threadState,
-            error: 'Server disconnected. Connection will be restored automatically.',
-          }
+          threadState.error = 'Server disconnected. Connection will be restored automatically.'
         }
       })
-      return {
-        ...state,
-        threads: updatedThreads,
-        globalError: 'Server disconnected. Connection will be restored automatically.',
-      }
+      state.globalError = 'Server disconnected. Connection will be restored automatically.'
     })
   }
 }

@@ -3,6 +3,8 @@
  *
  * Actions for sending messages, responding to approvals,
  * and managing session overrides.
+ *
+ * Integrated with undo/redo functionality.
  */
 
 import type { WritableDraft } from 'immer'
@@ -18,6 +20,7 @@ import {
   isFileChangeContent,
 } from '../../../lib/typeGuards'
 import { useSettingsStore } from '../../settings'
+import { useUndoRedoStore } from '../../undoRedo'
 import type {
   ThreadState,
   UserMessageItem,
@@ -25,6 +28,7 @@ import type {
   QueuedMessage,
   SessionOverrides,
 } from '../types'
+import { MAX_MESSAGE_RETRY_ATTEMPTS } from '../types'
 import { clearTurnTimeout } from '../delta-buffer'
 
 // ==================== Queue Message Helpers ====================
@@ -91,7 +95,61 @@ export function createDispatchNextQueuedMessage(
     try {
       await get().sendMessage(nextMessage.text, nextMessage.images, nextMessage.skills, threadId)
     } catch (error) {
-      requeueMessageFront(threadId, nextMessage)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const retryCount = (nextMessage.retryCount ?? 0) + 1
+
+      log.warn(
+        `[dispatchNextQueuedMessage] Message failed (attempt ${retryCount}/${MAX_MESSAGE_RETRY_ATTEMPTS}): ${errorMessage}`,
+        'message-actions'
+      )
+
+      // Check if we should retry or give up
+      if (retryCount < MAX_MESSAGE_RETRY_ATTEMPTS) {
+        // Add info item to notify user about retry
+        const addInfoItem = get().addInfoItem
+        if (addInfoItem) {
+          const retryDelay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000)
+          const delaySeconds = Math.ceil(retryDelay / 1000)
+          addInfoItem(
+            'Message Retry',
+            `Retrying failed message (attempt ${retryCount}/${MAX_MESSAGE_RETRY_ATTEMPTS}) in ${delaySeconds}s...\nError: ${errorMessage}`
+          )
+        }
+
+        // Requeue with updated retry count
+        const updatedMessage: QueuedMessage = {
+          ...nextMessage,
+          retryCount,
+          lastError: errorMessage,
+        }
+        requeueMessageFront(threadId, updatedMessage)
+
+        // Schedule retry with exponential backoff
+        const backoffDelay = Math.min(1000 * Math.pow(2, retryCount - 1), 10000) // Max 10s
+        setTimeout(() => {
+          const currentState = get()
+          const currentThread = currentState.threads[threadId]
+          if (currentThread && currentThread.turnStatus !== 'running' && currentThread.queuedMessages.length > 0) {
+            void createDispatchNextQueuedMessage(get, dequeueQueuedMessage, requeueMessageFront)(threadId)
+          }
+        }, backoffDelay)
+      } else {
+        // Add info item to notify user about permanent failure
+        const addInfoItem = get().addInfoItem
+        if (addInfoItem) {
+          addInfoItem(
+            'Message Failed',
+            `Message failed after ${MAX_MESSAGE_RETRY_ATTEMPTS} attempts. Please try again.\nLast error: ${errorMessage}`
+          )
+        }
+
+        log.error(
+          `[dispatchNextQueuedMessage] Message failed after ${MAX_MESSAGE_RETRY_ATTEMPTS} attempts, giving up: ${errorMessage}`,
+          'message-actions'
+        )
+        // Don't requeue - message is permanently failed
+        // User will need to manually resend
+      }
       throw error
     }
   }
@@ -123,6 +181,8 @@ export function createSendMessage(
         images,
         skills,
         queuedAt: Date.now(),
+        retryCount: 0,
+        lastError: undefined,
       }
       enqueueQueuedMessage(threadId, queuedMsg)
       if (threadState.turnStatus !== 'running') {
@@ -153,6 +213,18 @@ export function createSendMessage(
       ts.itemOrder.push(userMessageId)
       ts.turnStatus = 'running'
       return state
+    })
+
+    // Record operation for undo (can undo by deleting the message)
+    const { pushOperation } = useUndoRedoStore.getState()
+    pushOperation({
+      type: 'sendMessage',
+      description: 'Send message',
+      previousState: {
+        itemId: userMessageId,
+        itemData: { ...userMessage },
+      },
+      threadId,
     })
 
     try {
@@ -188,7 +260,7 @@ export function createSendMessage(
       // Verify thread still exists
       const { threads: currentThreads } = get()
       if (!currentThreads[threadId]) {
-        console.warn('[sendMessage] Thread closed during send, discarding result')
+        log.warn('[sendMessage] Thread closed during send, discarding result', 'message-actions')
         return
       }
 
@@ -237,16 +309,14 @@ export function createRespondToApproval(
 
     const pendingApproval = threadState.pendingApprovals.find((p) => p.itemId === itemId)
     if (!pendingApproval) {
-      console.error('No pending approval found for itemId:', itemId)
+      log.error(`No pending approval found for itemId: ${itemId}`, 'message-actions')
       return
     }
 
     if (pendingApproval.threadId !== threadId) {
-      console.error(
-        '[respondToApproval] Thread mismatch - approval.threadId:',
-        pendingApproval.threadId,
-        'threadId:',
-        threadId
+      log.error(
+        `[respondToApproval] Thread mismatch - approval.threadId: ${pendingApproval.threadId}, threadId: ${threadId}`,
+        'message-actions'
       )
       set((state) => {
         const ts = state.threads[threadId]
@@ -268,7 +338,7 @@ export function createRespondToApproval(
 
       const { threads: currentThreads } = get()
       if (!currentThreads[threadId]) {
-        console.warn('[respondToApproval] Thread closed, discarding state update')
+        log.warn('[respondToApproval] Thread closed, discarding state update', 'message-actions')
         return
       }
 

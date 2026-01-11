@@ -4,6 +4,7 @@ import { cn } from '../../lib/utils'
 import { useThreadStore } from '../../stores/thread'
 import { useSessionsStore } from '../../stores/sessions'
 import { useProjectsStore } from '../../stores/projects'
+import { useDialogKeyboardShortcut } from '../../hooks/useDialogKeyboardShortcut'
 
 interface CloseSessionDialogProps {
   isOpen: boolean
@@ -13,6 +14,7 @@ interface CloseSessionDialogProps {
 
 export function CloseSessionDialog({ isOpen, threadId, onClose }: CloseSessionDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
+  const confirmButtonRef = useRef<HTMLButtonElement>(null)
   const threads = useThreadStore((state) => state.threads)
   const projects = useProjectsStore((state) => state.projects)
   const sessions = useSessionsStore((state) => state.sessions)
@@ -35,25 +37,13 @@ export function CloseSessionDialog({ isOpen, threadId, onClose }: CloseSessionDi
     onClose()
   }
 
-  // Handle escape key
-  useEffect(() => {
-    if (!isOpen) return
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose()
-      } else if (e.key === 'Enter') {
-        // Call handleConfirm inline to avoid dependency issues
-        if (threadId) {
-          useThreadStore.getState().closeThread(threadId)
-        }
-        onClose()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, threadId, onClose]) // Include onClose - parent should memoize if needed
+  // Use keyboard shortcut hook for Cmd+Enter (or Ctrl+Enter on Windows/Linux)
+  useDialogKeyboardShortcut({
+    isOpen,
+    onConfirm: () => confirmButtonRef.current?.click(),
+    onCancel: onClose,
+    requireModifierKey: false,
+  })
 
   // Focus dialog when opened
   useEffect(() => {
@@ -145,6 +135,7 @@ export function CloseSessionDialog({ isOpen, threadId, onClose }: CloseSessionDi
             Cancel
           </button>
           <button
+            ref={confirmButtonRef}
             onClick={handleConfirm}
             className={cn(
               'px-4 py-2 rounded-lg text-sm font-medium',

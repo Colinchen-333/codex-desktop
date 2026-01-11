@@ -5,7 +5,7 @@
  * preventing unsafe type assertions that could lead to runtime errors.
  */
 
-import type { Theme } from './theme'
+import type { Theme } from './ThemeContext'
 import type { SandboxMode, ApprovalPolicy, ReasoningEffort, ReasoningSummary } from '../stores/settings'
 
 /**

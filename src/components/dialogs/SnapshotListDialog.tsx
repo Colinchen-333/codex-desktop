@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { cn } from '../../lib/utils'
 import { useThreadStore } from '../../stores/thread'
 import { useProjectsStore } from '../../stores/projects'
 import { useToast } from '../ui/Toast'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { useDialogKeyboardShortcut } from '../../hooks/useDialogKeyboardShortcut'
 import type { Snapshot } from '../../lib/api'
+import { logError } from '../../lib/errorUtils'
 
 interface SnapshotListDialogProps {
   isOpen: boolean
@@ -48,32 +51,62 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
   const { showToast } = useToast()
   const [isReverting, setIsReverting] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [confirmRevert, setConfirmRevert] = useState<{
+    isOpen: boolean
+    snapshot: Snapshot | null
+  }>({ isOpen: false, snapshot: null })
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
 
   const project = projects.find((p) => p.id === selectedProjectId)
+
+  // Use keyboard shortcut hook for Escape to close
+  useDialogKeyboardShortcut({
+    isOpen,
+    onConfirm: () => closeButtonRef.current?.click(),
+    onCancel: onClose,
+    requireModifierKey: false,
+  })
 
   useEffect(() => {
     if (isOpen && activeThread) {
       setIsLoading(true)
-      useThreadStore.getState().fetchSnapshots().finally(() => setIsLoading(false))
+      void useThreadStore.getState().fetchSnapshots().finally(() => setIsLoading(false))
     }
   }, [isOpen, activeThread]) // Remove fetchSnapshots dependency
 
-  const handleRevert = async (snapshot: Snapshot) => {
+  const handleRevertClick = (snapshot: Snapshot) => {
+    setConfirmRevert({ isOpen: true, snapshot })
+  }
+
+  const handleRevertConfirm = async () => {
+    const snapshot = confirmRevert.snapshot
+    if (!snapshot) return
+
     if (!project) {
       showToast('No project selected', 'error')
+      setConfirmRevert({ isOpen: false, snapshot: null })
       return
     }
 
+    setConfirmRevert({ isOpen: false, snapshot: null })
     setIsReverting(snapshot.id)
     try {
       await useThreadStore.getState().revertToSnapshot(snapshot.id, project.path)
       showToast('Reverted to snapshot successfully', 'success')
     } catch (error) {
-      console.error('Failed to revert:', error)
+      logError(error, {
+        context: 'SnapshotListDialog',
+        source: 'dialogs',
+        details: 'Failed to revert to snapshot'
+      })
       showToast('Failed to revert to snapshot', 'error')
     } finally {
       setIsReverting(null)
     }
+  }
+
+  const handleRevertCancel = () => {
+    setConfirmRevert({ isOpen: false, snapshot: null })
   }
 
   if (!isOpen) return null
@@ -148,7 +181,7 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
                         'bg-secondary text-secondary-foreground hover:bg-secondary/80',
                         'disabled:opacity-50'
                       )}
-                      onClick={() => handleRevert(snapshot)}
+                      onClick={() => handleRevertClick(snapshot)}
                       disabled={isReverting === snapshot.id}
                     >
                       {isReverting === snapshot.id ? 'Reverting...' : 'Revert'}
@@ -163,12 +196,25 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
         {/* Footer */}
         <div className="flex justify-end border-t border-border px-6 py-4">
           <button
+            ref={closeButtonRef}
             className="rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80"
             onClick={onClose}
           >
             Close
           </button>
         </div>
+
+        {/* Revert Confirmation Dialog */}
+        <ConfirmDialog
+          isOpen={confirmRevert.isOpen}
+          title="Revert to Snapshot"
+          message="All changes after this snapshot will be lost. This action cannot be undone."
+          confirmText="Revert"
+          cancelText="Cancel"
+          variant="warning"
+          onConfirm={handleRevertConfirm}
+          onCancel={handleRevertCancel}
+        />
       </div>
     </div>
   )

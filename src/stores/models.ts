@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { serverApi, type Model } from '../lib/api'
+import { logError } from '../lib/errorUtils'
 
 // Cache TTL for models list
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
@@ -39,7 +40,11 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
         lastFetched: now,
       })
     } catch (error) {
-      console.error('Failed to fetch models:', error)
+      logError(error, {
+        context: 'fetchModels',
+        source: 'models',
+        details: 'Failed to fetch models'
+      })
       set({
         error: error instanceof Error ? error.message : String(error),
         isLoading: false,

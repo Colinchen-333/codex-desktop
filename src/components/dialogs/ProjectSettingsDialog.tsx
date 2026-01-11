@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
+import { Loader2 } from 'lucide-react'
 import { projectApi } from '../../lib/api'
 import { useProjectsStore } from '../../stores/projects'
 import { useModelsStore } from '../../stores/models'
@@ -7,6 +8,9 @@ import {
   APPROVAL_POLICY_OPTIONS,
 } from '../../stores/settings'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { logError } from '../../lib/errorUtils'
+import { useToast } from '../ui/Toast'
+import { useDialogKeyboardShortcut } from '../../hooks/useDialogKeyboardShortcut'
 
 interface ProjectSettingsDialogProps {
   isOpen: boolean
@@ -30,6 +34,7 @@ export function ProjectSettingsDialog({
   const { projects } = useProjectsStore()
   // fetchProjects, fetchModels are called via getState() to avoid dependency issues
   const { models } = useModelsStore()
+  const { showToast } = useToast()
   const [settings, setSettings] = useState<ProjectSettings>({})
   const [isSaving, setIsSaving] = useState(false)
   const [newEnvKey, setNewEnvKey] = useState('')
@@ -39,8 +44,21 @@ export function ProjectSettingsDialog({
     settingKey: keyof ProjectSettings | null
     settingName: string
   }>({ isOpen: false, settingKey: null, settingName: '' })
+  const saveButtonRef = useRef<HTMLButtonElement>(null)
 
   const project = projects.find((p) => p.id === projectId)
+
+  // Use keyboard shortcut hook for Cmd+Enter (or Ctrl+Enter on Windows/Linux)
+  useDialogKeyboardShortcut({
+    isOpen,
+    onConfirm: () => {
+      if (!isSaving) {
+        saveButtonRef.current?.click()
+      }
+    },
+    onCancel: onClose,
+    requireModifierKey: true, // Require Cmd/Ctrl key since there are inputs
+  })
 
   // Load settings from project
   useEffect(() => {
@@ -66,11 +84,17 @@ export function ProjectSettingsDialog({
     if (!projectId) return
     setIsSaving(true)
     try {
-      await projectApi.update(projectId, undefined, settings)
+      await projectApi.update(projectId, undefined, settings as Record<string, unknown>)
       await useProjectsStore.getState().fetchProjects()
+      showToast('Project settings saved successfully', 'success')
       onClose()
     } catch (error) {
-      console.error('Failed to save project settings:', error)
+      logError(error, {
+        context: 'ProjectSettingsDialog',
+        source: 'dialogs',
+        details: 'Failed to save project settings'
+      })
+      showToast('Failed to save project settings', 'error')
     } finally {
       setIsSaving(false)
     }
@@ -324,10 +348,12 @@ export function ProjectSettingsDialog({
             Cancel
           </button>
           <button
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            ref={saveButtonRef}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
             onClick={handleSave}
             disabled={isSaving}
           >
+            {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
             {isSaving ? 'Saving...' : 'Save'}
           </button>
         </div>

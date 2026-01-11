@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'src-tauri/target', 'node_modules', 'codex', 'codex-desktop']),
+  globalIgnores(['dist', 'src-tauri/target', 'node_modules', 'codex', 'codex-desktop', 'src/test/test-utils.tsx']),
 
   // Main source files with full TypeScript checking
   {
@@ -31,7 +31,7 @@ export default defineConfig([
       'no-debugger': 'error',
 
       // TypeScript specific
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-floating-promises': 'error',
 
@@ -61,7 +61,7 @@ export default defineConfig([
     rules: {
       // Relaxed rules for config files
       'no-console': 'off',
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'prefer-const': 'error',
       'no-var': 'error',

@@ -1,18 +1,34 @@
 /**
  * CommandExecutionCard - Shows shell command execution with approval UI
+ *
+ * Performance optimization: Wrapped with React.memo and custom comparison function
+ * to prevent unnecessary re-renders in message lists. Only re-renders when:
+ * - item.id changes (different message)
+ * - item.status changes (status update)
+ * - item.content changes meaningfully (shallow comparison)
  */
-import { useState, useEffect, useRef } from 'react'
+import { memo, useState, useEffect, useRef } from 'react'
 import { Terminal } from 'lucide-react'
 import { cn } from '../../../lib/utils'
 import { isCommandExecutionContent } from '../../../lib/typeGuards'
 import { useThreadStore } from '../../../stores/thread'
 import { log } from '../../../lib/logger'
-import { formatTimestamp, truncateOutput } from '../utils'
+import { formatTimestamp, truncateOutput, shallowContentEqual } from '../utils'
 import { MAX_OUTPUT_LINES } from '../types'
 import { ColorizedOutput } from '../messages/ColorizedOutput'
 import type { MessageItemProps } from '../types'
 
-export function CommandExecutionCard({ item }: MessageItemProps) {
+/**
+ * CommandExecutionCard Component
+ *
+ * Memoized to prevent re-renders when parent components update but this
+ * specific message item hasn't changed. Custom comparison checks:
+ * - item.id: Skip if different message entirely
+ * - item.status: Re-render on status changes (pending -> completed, etc.)
+ * - item.content: Shallow compare to catch content updates
+ */
+export const CommandExecutionCard = memo(
+  function CommandExecutionCard({ item }: MessageItemProps) {
   // Hooks must be called unconditionally at the top
   const { respondToApproval, activeThread, sendMessage } = useThreadStore()
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -120,7 +136,7 @@ export function CommandExecutionCard({ item }: MessageItemProps) {
     try {
       await respondToApproval(item.id, 'decline')
       if (feedbackText.trim()) {
-        sendMessage(feedbackText.trim())
+        await sendMessage(feedbackText.trim())
       }
     } finally {
       setIsApproving(false)
@@ -206,7 +222,7 @@ export function CommandExecutionCard({ item }: MessageItemProps) {
             {/* Command Actions Tags */}
             {content.commandActions && content.commandActions.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-1.5">
-                {content.commandActions.map((action, i) => (
+                {content.commandActions.map((action: string, i: number) => (
                   <span
                     key={i}
                     className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border/50"
@@ -421,4 +437,15 @@ export function CommandExecutionCard({ item }: MessageItemProps) {
       </div>
     </div>
   )
-}
+  },
+  // Custom comparison function for React.memo
+  // Returns true if props are equal (skip re-render), false if different (trigger re-render)
+  (prev, next) => {
+    // Different message entirely - must re-render
+    if (prev.item.id !== next.item.id) return false
+    // Status changed (e.g., pending -> completed) - must re-render
+    if (prev.item.status !== next.item.status) return false
+    // Shallow compare content for meaningful changes
+    return shallowContentEqual(prev.item.content, next.item.content)
+  }
+)

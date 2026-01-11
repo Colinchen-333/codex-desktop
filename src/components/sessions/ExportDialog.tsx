@@ -1,11 +1,13 @@
-import { useState } from 'react'
-import { Download, FileJson, Markdown, X } from 'lucide-react'
+import { useState, useRef } from 'react'
+import { Download, FileJson, FileText, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useThreadStore } from '../../stores/thread'
 import { useSessionsStore } from '../../stores/sessions'
 import { useProjectsStore } from '../../stores/projects'
 import { exportSession, type ExportFormat, type ExportOptions } from '../../lib/exporters/sessionExporter'
 import { useToast } from '../ui/Toast'
+import { useDialogKeyboardShortcut } from '../../hooks/useDialogKeyboardShortcut'
+import { logError } from '../../lib/errorUtils'
 
 interface ExportDialogProps {
   isOpen: boolean
@@ -19,10 +21,23 @@ export function ExportDialog({ isOpen, threadId, onClose }: ExportDialogProps) {
   const [includeTimestamps, setIncludeTimestamps] = useState(true)
   const [isExporting, setIsExporting] = useState(false)
   const { showToast } = useToast()
+  const exportButtonRef = useRef<HTMLButtonElement>(null)
 
   const threads = useThreadStore((state) => state.threads)
   const projects = useProjectsStore((state) => state.projects)
   const sessions = useSessionsStore((state) => state.sessions)
+
+  // Use keyboard shortcut hook for Cmd+Enter (or Ctrl+Enter on Windows/Linux)
+  useDialogKeyboardShortcut({
+    isOpen,
+    onConfirm: () => {
+      if (!isExporting) {
+        exportButtonRef.current?.click()
+      }
+    },
+    onCancel: onClose,
+    requireModifierKey: true, // Require Cmd/Ctrl key since there are checkboxes
+  })
 
   // Get thread info
   const threadState = threadId ? threads[threadId] : null
@@ -47,7 +62,11 @@ export function ExportDialog({ isOpen, threadId, onClose }: ExportDialogProps) {
       showToast(`Session exported as ${format === 'markdown' ? 'Markdown' : 'JSON'}`, 'success')
       onClose()
     } catch (error) {
-      console.error('Export failed:', error)
+      logError(error, {
+        context: 'ExportDialog',
+        source: 'sessions',
+        details: 'Export failed'
+      })
       showToast(
         `Failed to export session: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'error'
@@ -119,7 +138,7 @@ export function ExportDialog({ isOpen, threadId, onClose }: ExportDialogProps) {
                 )}
                 disabled={isExporting}
               >
-                <Markdown size={16} />
+                <FileText size={16} />
                 Markdown
               </button>
               <button
@@ -196,6 +215,7 @@ export function ExportDialog({ isOpen, threadId, onClose }: ExportDialogProps) {
             Cancel
           </button>
           <button
+            ref={exportButtonRef}
             onClick={handleExport}
             disabled={isExporting}
             className={cn(

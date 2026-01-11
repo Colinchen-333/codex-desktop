@@ -109,10 +109,20 @@ export interface PlanContentType {
   isActive: boolean
 }
 
-// Virtualized list row props
-export interface VirtualizedRowProps {
-  index: number
-  style: React.CSSProperties
+// Virtualized list row custom props (for react-window 2.x)
+// These are the props passed via rowProps
+export interface VirtualizedRowCustomProps {
   itemOrder: string[]
   items: Record<string, AnyThreadItem>
+}
+
+// Full row component props including react-window's injected props
+export interface VirtualizedRowProps extends VirtualizedRowCustomProps {
+  ariaAttributes: {
+    'aria-posinset': number
+    'aria-setsize': number
+    role: 'listitem'
+  }
+  index: number
+  style: React.CSSProperties
 }

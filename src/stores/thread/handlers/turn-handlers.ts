@@ -9,6 +9,7 @@ import type { WritableDraft } from 'immer'
 import { handleAsyncError } from '../../../lib/errorUtils'
 import { log } from '../../../lib/logger'
 import { isAgentMessageContent } from '../../../lib/typeGuards'
+import { eventBus } from '../../../lib/eventBus'
 import type {
   TurnStartedEvent,
   TurnCompletedEvent,
@@ -49,23 +50,12 @@ export function createHandleThreadStarted(
         return state
       }
 
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            thread: {
-              ...threadState.thread,
-              model: threadInfo.model ?? threadState.thread.model,
-              modelProvider: threadInfo.modelProvider ?? threadState.thread.modelProvider,
-              preview: threadInfo.preview ?? threadState.thread.preview,
-              cliVersion: threadInfo.cliVersion ?? threadState.thread.cliVersion,
-              gitInfo: threadInfo.gitInfo ?? threadState.thread.gitInfo,
-            },
-          },
-        },
-      }
+      // P2: Immer optimization - direct mutation instead of spreading
+      threadState.thread.model = threadInfo.model ?? threadState.thread.model
+      threadState.thread.modelProvider = threadInfo.modelProvider ?? threadState.thread.modelProvider
+      threadState.thread.preview = threadInfo.preview ?? threadState.thread.preview
+      threadState.thread.cliVersion = threadInfo.cliVersion ?? threadState.thread.cliVersion
+      threadState.thread.gitInfo = threadInfo.gitInfo ?? threadState.thread.gitInfo
     })
   }
 }
@@ -74,7 +64,7 @@ export function createHandleThreadStarted(
 
 export function createHandleTurnStarted(
   set: (fn: (state: WritableDraft<ThreadState>) => ThreadState | void) => void,
-  get: () => ThreadState,
+  _get: () => ThreadState,
   getThreadStore: () => ThreadState
 ) {
   return (event: TurnStartedEvent) => {
@@ -83,12 +73,15 @@ export function createHandleTurnStarted(
 
     clearTurnTimeout(threadId)
 
-    // Sync session status to 'running'
-    void import('../../sessions').then(async ({ useSessionsStore }) => {
+    // P1 Fix: Use event bus instead of dynamic import to avoid circular dependencies
+    try {
       // Check thread still exists to prevent race condition with closeThread
-      if (!getThreadStore().threads[threadId]) return
-      await useSessionsStore.getState().updateSessionStatus(threadId, 'running')
-    }).catch((err) => handleAsyncError(err, 'handleTurnStarted session sync', 'thread'))
+      if (getThreadStore().threads[threadId]) {
+        eventBus.emit('session:status-update', { sessionId: threadId, status: 'running' })
+      }
+    } catch (err) {
+      handleAsyncError(err, 'handleTurnStarted session sync', 'thread')
+    }
 
     // Set turn timeout for this specific thread
     const turnId = event.turn.id
@@ -96,34 +89,27 @@ export function createHandleTurnStarted(
       const state = getThreadStore()
       const threadState = state.threads[threadId]
       if (threadState?.currentTurnId === turnId && threadState?.turnStatus === 'running') {
-        console.error('[handleTurnStarted] Turn timeout - no completion received for turnId:', turnId)
+        log.error(`[handleTurnStarted] Turn timeout - no completion received for turnId: ${turnId}`, 'turn-handlers')
         performFullTurnCleanup(threadId)
-        // Sync session status to 'failed' on timeout
-        void import('../../sessions').then(async ({ useSessionsStore }) => {
+        // P1 Fix: Use event bus instead of dynamic import to avoid circular dependencies
+        try {
           // Check thread still exists and not being closed
-          if (!getThreadStore().threads[threadId] || closingThreads.has(threadId)) return
-          await useSessionsStore.getState().updateSessionStatus(threadId, 'failed')
-        }).catch((err) => handleAsyncError(err, 'handleTurnStarted timeout session sync', 'thread'))
+          if (getThreadStore().threads[threadId] && !closingThreads.has(threadId)) {
+            eventBus.emit('session:status-update', { sessionId: threadId, status: 'failed' })
+          }
+        } catch (err) {
+          handleAsyncError(err, 'handleTurnStarted timeout session sync', 'thread')
+        }
         set((state) => {
           const threadState = state.threads[threadId]
           if (!threadState) return state
-          return {
-            ...state,
-            threads: {
-              ...state.threads,
-              [threadId]: {
-                ...threadState,
-                turnStatus: 'failed',
-                error: 'Turn timed out - server may have disconnected',
-                currentTurnId: null,
-                pendingApprovals: [],
-                turnTiming: {
-                  ...threadState.turnTiming,
-                  completedAt: Date.now(),
-                },
-              },
-            },
-          }
+          
+          // P2: Immer optimization - direct mutation instead of spreading
+          threadState.turnStatus = 'failed'
+          threadState.error = 'Turn timed out - server may have disconnected'
+          threadState.currentTurnId = null
+          threadState.pendingApprovals = []
+          threadState.turnTiming.completedAt = Date.now()
         })
       }
     }, TURN_TIMEOUT_MS)
@@ -166,7 +152,7 @@ export function createHandleTurnCompleted(
     const status = event.turn.status
     const validStatuses = ['completed', 'failed', 'interrupted']
     if (!validStatuses.includes(status)) {
-      console.warn(`[handleTurnCompleted] Unexpected turn status: ${status}, treating as completed`)
+      log.warn(`[handleTurnCompleted] Unexpected turn status: ${status}, treating as completed`, 'turn-handlers')
     }
 
     const nextTurnStatus: TurnStatus =
@@ -176,53 +162,37 @@ export function createHandleTurnCompleted(
         ? 'interrupted'
         : 'completed'
 
-    // Sync session status based on turn result
-    void import('../../sessions').then(async ({ useSessionsStore }) => {
+    // P1 Fix: Use event bus instead of dynamic import to avoid circular dependencies
+    try {
       // Check thread still exists to prevent race condition with closeThread
-      if (!getThreadStore().threads[threadId]) return
-      const sessionStatus = nextTurnStatus === 'failed' ? 'failed'
-        : nextTurnStatus === 'interrupted' ? 'interrupted'
-        : 'completed'
-      await useSessionsStore.getState().updateSessionStatus(threadId, sessionStatus)
-    }).catch((err) => handleAsyncError(err, 'handleTurnCompleted session sync', 'thread'))
+      if (getThreadStore().threads[threadId]) {
+        const sessionStatus = nextTurnStatus === 'failed' ? 'failed'
+          : nextTurnStatus === 'interrupted' ? 'interrupted'
+          : 'completed'
+        eventBus.emit('session:status-update', { sessionId: threadId, status: sessionStatus })
+      }
+    } catch (err) {
+      handleAsyncError(err, 'handleTurnCompleted session sync', 'thread')
+    }
 
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
 
-      const updatedItems = { ...threadState.items }
-      Object.entries(updatedItems).forEach(([id, item]) => {
+      // P2: Immer optimization - direct mutation instead of spreading
+      Object.entries(threadState.items).forEach(([id, item]) => {
         // Type guard ensures content is AgentMessageContent
         if (item.type === 'agentMessage' && isAgentMessageContent(item.content) && item.content.isStreaming) {
-          updatedItems[id] = {
-            ...item,
-            status: 'completed',
-            content: {
-              ...item.content,
-              isStreaming: false,
-            },
-          }
+          item.status = 'completed'
+          item.content.isStreaming = false
         }
       })
 
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: updatedItems,
-            turnStatus: nextTurnStatus,
-            currentTurnId: null,
-            error: event.turn.error?.message || null,
-            pendingApprovals: [],
-            turnTiming: {
-              ...threadState.turnTiming,
-              completedAt: Date.now(),
-            },
-          },
-        },
-      }
+      threadState.turnStatus = nextTurnStatus
+      threadState.currentTurnId = null
+      threadState.error = event.turn.error?.message || null
+      threadState.pendingApprovals = []
+      threadState.turnTiming.completedAt = Date.now()
     })
 
     if (nextTurnStatus === 'completed' || nextTurnStatus === 'interrupted') {
@@ -240,6 +210,7 @@ export function createHandleTurnDiffUpdated(
 ) {
   return (event: TurnDiffUpdatedEvent) => {
     const threadId = event.threadId
+    // P1 Fix: Use milliseconds timestamp consistently
     const infoItem: InfoItem = {
       id: `diff-${event.turnId}`,
       type: 'info',
@@ -254,18 +225,11 @@ export function createHandleTurnDiffUpdated(
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: { ...threadState.items, [infoItem.id]: infoItem },
-            itemOrder: threadState.itemOrder.includes(infoItem.id)
-              ? threadState.itemOrder
-              : [...threadState.itemOrder, infoItem.id],
-          },
-        },
+      
+      // P2: Immer optimization - direct mutation instead of spreading
+      threadState.items[infoItem.id] = infoItem
+      if (!threadState.itemOrder.includes(infoItem.id)) {
+        threadState.itemOrder.push(infoItem.id)
       }
     })
   }
@@ -303,6 +267,7 @@ export function createHandleTurnPlanUpdated(
 
     const isActive = steps.some((s) => s.status === 'in_progress' || s.status === 'pending')
 
+    // P1 Fix: Use milliseconds timestamp consistently
     const planItem: PlanItem = {
       id: `plan-${event.turnId}`,
       type: 'plan',
@@ -318,18 +283,11 @@ export function createHandleTurnPlanUpdated(
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: { ...threadState.items, [planItem.id]: planItem },
-            itemOrder: threadState.itemOrder.includes(planItem.id)
-              ? threadState.itemOrder
-              : [...threadState.itemOrder, planItem.id],
-          },
-        },
+      
+      // P2: Immer optimization - direct mutation instead of spreading
+      threadState.items[planItem.id] = planItem
+      if (!threadState.itemOrder.includes(planItem.id)) {
+        threadState.itemOrder.push(planItem.id)
       }
     })
   }
@@ -342,6 +300,7 @@ export function createHandleThreadCompacted(
 ) {
   return (event: ThreadCompactedEvent) => {
     const threadId = event.threadId
+    // P1 Fix: Use milliseconds timestamp consistently
     const infoItem: InfoItem = {
       id: `compact-${event.turnId}`,
       type: 'info',
@@ -356,18 +315,11 @@ export function createHandleThreadCompacted(
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: { ...threadState.items, [infoItem.id]: infoItem },
-            itemOrder: threadState.itemOrder.includes(infoItem.id)
-              ? threadState.itemOrder
-              : [...threadState.itemOrder, infoItem.id],
-          },
-        },
+      
+      // P2: Immer optimization - direct mutation instead of spreading
+      threadState.items[infoItem.id] = infoItem
+      if (!threadState.itemOrder.includes(infoItem.id)) {
+        threadState.itemOrder.push(infoItem.id)
       }
     })
   }

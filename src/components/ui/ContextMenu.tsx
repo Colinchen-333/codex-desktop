@@ -64,7 +64,6 @@ export function ContextMenu({ items, children, className }: ContextMenuProps) {
   }, [isOpen])
 
   // Adjust position if menu would overflow viewport - legitimate DOM measurement update
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- Position update based on DOM measurements
   useEffect(() => {
     if (!isOpen || !menuRef.current) {
       return

@@ -104,7 +104,7 @@ export function TaskProgress({
 }: TaskProgressProps) {
   const [isAnimating, setIsAnimating] = useState(false)
   const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const prevPercentageRef = useRef(percentage)
+  const prevPercentageRef = useRef<number>(0)
   const sizes = sizeConfig[size]
 
   // Parse and calculate progress
@@ -120,6 +120,7 @@ export function TaskProgress({
   useLayoutEffect(() => {
     if (shouldShow && percentage > 0 && percentage !== prevPercentageRef.current) {
       prevPercentageRef.current = percentage
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Animation state requires synchronous update
       setIsAnimating(true)
       if (animationTimeoutRef.current) {
         clearTimeout(animationTimeoutRef.current)

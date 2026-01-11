@@ -10,6 +10,15 @@ import {
   defaultTurnTiming,
 } from '../utils/helpers'
 import type { ThreadInfo } from '../../../lib/api'
+import type {
+  UserMessageItem,
+  AgentMessageItem,
+  CommandExecutionItem,
+  FileChangeItem,
+  WebSearchItem,
+  ReviewItem,
+  InfoItem,
+} from '../types'
 
 describe('mapItemType', () => {
   it('should map known item types correctly', () => {
@@ -127,7 +136,7 @@ describe('toThreadItem', () => {
       ...baseItem,
       content: [{ text: 'Hello world' }],
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as UserMessageItem
 
     expect(result.id).toBe('test-id')
     expect(result.type).toBe('userMessage')
@@ -144,7 +153,7 @@ describe('toThreadItem', () => {
         { type: 'localImage', path: '/local/image.jpg' },
       ],
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as UserMessageItem
 
     expect(result.content.images).toEqual([
       'http://example.com/image.jpg',
@@ -158,7 +167,7 @@ describe('toThreadItem', () => {
       type: 'agentMessage',
       text: 'Agent response',
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as AgentMessageItem
 
     expect(result.type).toBe('agentMessage')
     expect(result.content.text).toBe('Agent response')
@@ -172,7 +181,7 @@ describe('toThreadItem', () => {
       text: 'Streaming...',
       status: 'inProgress',
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as AgentMessageItem
 
     expect(result.content.isStreaming).toBe(true)
   })
@@ -188,7 +197,7 @@ describe('toThreadItem', () => {
       exitCode: 0,
       durationMs: 1500,
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as CommandExecutionItem
 
     expect(result.type).toBe('commandExecution')
     expect(result.content.command).toBe('npm test')
@@ -209,7 +218,7 @@ describe('toThreadItem', () => {
         { path: '/mod.txt', kind: 'modify', diff: '±modified' },
       ],
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as FileChangeItem
 
     expect(result.type).toBe('fileChange')
     expect(result.content.changes).toHaveLength(3)
@@ -227,7 +236,7 @@ describe('toThreadItem', () => {
         { path: '/moved.txt', kind: { movePath: '/old.txt' } },
       ],
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as FileChangeItem
 
     expect(result.content.changes[0].kind).toBe('add')
     expect(result.content.changes[1].kind).toBe('rename')
@@ -244,7 +253,7 @@ describe('toThreadItem', () => {
         { title: 'Result 2', url: 'http://test2.com', snippet: 'Snippet 2' },
       ],
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as WebSearchItem
 
     expect(result.type).toBe('webSearch')
     expect(result.content.query).toBe('test query')
@@ -258,7 +267,7 @@ describe('toThreadItem', () => {
       type: 'enteredReviewMode',
       review: 'Review started',
     }
-    const result1 = toThreadItem(enteredItem)
+    const result1 = toThreadItem(enteredItem) as ReviewItem
 
     expect(result1.type).toBe('review')
     expect(result1.content.phase).toBe('started')
@@ -269,7 +278,7 @@ describe('toThreadItem', () => {
       type: 'exitedReviewMode',
       review: 'Review completed',
     }
-    const result2 = toThreadItem(exitedItem)
+    const result2 = toThreadItem(exitedItem) as ReviewItem
 
     expect(result2.content.phase).toBe('completed')
     expect(result2.content.text).toBe('Review completed')
@@ -281,7 +290,7 @@ describe('toThreadItem', () => {
       type: 'unknownType',
       data: 'test data',
     }
-    const result = toThreadItem(item)
+    const result = toThreadItem(item) as InfoItem
 
     expect(result.type).toBe('info')
     expect(result.content.title).toBe('Unknown item type: unknownType')
@@ -306,7 +315,7 @@ describe('createEmptyThreadState', () => {
   it('should create empty thread state', () => {
     const thread: ThreadInfo = {
       id: 'thread-1',
-      name: 'Test Thread',
+      cwd: '/test/path',
     }
 
     const state = createEmptyThreadState(thread)
@@ -327,8 +336,8 @@ describe('createEmptyThreadState', () => {
 
 describe('getFocusedThreadState', () => {
   it('should return focused thread state', () => {
-    const thread1 = createEmptyThreadState({ id: '1', name: 'Thread 1' })
-    const thread2 = createEmptyThreadState({ id: '2', name: 'Thread 2' })
+    const thread1 = createEmptyThreadState({ id: '1', cwd: '/path/1' })
+    const thread2 = createEmptyThreadState({ id: '2', cwd: '/path/2' })
     const threads = { '1': thread1, '2': thread2 }
 
     expect(getFocusedThreadState(threads, '1')).toBe(thread1)
@@ -336,12 +345,12 @@ describe('getFocusedThreadState', () => {
   })
 
   it('should return undefined for null focusedThreadId', () => {
-    const threads = { '1': createEmptyThreadState({ id: '1', name: 'Thread 1' }) }
+    const threads = { '1': createEmptyThreadState({ id: '1', cwd: '/path/1' }) }
     expect(getFocusedThreadState(threads, null)).toBeUndefined()
   })
 
   it('should return undefined for non-existent thread', () => {
-    const threads = { '1': createEmptyThreadState({ id: '1', name: 'Thread 1' }) }
+    const threads = { '1': createEmptyThreadState({ id: '1', cwd: '/path/1' }) }
     expect(getFocusedThreadState(threads, 'nonexistent')).toBeUndefined()
   })
 })

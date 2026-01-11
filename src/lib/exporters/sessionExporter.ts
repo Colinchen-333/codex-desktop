@@ -6,6 +6,7 @@
 
 import { threadApi } from '../api'
 import type { ThreadInfo } from '../api'
+import { logError } from '../errorUtils'
 
 export type ExportFormat = 'markdown' | 'json'
 
@@ -334,7 +335,11 @@ export async function exportSession(
     const filename = generateFilename(response.thread, format)
     triggerDownload(content, filename, mimeType)
   } catch (error) {
-    console.error('Failed to export session:', error)
+    logError(error, {
+      context: 'exportSession',
+      source: 'sessionExporter',
+      details: 'Failed to export session'
+    })
     throw new Error(`Failed to export session: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }

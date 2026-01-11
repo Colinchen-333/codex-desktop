@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { cn } from '../../lib/utils'
 import {
   type SlashCommand,
   filterCommands,
   COMMAND_CATEGORIES,
 } from '../../lib/slashCommands'
+import { usePopupNavigation } from '../../hooks/usePopupNavigation'
+import { useReducedMotion } from '../../hooks/useReducedMotion'
+import { useToast } from '../ui/useToast'
+import { AlertCircle, RefreshCw } from 'lucide-react'
 import {
   Cpu,
   ShieldCheck,
@@ -77,47 +81,55 @@ export function SlashCommandPopup({
   onClose,
   isVisible,
 }: SlashCommandPopupProps) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
+  const prefersReducedMotion = useReducedMotion()
+  const { toast } = useToast()
 
-  const commands = filterCommands(input)
+  // Error recovery states
+  const [error, setError] = useState<string | null>(null)
+  const [isRetrying, setIsRetrying] = useState(false)
 
-  // Reset selection when commands change
-  useEffect(() => {
-    setSelectedIndex(0)
-  }, [input])
+  // Fetch commands with error handling
+  const [commands, setCommands] = useState<SlashCommand[]>([])
 
-  // Handle keyboard navigation
-  useEffect(() => {
-    if (!isVisible) return
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case 'ArrowDown':
-          e.preventDefault()
-          setSelectedIndex((prev) => Math.min(prev + 1, commands.length - 1))
-          break
-        case 'ArrowUp':
-          e.preventDefault()
-          setSelectedIndex((prev) => Math.max(prev - 1, 0))
-          break
-        case 'Enter':
-        case 'Tab':
-          e.preventDefault()
-          if (commands[selectedIndex]) {
-            onSelect(commands[selectedIndex])
-          }
-          break
-        case 'Escape':
-          e.preventDefault()
-          onClose()
-          break
-      }
+  const loadCommands = useCallback(async () => {
+    try {
+      setError(null)
+      const filteredCommands = filterCommands(input)
+      setCommands(filteredCommands)
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load commands'
+      setError(errorMessage)
+      toast.error('Commands Error', {
+        message: errorMessage,
+        duration: 5000,
+      })
+    } finally {
+      setIsRetrying(false)
     }
+  }, [input, toast])
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isVisible, commands, selectedIndex, onSelect, onClose])
+  // Load commands when input or visibility changes
+  useEffect(() => {
+    if (isVisible) {
+      void loadCommands()
+    }
+  }, [isVisible, loadCommands])
+
+  // Retry handler
+  const handleRetry = useCallback(() => {
+    setIsRetrying(true)
+    void loadCommands()
+  }, [loadCommands])
+
+  // P2.1 优化：使用提取的 usePopupNavigation hook 处理键盘导航
+  // 统一了与 FileMentionPopup 的导航逻辑，减少代码重复
+  const { selectedIndex, setSelectedIndex } = usePopupNavigation({
+    items: commands,
+    onSelect,
+    onClose,
+    isVisible,
+  })
 
   // Scroll selected item into view
   useEffect(() => {
@@ -128,19 +140,62 @@ export function SlashCommandPopup({
     }
   }, [selectedIndex])
 
-  if (!isVisible || commands.length === 0) return null
+  // P1.3 优化：使用 useMemo 缓存 groupedCommands 计算结果
+  // 避免每次渲染都通过 reduce 重新计算分组，只在 commands 变化时重新计算
+  const groupedCommands = useMemo(() => {
+    return commands.reduce(
+      (acc, cmd) => {
+        if (!acc[cmd.category]) {
+          acc[cmd.category] = []
+        }
+        acc[cmd.category].push(cmd)
+        return acc
+      },
+      {} as Record<string, SlashCommand[]>
+    )
+  }, [commands])
 
-  // Group commands by category
-  const groupedCommands = commands.reduce(
-    (acc, cmd) => {
-      if (!acc[cmd.category]) {
-        acc[cmd.category] = []
-      }
-      acc[cmd.category].push(cmd)
-      return acc
-    },
-    {} as Record<string, SlashCommand[]>
-  )
+  if (!isVisible) return null
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="absolute bottom-full left-0 right-0 mb-2 mx-2">
+        <div
+          role="alert"
+          aria-live="polite"
+          className={cn(
+            'rounded-xl border border-border/50 bg-card shadow-xl backdrop-blur-sm',
+            prefersReducedMotion ? '' : 'animate-in fade-in slide-in-from-bottom-2 duration-200'
+          )}
+        >
+          <div className="p-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <h3 className="font-medium text-sm">Unable to load commands</h3>
+                <p className="text-xs text-muted-foreground mt-1">{error}</p>
+              </div>
+              <button
+                onClick={handleRetry}
+                disabled={isRetrying}
+                className={cn(
+                  'shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                  'bg-primary text-primary-foreground hover:bg-primary/90',
+                  'disabled:opacity-50 disabled:cursor-not-allowed'
+                )}
+              >
+                <RefreshCw className={cn('w-3 h-3', isRetrying && 'animate-spin')} />
+                {isRetrying ? 'Retrying...' : 'Retry'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (commands.length === 0) return null
 
   let globalIndex = 0
 
@@ -150,7 +205,10 @@ export function SlashCommandPopup({
         ref={listRef}
         role="listbox"
         aria-label="Slash commands"
-        className="max-h-80 overflow-y-auto rounded-xl border border-border/50 bg-card shadow-xl backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-200"
+        className={cn(
+          'max-h-80 overflow-y-auto rounded-xl border border-border/50 bg-card shadow-xl backdrop-blur-sm',
+          prefersReducedMotion ? '' : 'animate-in fade-in slide-in-from-bottom-2 duration-200'
+        )}
       >
         <div className="sticky top-0 z-10 flex items-center gap-2 p-3 text-xs font-medium text-muted-foreground border-b border-border/30 bg-card/95 backdrop-blur-sm">
           <Terminal size={14} />

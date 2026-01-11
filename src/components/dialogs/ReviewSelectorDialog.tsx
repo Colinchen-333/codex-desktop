@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { projectApi, type GitBranch, type GitCommit, type ReviewTarget } from '../../lib/api'
+import { useDialogKeyboardShortcut } from '../../hooks/useDialogKeyboardShortcut'
+import { logError } from '../../lib/errorUtils'
 
 interface ReviewSelectorDialogProps {
   isOpen: boolean
@@ -23,6 +25,19 @@ export function ReviewSelectorDialog({
   const [customInstructions, setCustomInstructions] = useState('')
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null)
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null)
+  const startReviewButtonRef = useRef<HTMLButtonElement>(null)
+
+  // Use keyboard shortcut hook for Cmd+Enter (or Ctrl+Enter on Windows/Linux)
+  useDialogKeyboardShortcut({
+    isOpen,
+    onConfirm: () => {
+      if (canSubmit()) {
+        startReviewButtonRef.current?.click()
+      }
+    },
+    onCancel: onClose,
+    requireModifierKey: true, // Require Cmd/Ctrl key since there are inputs
+  })
 
   useEffect(() => {
     if (isOpen && projectPath) {
@@ -36,7 +51,11 @@ export function ReviewSelectorDialog({
           setBranches(branchData)
           setCommits(commitData)
         } catch (error) {
-          console.error('Failed to load git data:', error)
+          logError(error, {
+            context: 'ReviewSelectorDialog',
+            source: 'dialogs',
+            details: 'Failed to load git data'
+          })
         } finally {
           setLoading(false)
         }
@@ -253,6 +272,7 @@ export function ReviewSelectorDialog({
             Cancel
           </button>
           <button
+            ref={startReviewButtonRef}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             onClick={handleSelect}
             disabled={!canSubmit()}

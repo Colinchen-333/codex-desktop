@@ -37,13 +37,9 @@
     "category": "DeveloperTool",
     "shortDescription": "A beautiful desktop GUI for Codex CLI",
     "longDescription": "Codex Desktop provides an intuitive graphical interface for the Codex CLI tool, enabling efficient code editing and project management.",
-    "deb": {
-      "depends": []
-    },
     "macOS": {
       "frameworks": [],
-      "minimumSystemVersion": "10.13",
-      "license": "MIT"
+      "minimumSystemVersion": "10.13"
     },
     "windows": {
       "certificateThumbprint": null,

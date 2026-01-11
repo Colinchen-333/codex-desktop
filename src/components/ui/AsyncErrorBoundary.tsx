@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react'
-import { useToast } from './Toast'
+import { useToast } from './useToast'
+import { logError } from '../../lib/errorUtils'
 
 interface Props {
   children: ReactNode
@@ -55,7 +56,11 @@ export class AsyncErrorBoundary extends Component<Props, State> {
     }
 
     // Log to console for debugging
-    console.error('Async error caught by boundary:', error)
+    logError(error, {
+      context: 'AsyncErrorBoundary',
+      source: 'ui',
+      details: 'Async error caught by boundary'
+    })
 
     // We cannot call useToast here directly since it's a class component
     // The parent component should handle showing toasts via onError prop
@@ -114,7 +119,11 @@ export function useAsyncErrorBoundary() {
       return await promise
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`${errorMessage}:`, error)
+      logError(error, {
+        context: 'useAsyncErrorBoundary',
+        source: 'ui',
+        details: errorMessage
+      })
       showToast(`${errorMessage}: ${message}`, 'error')
       throw error // Re-throw to allow caller to handle if needed
     }
@@ -133,7 +142,11 @@ export function useAsyncErrorBoundary() {
         await callback(...args)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        console.error(`${errorMessage}:`, error)
+        logError(error, {
+          context: 'useAsyncErrorBoundary',
+          source: 'ui',
+          details: errorMessage
+        })
         showToast(`${errorMessage}: ${message}`, 'error')
       }
     }

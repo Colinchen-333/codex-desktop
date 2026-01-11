@@ -16,6 +16,7 @@
 
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
+import type { StoreApi, UseBoundStore } from 'zustand'
 import type { WritableDraft } from 'immer'
 
 // Import types
@@ -81,19 +82,28 @@ import {
   createCreateSnapshot,
   createRevertToSnapshot,
   createFetchSnapshots,
+  createStartEditMessage,
+  createUpdateEditText,
+  createSaveEditMessage,
+  createCancelEditMessage,
+  createDeleteMessage,
+  createAddItemBack,
+  createRestoreMessageContent,
+  createRestoreThreadState,
+  createRestoreItemOrder,
 } from './actions'
 
 // Import timer cleanup utilities
 
 // ==================== Store Creation ====================
 
-export const useThreadStore = create<ThreadState>()(
+export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<ThreadState>()(
   immer((set, get) => {
     // Type-safe set function wrapper
     const typedSet = set as (fn: (state: WritableDraft<ThreadState>) => ThreadState | void) => void
 
     // Create helper function to get thread store state (for use in async callbacks)
-    const getThreadStore = () => useThreadStore.getState()
+    const getThreadStore = (): ThreadState => useThreadStore.getState()
 
     // Create stale approvals cleanup function
     const cleanupStaleApprovals = createCleanupStaleApprovals(getThreadStore, typedSet)
@@ -107,6 +117,12 @@ export const useThreadStore = create<ThreadState>()(
       dequeueQueuedMessage,
       requeueMessageFront
     )
+
+    // Create undo helper actions
+    const addItemBack = createAddItemBack(typedSet)
+    const restoreMessageContent = createRestoreMessageContent(typedSet)
+    const restoreThreadState = createRestoreThreadState(typedSet)
+    const restoreItemOrder = createRestoreItemOrder(typedSet)
 
     // Create thread actions
     const closeThread = createCloseThread(typedSet, get, getThreadStore)
@@ -210,10 +226,23 @@ export const useThreadStore = create<ThreadState>()(
       setSessionOverride: createSetSessionOverride(typedSet, get),
       clearSessionOverrides: createClearSessionOverrides(typedSet, get),
 
+      // ==================== Message Edit/Delete Actions ====================
+      startEditMessage: createStartEditMessage(typedSet, get),
+      updateEditText: createUpdateEditText(typedSet, get),
+      saveEditMessage: createSaveEditMessage(typedSet, get),
+      cancelEditMessage: createCancelEditMessage(typedSet, get),
+      deleteMessage: createDeleteMessage(typedSet, get),
+
+      // ==================== Undo Helper Actions ====================
+      addItemBack,
+      restoreMessageContent,
+      restoreThreadState,
+      restoreItemOrder,
+
       // ==================== Event Handlers ====================
       handleThreadStarted: createHandleThreadStarted(typedSet),
       handleItemStarted: createHandleItemStarted(typedSet, get),
-      handleItemCompleted: createHandleItemCompleted(typedSet),
+      handleItemCompleted: createHandleItemCompleted(typedSet, get),
       handleAgentMessageDelta: createHandleAgentMessageDelta(get),
       handleCommandApprovalRequested: createHandleCommandApprovalRequested(typedSet),
       handleFileChangeApprovalRequested: createHandleFileChangeApprovalRequested(typedSet),
@@ -247,6 +276,7 @@ export const useThreadStore = create<ThreadState>()(
 export type {
   ThreadItemType,
   ThreadItem,
+  EditableMessage,
   UserMessageItem,
   AgentMessageItem,
   CommandExecutionItem,
@@ -274,3 +304,7 @@ export type {
 
 // Export utilities for external use
 export { clearThreadTimers, getTimerStats, cleanupThreadResources } from './utils/timer-cleanup'
+
+// Export LRU cache for use in components (e.g., ChatView itemSizeCache)
+export { LRUCache } from './lru-cache'
+export { MAX_LRU_CACHE_SIZE } from './constants'

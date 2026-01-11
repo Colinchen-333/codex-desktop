@@ -35,7 +35,7 @@ const defaultSettings: Settings = {
   reasoningSummary: 'concise',
 }
 
-interface SettingsState {
+export interface SettingsState {
   settings: Settings
 
   // Actions

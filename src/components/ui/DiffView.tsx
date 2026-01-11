@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import { Check, X } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import type { HunkAction, DiffHunk, FileDiff } from './DiffView.utils'
+import { parseDiff, type HunkAction, type DiffHunk, type DiffLine, type FileDiff } from './DiffView.utils'
+
+// Re-export types and utilities for external use
+export { parseDiff, type FileDiff, type DiffHunk, type DiffLine, type HunkAction }
 
 interface DiffViewProps {
   diff: FileDiff

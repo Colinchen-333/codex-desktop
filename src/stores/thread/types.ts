@@ -36,6 +36,10 @@ import type {
 // Re-export types that are used externally
 export type { ThreadInfo, Snapshot, SkillInput }
 
+// ==================== Message Queue Constants ====================
+
+export const MAX_MESSAGE_RETRY_ATTEMPTS = 3 // Maximum retry attempts for queued messages
+
 // ==================== Thread Item Types ====================
 
 export type ThreadItemType =
@@ -51,6 +55,23 @@ export type ThreadItemType =
   | 'error'
   | 'plan'
 
+// ==================== Editable Message Types ====================
+
+/**
+ * Edit state for user messages
+ * Tracks whether a message is being edited and its edit history
+ */
+export interface EditableMessage {
+  /** Whether the message is currently in edit mode */
+  isEditing?: boolean
+  /** The text being edited (draft state) */
+  editedText?: string
+  /** Original text before editing (for cancel/revert) */
+  originalText?: string
+  /** Timestamp when the message was last edited */
+  editedAt?: number
+}
+
 export interface ThreadItem {
   id: string
   type: ThreadItemType
@@ -65,6 +86,8 @@ export interface UserMessageItem extends ThreadItem {
     text: string
     images?: string[]
   }
+  /** Edit state for the message */
+  editState?: EditableMessage
 }
 
 export interface AgentMessageItem extends ThreadItem {
@@ -247,6 +270,8 @@ export interface QueuedMessage {
   images?: string[]
   skills?: SkillInput[]
   queuedAt: number
+  retryCount?: number // Number of retry attempts made
+  lastError?: string // Last error message from failed attempt
 }
 
 // ==================== Single Thread State ====================
@@ -318,6 +343,19 @@ export interface ThreadState {
   setSessionOverride: (key: keyof SessionOverrides, value: string | undefined) => void
   clearSessionOverrides: () => void
 
+  // Message edit/delete actions
+  startEditMessage: (itemId: string, threadId?: string) => void
+  updateEditText: (itemId: string, text: string, threadId?: string) => void
+  saveEditMessage: (itemId: string, threadId?: string) => void
+  cancelEditMessage: (itemId: string, threadId?: string) => void
+  deleteMessage: (itemId: string, threadId?: string) => void
+
+  // Undo helper actions
+  addItemBack: (itemId: string, itemData: AnyThreadItem, threadId: string) => void
+  restoreMessageContent: (itemId: string, previousItemData: AnyThreadItem, threadId: string) => void
+  restoreThreadState: (threadStateData: { items: Record<string, unknown>; itemOrder: string[] }, threadId: string) => void
+  restoreItemOrder: (itemOrder: string[], threadId: string) => void
+
   // Multi-session actions
   switchThread: (threadId: string) => void
   closeThread: (threadId: string) => void
@@ -365,6 +403,7 @@ export interface DeltaBuffer {
   reasoningSummaries: Map<string, { index: number; text: string }[]> // itemId -> summaries
   reasoningContents: Map<string, { index: number; text: string }[]> // itemId -> content
   mcpProgress: Map<string, string[]> // itemId -> accumulated progress messages
+  _cachedSize: number // Cached byte size for performance optimization
 }
 
 // ==================== LRU Cache Types ====================

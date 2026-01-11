@@ -1,6 +1,62 @@
 // Error utilities for parsing Tauri errors
 
 import { log } from './logger'
+import { isRecord, isError, isTauriError, type TauriErrorShape } from './typeGuards'
+
+// ==================== Centralized Error Logging ====================
+// Provides a unified interface for error logging across the application
+
+export interface LogErrorOptions {
+  context?: string
+  source?: string
+  details?: unknown
+  severity?: 'error' | 'warning' | 'info'
+}
+
+/**
+ * Centralized error logging function.
+ * Use this instead of console.error for consistent error handling.
+ *
+ * @param error - The error to log (Error object, string, or unknown)
+ * @param options - Optional context and metadata
+ */
+export function logError(error: unknown, options: LogErrorOptions = {}): void {
+  const {
+    context = 'unknown',
+    source,
+    details,
+    severity = 'error',
+  } = options
+
+  const errorMessage = parseError(error)
+
+  // Build the full error message with context
+  const fullMessage = context ? `[${context}] ${errorMessage}` : errorMessage
+
+  // Log to the logger
+  if (severity === 'error') {
+    log.error(fullMessage, source || 'app')
+  } else if (severity === 'warning') {
+    log.warn(fullMessage, source || 'app')
+  } else {
+    log.info(fullMessage, source || 'app')
+  }
+
+  // Emit error notification for UI components
+  if (severity === 'error') {
+    emitError(errorMessage, severity, source, context)
+  }
+
+  // Log additional details if provided
+  if (details) {
+    try {
+      const detailsStr = typeof details === 'string' ? details : JSON.stringify(details, null, 2)
+      log.debug(`[details] ${detailsStr}`, source || 'app')
+    } catch {
+      // Ignore details serialization errors
+    }
+  }
+}
 
 export interface TauriError {
   message: string
@@ -9,6 +65,9 @@ export interface TauriError {
     httpStatusCode?: number
   }
 }
+
+// Re-export type guard for convenience
+export { isTauriError, type TauriErrorShape }
 
 // ==================== Global Error Notification System ====================
 // Allows stores to emit errors that UI components can subscribe to and display
@@ -79,16 +138,23 @@ export function handleAsyncError(
  * Parse an error from Tauri invoke calls into a user-friendly message
  */
 export function parseError(error: unknown): string {
-  if (error instanceof Error) {
+  // Handle Error instances
+  if (isError(error)) {
     return error.message
   }
 
-  if (typeof error === 'object' && error !== null) {
-    const errObj = error as TauriError
-    if (errObj.message) {
-      return errObj.message
-    }
-    // Fallback to JSON stringify for unknown object structure
+  // Handle Tauri error objects
+  if (isTauriError(error)) {
+    return error.message
+  }
+
+  // Handle generic objects with message property
+  if (isRecord(error) && typeof error.message === 'string') {
+    return error.message
+  }
+
+  // Fallback to JSON stringify for unknown object structure
+  if (isRecord(error)) {
     return JSON.stringify(error, null, 2)
   }
 
@@ -99,9 +165,8 @@ export function parseError(error: unknown): string {
  * Get detailed error info if available
  */
 export function getErrorInfo(error: unknown): TauriError['errorInfo'] | undefined {
-  if (typeof error === 'object' && error !== null) {
-    const errObj = error as TauriError
-    return errObj.errorInfo
+  if (isTauriError(error)) {
+    return error.errorInfo
   }
   return undefined
 }
@@ -123,4 +188,115 @@ export const ErrorTypes = {
   isUsageLimitExceeded: (error: unknown) => isErrorType(error, 'usage_limit_exceeded'),
   isConnectionFailed: (error: unknown) => isErrorType(error, 'http_connection_failed'),
   isSandboxError: (error: unknown) => isErrorType(error, 'sandbox_error'),
+}
+
+// ==================== Promise Timeout Utilities ====================
+// P0 Enhancement: Unified promise timeout handling to prevent hanging operations
+
+/**
+ * Wraps a promise with a timeout.
+ * If the promise doesn't resolve/reject within the timeout period, rejects with a timeout error.
+ *
+ * @param promise - The promise to wrap
+ * @param timeoutMs - Timeout in milliseconds
+ * @param context - Context string for error messages (e.g., "import sessions store")
+ * @returns Promise that resolves with the original promise result or rejects with timeout error
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  context: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error(
+        `Operation timed out after ${timeoutMs}ms: ${context}`
+      )
+      log.error(`[withTimeout] ${error.message}`, 'errorUtils')
+      reject(error)
+    }, timeoutMs)
+  })
+
+  return Promise.race([
+    promise.finally(() => clearTimeout(timeoutId)),
+    timeoutPromise,
+  ])
+}
+
+/**
+ * Wraps a promise with timeout and cleanup function.
+ * If the promise times out, the cleanup function is called before rejecting.
+ * This is useful for cleaning up resources when an operation times out.
+ *
+ * @param promise - The promise to wrap
+ * @param cleanup - Cleanup function to call on timeout
+ * @param timeoutMs - Timeout in milliseconds
+ * @param context - Context string for error messages
+ * @returns Promise that resolves with the original promise result or rejects with timeout error
+ */
+export function withTimeoutAndCleanup<T>(
+  promise: Promise<T>,
+  cleanup: () => void,
+  timeoutMs: number,
+  context: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>
+
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error(
+        `Operation timed out after ${timeoutMs}ms: ${context}`
+      )
+      log.error(`[withTimeoutAndCleanup] ${error.message}`, 'errorUtils')
+
+      // Run cleanup before rejecting
+      try {
+        cleanup()
+        log.debug(`[withTimeoutAndCleanup] Cleanup completed for: ${context}`, 'errorUtils')
+      } catch (cleanupError) {
+        log.error(
+          `[withTimeoutAndCleanup] Cleanup failed for ${context}: ${parseError(cleanupError)}`,
+          'errorUtils'
+        )
+      }
+
+      reject(error)
+    }, timeoutMs)
+  })
+
+  // Clear timeout if promise resolves/rejects first
+  return Promise.race([
+    promise.finally(() => clearTimeout(timeoutId)),
+    timeoutPromise,
+  ])
+}
+
+/**
+ * Wraps a dynamic import with timeout and fallback.
+ * If the import fails or times out, logs the error and returns the fallback value.
+ *
+ * @param importFn - Function that returns the import promise
+ * @param fallback - Fallback value to return on failure
+ * @param timeoutMs - Timeout in milliseconds (default: 5000)
+ * @param context - Context string for error messages
+ * @returns Promise that resolves with the imported module or fallback value
+ */
+export async function withImportFallback<T>(
+  importFn: () => Promise<T>,
+  fallback: T,
+  timeoutMs: number = 5000,
+  context: string
+): Promise<T> {
+  try {
+    return await withTimeout(importFn(), timeoutMs, context)
+  } catch (error) {
+    const errorMessage = parseError(error)
+    log.error(
+      `[withImportFallback] Import failed for ${context}: ${errorMessage}. Using fallback.`,
+      'errorUtils'
+    )
+    return fallback
+  }
 }

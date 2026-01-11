@@ -4,6 +4,7 @@ import { Rocket, Lock, Folder, CheckCircle, ArrowRight, RefreshCcw } from 'lucid
 import { cn } from '../../lib/utils'
 import { serverApi, type AccountInfo } from '../../lib/api'
 import { useProjectsStore } from '../../stores/projects'
+import { logError } from '../../lib/errorUtils'
 
 type OnboardingStep = 'welcome' | 'login' | 'project' | 'ready'
 
@@ -20,15 +21,25 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
 
   // Check login status
   useEffect(() => {
+    let isMounted = true
     const checkLogin = async () => {
       try {
         const info = await serverApi.getAccountInfo()
-        setAccountInfo(info)
+        if (isMounted) {
+          setAccountInfo(info)
+        }
       } catch (err) {
-        console.error('Failed to check login status:', err)
+        logError(err, {
+          context: 'OnboardingFlow',
+          source: 'onboarding',
+          details: 'Failed to check login status'
+        })
       }
     }
     void checkLogin()
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   const handleAddProject = async () => {
@@ -192,7 +203,11 @@ function LoginStep({
         setIsLoggingIn(false)
       }, 60000)
     } catch (error) {
-      console.error('Login failed:', error)
+      logError(error, {
+        context: 'OnboardingFlow',
+        source: 'onboarding',
+        details: 'Login failed'
+      })
       setIsLoggingIn(false)
     }
   }

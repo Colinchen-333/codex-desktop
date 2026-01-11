@@ -53,11 +53,5 @@ playwright-report/
 e2e/screenshots/
 
 # Build scripts (can be regenerated)
-build-optimized.sh
-
-# Summary docs
-PHASE4_P3_SUMMARY.md
-TESTING_SETUP_SUMMARY.md
-ERROR_HANDLING_IMPROVEMENTS.md
-LRU_CACHE_IMPLEMENTATION.md
-TYPESAFETY_IMPROVEMENTS.md
+scripts/build-optimized.sh
+scripts/start.command

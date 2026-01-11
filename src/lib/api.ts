@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { log } from './logger'
+import { withCache, clearCache, clearAllCache, CACHE_KEYS, CACHE_TTL } from './apiCache'
 
 // ==================== Types ====================
 
@@ -489,14 +490,56 @@ export const serverApi = {
   startLogin: (loginType: 'chatgpt' | 'apiKey' = 'chatgpt', apiKey?: string) =>
     invoke<LoginResponse>('start_login', { loginType, apiKey }),
 
-  logout: () => invoke<void>('logout'),
+  /**
+   * 登出账户
+   * P2.2 优化：登出时清除所有缓存，确保状态正确重置
+   */
+  logout: async () => {
+    const result = await invoke<void>('logout')
+    clearAllCache() // 清除所有缓存
+    return result
+  },
 
-  getModels: () => invoke<ModelListResponse>('get_models'),
+  /**
+   * 获取可用模型列表
+   * P2.2 优化：添加 5 分钟缓存，模型列表很少变化
+   */
+  getModels: () =>
+    withCache(
+      CACHE_KEYS.MODELS,
+      () => invoke<ModelListResponse>('get_models'),
+      CACHE_TTL.MODELS
+    ),
 
-  listSkills: (cwds: string[], forceReload = false) =>
-    invoke<SkillsListResponse>('list_skills', { cwds, forceReload }),
+  /**
+   * 获取技能列表
+   * P2.2 优化：添加 1 分钟缓存，支持强制刷新
+   * @param cwds 工作目录列表
+   * @param forceReload 是否强制刷新（清除缓存）
+   */
+  listSkills: (cwds: string[], forceReload = false) => {
+    // 使用 cwds 作为缓存键的一部分，确保不同目录使用不同缓存
+    const cacheKey = `${CACHE_KEYS.SKILLS}:${cwds.sort().join(',')}`
+    if (forceReload) {
+      clearCache(cacheKey)
+    }
+    return withCache(
+      cacheKey,
+      () => invoke<SkillsListResponse>('list_skills', { cwds, forceReload }),
+      CACHE_TTL.SKILLS
+    )
+  },
 
-  listMcpServers: () => invoke<McpServerStatusResponse>('list_mcp_servers'),
+  /**
+   * 获取 MCP 服务器列表
+   * P2.2 优化：添加 2 分钟缓存，MCP 服务器配置较稳定
+   */
+  listMcpServers: () =>
+    withCache(
+      CACHE_KEYS.MCP_SERVERS,
+      () => invoke<McpServerStatusResponse>('list_mcp_servers'),
+      CACHE_TTL.MCP_SERVERS
+    ),
 
   startReview: (threadId: string, target?: ReviewTarget) =>
     invoke<ReviewStartResponse>('start_review', { threadId, target }),
@@ -528,3 +571,7 @@ export const allowlistApi = {
   remove: (projectId: string, commandPattern: string) =>
     invoke<void>('remove_from_allowlist', { projectId, commandPattern }),
 }
+
+// ==================== Cache Utilities (P2.2) ====================
+// 重新导出缓存工具，供其他模块使用
+export { clearCache, clearAllCache, getCacheStats, CACHE_KEYS, CACHE_TTL } from './apiCache'

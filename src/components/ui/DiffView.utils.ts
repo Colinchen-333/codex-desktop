@@ -45,9 +45,9 @@ export function parseDiff(diffString: string): DiffHunk[] {
 
       currentHunk = {
         oldStart,
-        oldLength,
+        oldLines: oldLength,
         newStart,
-        newLength,
+        newLines: newLength,
         lines: []
       }
 
@@ -60,13 +60,13 @@ export function parseDiff(diffString: string): DiffHunk[] {
 
     if (line.startsWith('+')) {
       currentHunk.lines.push({
-        type: 'addition',
+        type: 'add',
         content: line.slice(1),
         newLineNumber: newLine++
       })
     } else if (line.startsWith('-')) {
       currentHunk.lines.push({
-        type: 'deletion',
+        type: 'remove',
         content: line.slice(1),
         oldLineNumber: oldLine++
       })

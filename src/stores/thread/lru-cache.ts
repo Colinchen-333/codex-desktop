@@ -6,6 +6,7 @@
  * used entries when capacity is reached.
  */
 
+import { log } from '../../lib/logger'
 import { LRU_CLEANUP_BATCH_SIZE } from './constants'
 import type { LRUCacheNode } from './types'
 
@@ -147,28 +148,85 @@ export class LRUCache<K extends string, V> {
     this.head = key
   }
 
-  /** Evict least recently used entries */
+  /**
+   * Evict least recently used entries
+   * P2: Optimized batch eviction with direct linked list manipulation
+   */
   private evictLRU(): void {
     if (!this.tail) return
 
-    // Evict batch of entries for efficiency
-    let evicted = 0
+    // P2 Fix: Calculate how many entries need to be evicted upfront
+    const entriesToEvict = Math.max(0, this.cache.size - this.maxSize)
+    const actualEvictCount = Math.min(entriesToEvict, LRU_CLEANUP_BATCH_SIZE)
+
+    if (actualEvictCount === 0) return
+
+    // Phase 1: Collect keys and update linked list pointers
+    const keysToEvict: K[] = []
     let currentKey: K | null = this.tail
+    let count = 0
+    let newTail: K | null = null
 
-    while (currentKey && evicted < LRU_CLEANUP_BATCH_SIZE && this.cache.size > this.maxSize) {
+    // Walk from tail collecting keys to evict
+    while (currentKey && count < actualEvictCount) {
+      keysToEvict.push(currentKey)
       const node = this.cache.get(currentKey)
-      const prevKey = node?.prev || null
 
-      if (this.delete(currentKey)) {
-        evicted++
+      if (count === actualEvictCount - 1) {
+        // This is the last key we're evicting, so its prev becomes new tail
+        newTail = node?.prev || null
       }
 
-      currentKey = prevKey as K | null
+      currentKey = node?.prev || null
+      count++
     }
 
-    console.debug(
-      `[LRUCache] Evicted ${evicted} entries to maintain max size of ${this.maxSize}. Current size: ${this.cache.size}`
+    // Phase 2: Update tail pointer
+    this.tail = newTail
+    if (newTail) {
+      const newTailNode = this.cache.get(newTail)
+      if (newTailNode) {
+        newTailNode.next = null // Break link to evicted entries
+      }
+    } else {
+      // All entries evicted
+      this.head = null
+    }
+
+    // Phase 3: Batch delete from cache Map
+    for (const key of keysToEvict) {
+      this.cache.delete(key)
+    }
+
+    log.debug(
+      `[LRUCache] Evicted ${keysToEvict.length} entries, cache size: ${this.cache.size}/${this.maxSize}`,
+      'lru-cache'
     )
+  }
+
+  /**
+   * P2: Batch delete multiple keys efficiently
+   * Useful for clearing all entries related to a specific resource
+   *
+   * @param predicate - Function that returns true for keys to delete
+   * @returns Number of entries deleted
+   */
+  batchDelete(predicate: (key: K, value: V) => boolean): number {
+    const keysToDelete: K[] = []
+
+    // Phase 1: Collect keys to delete
+    for (const [key, node] of this.cache.entries()) {
+      if (predicate(key, node.value)) {
+        keysToDelete.push(key)
+      }
+    }
+
+    // Phase 2: Delete all at once
+    for (const key of keysToDelete) {
+      this.delete(key)
+    }
+
+    return keysToDelete.length
   }
 
   /** Get statistics for debugging */

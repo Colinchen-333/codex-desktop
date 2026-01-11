@@ -1,7 +1,13 @@
 /**
  * FileChangeCard - Shows proposed file changes with diff view and approval UI
+ *
+ * Performance optimization: Wrapped with React.memo and custom comparison function
+ * to prevent unnecessary re-renders in message lists. Only re-renders when:
+ * - item.id changes (different message)
+ * - item.status changes (status update)
+ * - item.content changes meaningfully (shallow comparison)
  */
-import { useState, useRef } from 'react'
+import { memo, useState, useRef, useCallback } from 'react'
 import { FileCode } from 'lucide-react'
 import { cn } from '../../../lib/utils'
 import { useThreadStore } from '../../../stores/thread'
@@ -9,41 +15,94 @@ import { useProjectsStore } from '../../../stores/projects'
 import { useToast } from '../../ui/Toast'
 import { DiffView, parseDiff, type FileDiff } from '../../ui/DiffView'
 import { log } from '../../../lib/logger'
-import { formatTimestamp } from '../utils'
+import { formatTimestamp, shallowContentEqual } from '../utils'
+import { useOptimisticUpdate } from '../../../hooks/useOptimisticUpdate'
 import type { MessageItemProps, FileChangeContentType } from '../types'
 
-export function FileChangeCard({ item }: MessageItemProps) {
+/**
+ * 乐观更新状态类型
+ */
+interface ApplyChangesOptimisticState {
+  snapshotId?: string
+  previousApprovalState: boolean
+}
+
+/**
+ * FileChangeCard Component
+ *
+ * Memoized to prevent re-renders when parent components update but this
+ * specific message item hasn't changed. Custom comparison checks:
+ * - item.id: Skip if different message entirely
+ * - item.status: Re-render on status changes (pending -> completed, etc.)
+ * - item.content: Shallow compare to catch content updates
+ */
+export const FileChangeCard = memo(
+  function FileChangeCard({ item }: MessageItemProps) {
   const content = item.content as FileChangeContentType
   const { respondToApproval, activeThread, createSnapshot, revertToSnapshot } = useThreadStore()
   const projects = useProjectsStore((state) => state.projects)
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId)
   const { showToast } = useToast()
   const [expandedFiles, setExpandedFiles] = useState<Set<number>>(new Set())
-  const [isApplying, setIsApplying] = useState(false)
   const [isReverting, setIsReverting] = useState(false)
   const [, setIsDeclining] = useState(false)
 
   // Refs for double-click protection (state updates are async, refs are synchronous)
-  const isApplyingRef = useRef(false)
   const isRevertingRef = useRef(false)
   const isDecliningRef = useRef(false)
 
+  // 保存决定类型的 ref，供乐观更新使用
+  const currentDecisionRef = useRef<'accept' | 'acceptForSession'>('accept')
+  // 保存 snapshotId 的 ref，供回滚使用
+  const pendingSnapshotIdRef = useRef<string | undefined>(undefined)
+
   const project = projects.find((p) => p.id === selectedProjectId)
 
-  const handleApplyChanges = async (decision: 'accept' | 'acceptForSession' = 'accept') => {
-    if (isApplyingRef.current || !activeThread || !project) return
-    isApplyingRef.current = true
-    setIsApplying(true)
+  /**
+   * 乐观更新回滚函数
+   * 当 approval 失败时，恢复到之前的状态
+   */
+  const rollbackApplyChanges = useCallback(
+    (previousState: ApplyChangesOptimisticState) => {
+      log.info(
+        `Rolling back apply changes, snapshotId: ${previousState.snapshotId}`,
+        'FileChangeCard'
+      )
 
-    // Capture thread ID at start to detect if it changes during async operations
-    const threadIdAtStart = activeThread.id
+      // 如果之前创建了 snapshot 且需要回滚，可以尝试 revert
+      // 注意：这里只是恢复 UI 状态，实际的文件回滚需要通过 revertToSnapshot
+      const snapshotIdToRevert = previousState.snapshotId ?? pendingSnapshotIdRef.current
+      if (snapshotIdToRevert && project) {
+        revertToSnapshot(snapshotIdToRevert, project.path).catch((err) => {
+          log.error(`Failed to revert snapshot during rollback: ${err}`, 'FileChangeCard')
+        })
+      }
+    },
+    [project, revertToSnapshot]
+  )
 
-    try {
+  /**
+   * 使用乐观更新 Hook 管理应用更改的状态
+   */
+  const {
+    execute: executeApplyChanges,
+    isLoading: isApplying,
+    rollback: manualRollback,
+  } = useOptimisticUpdate<ApplyChangesOptimisticState, void>({
+    execute: async () => {
+      if (!activeThread || !project) {
+        throw new Error('No active thread or project')
+      }
+
+      // Capture thread ID at start to detect if it changes during async operations
+      const threadIdAtStart = activeThread.id
+
       // Try to create snapshot before applying changes
       let snapshotId: string | undefined
       try {
         const snapshot = await createSnapshot(project.path)
         snapshotId = snapshot.id
+        pendingSnapshotIdRef.current = snapshotId
       } catch (snapshotError) {
         log.warn(
           `Failed to create snapshot, proceeding without: ${snapshotError}`,
@@ -59,19 +118,58 @@ export function FileChangeCard({ item }: MessageItemProps) {
           `Thread changed during apply - threadIdAtStart: ${threadIdAtStart}, currentThread: ${currentThread?.id}`,
           'FileChangeCard'
         )
-        return
+        throw new Error('Thread changed during apply operation')
       }
 
       // Approve the changes (with or without snapshot ID)
-      await respondToApproval(item.id, decision, { snapshotId })
-    } catch (error) {
+      await respondToApproval(item.id, currentDecisionRef.current, { snapshotId })
+    },
+    optimisticUpdate: () => {
+      // 保存之前的状态用于回滚
+      const previousState: ApplyChangesOptimisticState = {
+        snapshotId: pendingSnapshotIdRef.current,
+        previousApprovalState: content.needsApproval ?? true,
+      }
+      return previousState
+    },
+    rollbackFn: rollbackApplyChanges,
+    onSuccess: () => {
+      log.info('Changes applied successfully', 'FileChangeCard')
+    },
+    onError: (error, rollback) => {
       log.error(`Failed to apply changes: ${error}`, 'FileChangeCard')
-      showToast('Failed to apply changes', 'error')
-    } finally {
-      isApplyingRef.current = false
-      setIsApplying(false)
-    }
-  }
+      showToast('Failed to apply changes, rolling back...', 'error')
+      // 如果自动回滚失败，可以手动触发
+      rollback()
+    },
+    autoRollback: true,
+    operationId: `apply-changes-${item.id}`,
+  })
+
+  /**
+   * 处理应用更改
+   */
+  const handleApplyChanges = useCallback(
+    async (decision: 'accept' | 'acceptForSession' = 'accept') => {
+      if (isApplying || !activeThread || !project) return
+
+      // 保存决定类型
+      currentDecisionRef.current = decision
+      pendingSnapshotIdRef.current = undefined
+
+      await executeApplyChanges()
+    },
+    [isApplying, activeThread, project, executeApplyChanges]
+  )
+
+  // Manual rollback handler - exposed for external use via manualRollback from useApplyChanges
+  const handleManualRollback = useCallback(() => {
+    manualRollback()
+    showToast('Changes rolled back', 'info')
+  }, [manualRollback, showToast])
+
+  // Prevent unused variable warning - this is intentionally exposed for external access
+  void handleManualRollback
 
   const handleRevert = async () => {
     if (isRevertingRef.current || !content.snapshotId || !project) return
@@ -236,4 +334,15 @@ export function FileChangeCard({ item }: MessageItemProps) {
       </div>
     </div>
   )
-}
+  },
+  // Custom comparison function for React.memo
+  // Returns true if props are equal (skip re-render), false if different (trigger re-render)
+  (prev, next) => {
+    // Different message entirely - must re-render
+    if (prev.item.id !== next.item.id) return false
+    // Status changed (e.g., pending -> completed) - must re-render
+    if (prev.item.status !== next.item.status) return false
+    // Shallow compare content for meaningful changes
+    return shallowContentEqual(prev.item.content, next.item.content)
+  }
+)

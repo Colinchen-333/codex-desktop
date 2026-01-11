@@ -5,22 +5,67 @@ import { MAX_OUTPUT_LINES } from './types'
 import { isRecord } from '../../lib/typeGuards'
 
 /**
- * Format timestamp for display
+ * LRU Cache for formatTimestamp optimization
+ *
+ * Performance optimization: Caches formatted timestamp strings to avoid
+ * creating new Date objects and calling toLocale*String() on every render.
+ * In message lists with hundreds of items, this significantly reduces GC pressure.
+ *
+ * Cache invalidation: Entries are invalidated when the day changes (to handle
+ * "today" vs date display logic correctly).
+ */
+interface TimestampCacheEntry {
+  result: string
+  day: number  // Day of month when cached, used for invalidation
+}
+
+const formatCache = new Map<number, TimestampCacheEntry>()
+const MAX_CACHE_SIZE = 100
+
+/**
+ * Format timestamp for display with LRU caching
+ *
+ * @param ts - Unix timestamp in milliseconds
+ * @returns Formatted time string (e.g., "14:30" for today, "Jan 5, 14:30" for other days)
  */
 export function formatTimestamp(ts: number): string {
-  const date = new Date(ts)
   const now = new Date()
+  const currentDay = now.getDate()
+
+  // Check cache - entry is valid if day hasn't changed
+  const cached = formatCache.get(ts)
+  if (cached && cached.day === currentDay) {
+    return cached.result
+  }
+
+  // Compute formatted result
+  const date = new Date(ts)
   const isToday = date.toDateString() === now.toDateString()
 
+  let result: string
   if (isToday) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    result = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } else {
+    result = date.toLocaleDateString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   }
-  return date.toLocaleDateString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+
+  // LRU eviction: remove oldest entry if cache is full
+  if (formatCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = formatCache.keys().next().value
+    if (firstKey !== undefined) {
+      formatCache.delete(firstKey)
+    }
+  }
+
+  // Store in cache
+  formatCache.set(ts, { result, day: currentDay })
+
+  return result
 }
 
 /**

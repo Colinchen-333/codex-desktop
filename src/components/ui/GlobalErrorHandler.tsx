@@ -4,7 +4,7 @@
  */
 import { useEffect } from 'react'
 import { subscribeToErrors, type ErrorNotification } from '../../lib/errorUtils'
-import { useToast } from './Toast'
+import { useToast } from './useToast'
 
 export function GlobalErrorHandler() {
   const { showToast } = useToast()

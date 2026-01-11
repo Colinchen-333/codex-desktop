@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { serverApi, type AccountInfo, type RateLimitSnapshot } from '../lib/api'
+import { logError } from '../lib/errorUtils'
 
 export interface McpOauthLoginResult {
   name: string
@@ -46,7 +47,11 @@ export const useAccountStore = create<AccountState>((set) => ({
       const info = await serverApi.getAccountInfo()
       set({ accountInfo: info })
     } catch (error) {
-      console.error('Failed to fetch account info:', error)
+      logError(error, {
+        context: 'refreshAccountInfo',
+        source: 'account',
+        details: 'Failed to fetch account info'
+      })
     }
   },
 
@@ -55,7 +60,11 @@ export const useAccountStore = create<AccountState>((set) => ({
       const response = await serverApi.getAccountRateLimits()
       set({ rateLimits: response.rateLimits, rateLimitsUpdatedAt: Date.now() })
     } catch (error) {
-      console.error('Failed to fetch rate limits:', error)
+      logError(error, {
+        context: 'refreshRateLimits',
+        source: 'account',
+        details: 'Failed to fetch rate limits'
+      })
     }
   },
 

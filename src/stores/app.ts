@@ -2,7 +2,7 @@ import { create } from 'zustand'
 
 type SidebarTab = 'projects' | 'sessions'
 
-interface AppState {
+export interface AppState {
   // Dialog states
   settingsOpen: boolean
   setSettingsOpen: (open: boolean) => void

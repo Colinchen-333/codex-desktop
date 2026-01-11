@@ -2,10 +2,10 @@
  * InputStatusHint - Shows token usage and shortcuts below input
  */
 import { Coins } from 'lucide-react'
-import { useThreadStore } from '../../../stores/thread'
+import { useThreadStore, type ThreadState } from '../../../stores/thread'
 
 export function InputStatusHint() {
-  const tokenUsage = useThreadStore((state) => state.tokenUsage)
+  const tokenUsage = useThreadStore((state: ThreadState) => state.tokenUsage)
   // Ensure contextWindow is never 0 to prevent NaN/Infinity from division
   const contextWindow = Math.max(tokenUsage.modelContextWindow || 200000, 1)
   const usedPercent = Math.min(tokenUsage.totalTokens / contextWindow, 1)

@@ -7,6 +7,7 @@
 
 import type { WritableDraft } from 'immer'
 import { threadApi } from '../../../lib/api'
+import { log } from '../../../lib/logger'
 import {
   isRecord,
   isCommandExecutionContent,
@@ -29,11 +30,20 @@ export function createHandleCommandApprovalRequested(
 
     set((state) => {
       const threadState = state.threads[threadId]
-      if (!threadState) return state
+      if (!threadState) return
 
+      // Get or create the item
       const existing = threadState.items[event.itemId]
-      const updatedItem = {
-        ...(existing || {
+      if (existing && isRecord(existing.content)) {
+        // Update existing item's content directly using Immer mutation
+        Object.assign(existing.content, {
+          needsApproval: true,
+          reason: event.reason,
+          proposedExecpolicyAmendment: event.proposedExecpolicyAmendment,
+        })
+      } else {
+        // Create new item or replace item with invalid content
+        threadState.items[event.itemId] = {
           id: event.itemId,
           type: 'commandExecution',
           status: 'inProgress',
@@ -41,40 +51,28 @@ export function createHandleCommandApprovalRequested(
             callId: event.itemId,
             command: '',
             cwd: '',
+            needsApproval: true,
+            reason: event.reason ?? undefined,
+            proposedExecpolicyAmendment: event.proposedExecpolicyAmendment,
           },
           createdAt: Date.now(),
-        }),
-        content: {
-          ...(isRecord(existing?.content) ? existing.content : {}),
-          needsApproval: true,
-          reason: event.reason,
-          proposedExecpolicyAmendment: event.proposedExecpolicyAmendment,
-        },
+        }
       }
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: { ...threadState.items, [event.itemId]: updatedItem },
-            itemOrder: threadState.itemOrder.includes(event.itemId)
-              ? threadState.itemOrder
-              : [...threadState.itemOrder, event.itemId],
-            pendingApprovals: [
-              ...threadState.pendingApprovals,
-              {
-                itemId: event.itemId,
-                threadId: event.threadId,
-                type: 'command',
-                data: event,
-                requestId: event._requestId,
-                createdAt: Date.now(),
-              },
-            ],
-          },
-        },
+
+      // Update itemOrder if needed
+      if (!threadState.itemOrder.includes(event.itemId)) {
+        threadState.itemOrder.push(event.itemId)
       }
+
+      // Add pending approval
+      threadState.pendingApprovals.push({
+        itemId: event.itemId,
+        threadId: event.threadId,
+        type: 'command',
+        data: event,
+        requestId: event._requestId,
+        createdAt: Date.now(),
+      })
     })
   }
 }
@@ -89,49 +87,45 @@ export function createHandleFileChangeApprovalRequested(
 
     set((state) => {
       const threadState = state.threads[threadId]
-      if (!threadState) return state
+      if (!threadState) return
 
+      // Get or create the item
       const existing = threadState.items[event.itemId]
-      const updatedItem = {
-        ...(existing || {
+      if (existing && isRecord(existing.content)) {
+        // Update existing item's content directly using Immer mutation
+        Object.assign(existing.content, {
+          needsApproval: true,
+          reason: event.reason,
+        })
+      } else {
+        // Create new item or replace item with invalid content
+        threadState.items[event.itemId] = {
           id: event.itemId,
           type: 'fileChange',
           status: 'inProgress',
           content: {
             changes: [],
+            needsApproval: true,
+            reason: event.reason ?? undefined,
           },
           createdAt: Date.now(),
-        }),
-        content: {
-          ...(isRecord(existing?.content) ? existing.content : {}),
-          needsApproval: true,
-          reason: event.reason,
-        },
+        }
       }
-      return {
-        ...state,
-        threads: {
-          ...state.threads,
-          [threadId]: {
-            ...threadState,
-            items: { ...threadState.items, [event.itemId]: updatedItem },
-            itemOrder: threadState.itemOrder.includes(event.itemId)
-              ? threadState.itemOrder
-              : [...threadState.itemOrder, event.itemId],
-            pendingApprovals: [
-              ...threadState.pendingApprovals,
-              {
-                itemId: event.itemId,
-                threadId: event.threadId,
-                type: 'fileChange',
-                data: event,
-                requestId: event._requestId,
-                createdAt: Date.now(),
-              },
-            ],
-          },
-        },
+
+      // Update itemOrder if needed
+      if (!threadState.itemOrder.includes(event.itemId)) {
+        threadState.itemOrder.push(event.itemId)
       }
+
+      // Add pending approval
+      threadState.pendingApprovals.push({
+        itemId: event.itemId,
+        threadId: event.threadId,
+        type: 'fileChange',
+        data: event,
+        requestId: event._requestId,
+        createdAt: Date.now(),
+      })
     })
   }
 }
@@ -161,19 +155,16 @@ export function createCleanupStaleApprovals(
 
       // Send cancel responses to backend for stale approvals
       if (staleApprovals.length > 0) {
-        console.warn(
-          '[cleanupStaleApprovals] Cancelling',
-          staleApprovals.length,
-          'timed-out approvals for thread:',
-          threadId,
-          staleApprovals.map((a) => a.itemId)
+        log.warn(
+          `[cleanupStaleApprovals] Cancelling ${staleApprovals.length} timed-out approvals for thread: ${threadId} ${staleApprovals.map((a) => a.itemId).join(', ')}`,
+          'approval-handlers'
         )
 
         staleApprovals.forEach((approval) => {
           threadApi
             .respondToApproval(threadId, approval.itemId, 'cancel', approval.requestId)
             .catch((err) => {
-              console.warn('[cleanupStaleApprovals] Failed to cancel approval:', approval.itemId, err)
+              log.warn(`[cleanupStaleApprovals] Failed to cancel approval: ${approval.itemId} ${err}`, 'approval-handlers')
             })
         })
       }
@@ -181,8 +172,6 @@ export function createCleanupStaleApprovals(
 
     // Update state to remove stale approvals - Using Immer for efficient nested updates
     setThreadStore((state) => {
-      let hasChanges = false
-
       Object.entries(state.threads).forEach(([_threadId, threadState]) => {
         // Find stale approvals first
         const staleApprovals = threadState.pendingApprovals.filter(
@@ -190,8 +179,6 @@ export function createCleanupStaleApprovals(
         )
 
         if (staleApprovals.length > 0) {
-          hasChanges = true
-
           // Immer allows direct mutation of draft state
           // Filter out stale approvals
           threadState.pendingApprovals = threadState.pendingApprovals.filter(
@@ -219,8 +206,8 @@ export function createCleanupStaleApprovals(
         }
       })
 
-      // If no changes, return original state (Immer optimization)
-      return hasChanges ? state : { ...state, threads: state.threads }
+      // Immer handles state updates automatically - no explicit return needed
+      // When we mutate the draft directly, Immer produces the new state
     })
   }
 }

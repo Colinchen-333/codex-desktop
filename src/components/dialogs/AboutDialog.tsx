@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { serverApi, type ServerStatus } from '../../lib/api'
 import { useToast } from '../ui/Toast'
+import { useDialogKeyboardShortcut } from '../../hooks/useDialogKeyboardShortcut'
+import { logError } from '../../lib/errorUtils'
 
 interface AboutDialogProps {
   isOpen: boolean
@@ -10,6 +12,15 @@ interface AboutDialogProps {
 export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const { showToast } = useToast()
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+
+  // Use keyboard shortcut hook for Escape to close
+  useDialogKeyboardShortcut({
+    isOpen,
+    onConfirm: () => closeButtonRef.current?.click(),
+    onCancel: onClose,
+    requireModifierKey: false,
+  })
 
   useEffect(() => {
     if (isOpen) {
@@ -17,7 +28,11 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
         .getStatus()
         .then(setServerStatus)
         .catch((error) => {
-          console.error('Failed to get server status:', error)
+          logError(error, {
+            context: 'AboutDialog',
+            source: 'dialogs',
+            details: 'Failed to get server status'
+          })
           showToast('Failed to load server status information', 'error')
         })
     }
@@ -84,6 +99,7 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
         {/* Footer */}
         <div className="flex justify-center border-t border-border px-6 py-4">
           <button
+            ref={closeButtonRef}
             className="rounded-lg bg-primary px-6 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             onClick={onClose}
           >

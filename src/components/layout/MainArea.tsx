@@ -8,12 +8,19 @@ import {
   getEffectiveWorkingDirectory,
 } from '../../stores/settings'
 import { ChatView } from '../chat/ChatView'
+import { logError } from '../../lib/errorUtils'
 import { SessionTabs } from '../sessions/SessionTabs'
 import { parseError } from '../../lib/errorUtils'
 import { log } from '../../lib/logger'
 
 // Timeout for resume operations to prevent permanent blocking
 const RESUME_TIMEOUT_MS = 30000
+
+// Interface for queued session switches
+interface QueuedSessionSwitch {
+  sessionId: string
+  timestamp: number
+}
 
 export function MainArea() {
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId)
@@ -26,6 +33,10 @@ export function MainArea() {
 
   // Track previous session ID to detect switches
   const prevSessionIdRef = useRef<string | null>(null)
+
+  // Session switch queue to prevent race conditions
+  const sessionSwitchQueueRef = useRef<QueuedSessionSwitch[]>([])
+  const isTransitioningRef = useRef(false)
 
   // Load Git info when project is selected
   useEffect(() => {
@@ -46,13 +57,16 @@ export function MainArea() {
   // Timeout ref for auto-reset of isResumingRef
   const resumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Cleanup timeout on unmount
+  // Cleanup timeout and queue on unmount
   useEffect(() => {
     return () => {
       if (resumeTimeoutRef.current) {
         clearTimeout(resumeTimeoutRef.current)
         resumeTimeoutRef.current = null
       }
+      // Clear session switch queue
+      sessionSwitchQueueRef.current = []
+      isTransitioningRef.current = false
     }
   }, [])
 
@@ -71,70 +85,138 @@ export function MainArea() {
       return
     }
 
-    // Check if this session is already loaded in threads
-    const threadState = useThreadStore.getState()
-    const isLoaded = !!threadState.threads[selectedSessionId]
-
-    if (isLoaded) {
-      // Session already loaded, just switch to it
-      if (threadState.focusedThreadId !== selectedSessionId) {
-        threadState.switchThread(selectedSessionId)
-      }
-      prevSessionIdRef.current = selectedSessionId
-      targetSessionIdRef.current = selectedSessionId
-      return
-    }
-
-    // Update refs for session tracking
-    prevSessionIdRef.current = selectedSessionId
-    targetSessionIdRef.current = selectedSessionId
-
-    // Skip if already resuming
-    if (isResumingRef.current) {
-      return
-    }
-
-    // Check if we can add more sessions using getState()
-    if (!useThreadStore.getState().canAddSession()) {
-      console.warn('[MainArea] Maximum sessions reached, cannot resume:', selectedSessionId)
-      return
-    }
-
-    // Helper function to start resume with timeout protection
-    const startResumeWithTimeout = (sessionId: string) => {
-      // Clear any existing timeout
-      if (resumeTimeoutRef.current) {
-        clearTimeout(resumeTimeoutRef.current)
-        resumeTimeoutRef.current = null
+    // Add to switch queue if we're already transitioning
+    if (isTransitioningRef.current) {
+      const queueEntry: QueuedSessionSwitch = {
+        sessionId: selectedSessionId,
+        timestamp: Date.now(),
       }
 
-      isResumingRef.current = true
+      // Remove any existing entries for the same session (deduplication)
+      sessionSwitchQueueRef.current = sessionSwitchQueueRef.current.filter(
+        (entry) => entry.sessionId !== selectedSessionId
+      )
+      sessionSwitchQueueRef.current.push(queueEntry)
 
-      // Set a timeout to auto-reset isResumingRef if resume gets stuck
-      resumeTimeoutRef.current = setTimeout(() => {
-        if (isResumingRef.current) {
-          console.warn('[MainArea] Resume operation timed out after 30s, resetting flag')
-          isResumingRef.current = false
-          resumeTimeoutRef.current = null
+      log.debug(
+        `[MainArea] Session ${selectedSessionId} queued for switch (queue size: ${sessionSwitchQueueRef.current.length})`,
+        'MainArea'
+      )
+      return
+    }
+
+    // Process the session switch
+    const processSessionSwitch = async (sessionId: string) => {
+      // Set transition lock
+      isTransitioningRef.current = true
+
+      try {
+        // Check if this session is already loaded in threads
+        const threadState = useThreadStore.getState()
+        const isLoaded = !!threadState.threads[sessionId]
+
+        if (isLoaded) {
+          // Session already loaded, just switch to it
+          if (threadState.focusedThreadId !== sessionId) {
+            threadState.switchThread(sessionId)
+          }
+          prevSessionIdRef.current = sessionId
+          targetSessionIdRef.current = sessionId
+          return
         }
-      }, RESUME_TIMEOUT_MS)
 
-      // Use getState() to call resumeThread
-      useThreadStore.getState().resumeThread(sessionId)
-        .catch((error) => {
-          console.error('Failed to resume session:', error)
-        })
-        .finally(() => {
-          isResumingRef.current = false
+        // Track the target session while resuming
+        targetSessionIdRef.current = sessionId
+
+        // Skip if already resuming
+        if (isResumingRef.current) {
+          return
+        }
+
+        // Check if we can add more sessions using getState()
+        if (!useThreadStore.getState().canAddSession()) {
+          console.warn('[MainArea] Maximum sessions reached, cannot resume:', sessionId)
+          return
+        }
+
+        // Helper function to start resume with timeout protection
+        const startResumeWithTimeout = (targetSessionId: string) => {
+          // Clear any existing timeout
           if (resumeTimeoutRef.current) {
             clearTimeout(resumeTimeoutRef.current)
             resumeTimeoutRef.current = null
           }
-        })
+
+          isResumingRef.current = true
+
+          let timeoutId: ReturnType<typeof setTimeout> | null = null
+          const timeoutPromise = new Promise<boolean>((resolve) => {
+            timeoutId = setTimeout(() => {
+              if (isResumingRef.current) {
+                console.warn('[MainArea] Resume operation timed out after 30s, releasing transition lock')
+                isResumingRef.current = false
+              }
+              resolve(false)
+            }, RESUME_TIMEOUT_MS)
+          })
+
+          resumeTimeoutRef.current = timeoutId
+
+          // Use getState() to call resumeThread
+          const resumePromise = useThreadStore.getState().resumeThread(targetSessionId)
+            .then(() => true)
+            .catch((error) => {
+              logError(error, {
+                context: 'MainArea',
+                source: 'layout',
+                details: 'Failed to resume session'
+              })
+              return false
+            })
+            .finally(() => {
+              isResumingRef.current = false
+              if (timeoutId) {
+                clearTimeout(timeoutId)
+              }
+              if (resumeTimeoutRef.current === timeoutId) {
+                resumeTimeoutRef.current = null
+              }
+            })
+
+          return Promise.race([resumePromise, timeoutPromise])
+        }
+
+        // Resume the selected session
+        const didResume = await startResumeWithTimeout(sessionId)
+        if (didResume) {
+          prevSessionIdRef.current = sessionId
+          targetSessionIdRef.current = sessionId
+        } else if (targetSessionIdRef.current === sessionId) {
+          targetSessionIdRef.current = null
+        }
+      } finally {
+        // Release transition lock
+        isTransitioningRef.current = false
+
+        // Process next queued switch if any
+        if (sessionSwitchQueueRef.current.length > 0) {
+          const nextSwitch = sessionSwitchQueueRef.current.shift()
+          if (nextSwitch) {
+            log.debug(
+              `[MainArea] Processing next queued session: ${nextSwitch.sessionId}`,
+              'MainArea'
+            )
+            // Use setTimeout to avoid blocking
+            setTimeout(() => {
+              void processSessionSwitch(nextSwitch.sessionId)
+            }, 0)
+          }
+        }
+      }
     }
 
-    // Resume the selected session
-    startResumeWithTimeout(selectedSessionId)
+    // Process the current session switch
+    void processSessionSwitch(selectedSessionId)
   }, [selectedSessionId]) // Only depend on selectedSessionId to prevent loops
 
   // Callback for creating a new session from SessionTabs
@@ -226,16 +308,24 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
 
   // Check server status on mount
   useEffect(() => {
+    let isMounted = true
     const checkServer = async () => {
       try {
         const { serverApi } = await import('../../lib/api')
         const status = await serverApi.getStatus()
-        setServerReady(status.isRunning)
+        if (isMounted) {
+          setServerReady(status.isRunning)
+        }
       } catch {
-        setServerReady(false)
+        if (isMounted) {
+          setServerReady(false)
+        }
       }
     }
     void checkServer()
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   // Clear local error when project changes

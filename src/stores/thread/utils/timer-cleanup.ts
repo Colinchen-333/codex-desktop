@@ -5,13 +5,15 @@
  * Prevents memory leaks by ensuring all timers are properly cleared.
  */
 
+import { log } from '../../../lib/logger'
 import {
   deltaBuffers,
   flushTimers,
   turnTimeoutTimers,
   closingThreads,
   clearDeltaBuffer,
-  clearTurnTimeout,
+  clearAllTimers,
+  clearAllTimersForAllThreads,
 } from '../delta-buffer'
 import { TIMER_CLEANUP_INTERVAL_MS } from '../constants'
 
@@ -21,27 +23,18 @@ let approvalCleanupTimer: ReturnType<typeof setInterval> | null = null
 // Global timer cleanup interval - cleans up orphaned timers
 let timerCleanupInterval: ReturnType<typeof setInterval> | null = null
 
+// Track orphaned timer detection runs for debugging
+let orphanedTimerCleanupCount = 0
+let lastOrphanedCleanupTime = 0
+
 // ==================== Thread Timer Cleanup ====================
 
 /**
  * Comprehensive cleanup function for all timers associated with a thread.
+ * Delegates to the optimized clearAllTimers function from delta-buffer.
  */
 export function clearThreadTimers(threadId: string): void {
-  // Clear flush timer if exists
-  const flushTimer = flushTimers.get(threadId)
-  if (flushTimer) {
-    clearTimeout(flushTimer)
-    flushTimers.delete(threadId)
-    console.debug('[clearThreadTimers] Cleared flush timer for thread:', threadId)
-  }
-
-  // Clear turn timeout timer if exists
-  const timeoutTimer = turnTimeoutTimers.get(threadId)
-  if (timeoutTimer) {
-    clearTimeout(timeoutTimer)
-    turnTimeoutTimers.delete(threadId)
-    console.debug('[clearThreadTimers] Cleared timeout timer for thread:', threadId)
-  }
+  clearAllTimers(threadId)
 }
 
 /**
@@ -50,7 +43,11 @@ export function clearThreadTimers(threadId: string): void {
 export function getTimerStats(): {
   flushTimers: number
   timeoutTimers: number
+  deltaBuffers: number
+  closingThreads: number
   total: number
+  orphanedCleanupRuns: number
+  lastCleanupTime: number
   lruStats: {
     deltaBuffers: ReturnType<typeof deltaBuffers.getStats>
     flushTimers: ReturnType<typeof flushTimers.getStats>
@@ -60,7 +57,11 @@ export function getTimerStats(): {
   return {
     flushTimers: flushTimers.size,
     timeoutTimers: turnTimeoutTimers.size,
-    total: flushTimers.size + turnTimeoutTimers.size,
+    deltaBuffers: deltaBuffers.size,
+    closingThreads: closingThreads.size,
+    total: flushTimers.size + turnTimeoutTimers.size + deltaBuffers.size,
+    orphanedCleanupRuns: orphanedTimerCleanupCount,
+    lastCleanupTime: lastOrphanedCleanupTime,
     lruStats: {
       deltaBuffers: deltaBuffers.getStats(),
       flushTimers: flushTimers.getStats(),
@@ -99,6 +100,10 @@ export function stopApprovalCleanupTimer(): void {
  * This prevents memory leaks from timers that weren't properly cleared.
  */
 export function cleanupStaleTimers(activeThreadIds: Set<string>): void {
+  const now = Date.now()
+  orphanedTimerCleanupCount++
+  lastOrphanedCleanupTime = now
+
   // Clean up orphaned flush timers
   let flushCleanups = 0
   const flushEntries = flushTimers.entries()
@@ -107,6 +112,7 @@ export function cleanupStaleTimers(activeThreadIds: Set<string>): void {
       clearTimeout(timer)
       flushTimers.delete(threadId)
       flushCleanups++
+      log.debug(`[cleanupStaleTimers] Cleared orphaned flush timer for thread: ${threadId}`, 'timer-cleanup')
     }
   }
 
@@ -118,18 +124,59 @@ export function cleanupStaleTimers(activeThreadIds: Set<string>): void {
       clearTimeout(timer)
       turnTimeoutTimers.delete(threadId)
       timeoutCleanups++
+      log.debug(`[cleanupStaleTimers] Cleared orphaned timeout timer for thread: ${threadId}`, 'timer-cleanup')
     }
   }
 
-  if (flushCleanups > 0 || timeoutCleanups > 0) {
-    console.debug(
-      '[cleanupStaleTimers] Cleaned up',
-      flushCleanups,
-      'flush timers and',
-      timeoutCleanups,
-      'timeout timers'
+  // Clean up orphaned delta buffers (memory leak prevention)
+  let bufferCleanups = 0
+  const bufferKeys = deltaBuffers.keys()
+  for (const threadId of bufferKeys) {
+    if (!activeThreadIds.has(threadId) || closingThreads.has(threadId)) {
+      clearDeltaBuffer(threadId)
+      deltaBuffers.delete(threadId)
+      bufferCleanups++
+      log.debug(`[cleanupStaleTimers] Cleared orphaned delta buffer for thread: ${threadId}`, 'timer-cleanup')
+    }
+  }
+
+  // Clean up stale entries in closingThreads set (threads that have been closing too long)
+  let closingCleanups = 0
+  // Note: We can't track timing for closingThreads entries, so we rely on the
+  // CLOSING_THREAD_CLEANUP_DELAY_MS timeout in closeThread to handle this.
+  // However, we can clean up if the thread is in closingThreads but has no related resources
+  for (const threadId of closingThreads) {
+    if (!deltaBuffers.has(threadId) && !flushTimers.has(threadId) && !turnTimeoutTimers.has(threadId)) {
+      // All resources cleaned up, safe to remove from closing set
+      closingThreads.delete(threadId)
+      closingCleanups++
+    }
+  }
+
+  const totalCleanups = flushCleanups + timeoutCleanups + bufferCleanups + closingCleanups
+  if (totalCleanups > 0) {
+    log.debug(
+      `[cleanupStaleTimers] Run #${orphanedTimerCleanupCount}: Cleaned up ${flushCleanups} flush timers, ` +
+      `${timeoutCleanups} timeout timers, ${bufferCleanups} buffers, ${closingCleanups} closing entries`,
+      'timer-cleanup'
     )
   }
+}
+
+/**
+ * Perform immediate cleanup for a specific thread.
+ * Called when closing a thread to ensure all resources are cleaned immediately.
+ * Uses the comprehensive clearAllTimers function for complete cleanup.
+ */
+export function performImmediateThreadCleanup(threadId: string): void {
+  // Clear all timers comprehensively
+  clearAllTimers(threadId)
+
+  // Clear delta buffer and remove from map
+  clearDeltaBuffer(threadId)
+  deltaBuffers.delete(threadId)
+
+  log.debug(`[performImmediateThreadCleanup] Completed cleanup for thread: ${threadId}`, 'timer-cleanup')
 }
 
 /**
@@ -140,7 +187,7 @@ export function startTimerCleanupInterval(getActiveThreadIds: () => Set<string>)
     timerCleanupInterval = setInterval(() => {
       cleanupStaleTimers(getActiveThreadIds())
     }, TIMER_CLEANUP_INTERVAL_MS)
-    console.debug('[startTimerCleanupInterval] Started periodic timer cleanup')
+    log.debug('[startTimerCleanupInterval] Started periodic timer cleanup', 'timer-cleanup')
   }
 }
 
@@ -151,7 +198,7 @@ export function stopTimerCleanupInterval(): void {
   if (timerCleanupInterval !== null) {
     clearInterval(timerCleanupInterval)
     timerCleanupInterval = null
-    console.debug('[stopTimerCleanupInterval] Stopped periodic timer cleanup')
+    log.debug('[stopTimerCleanupInterval] Stopped periodic timer cleanup', 'timer-cleanup')
   }
 }
 
@@ -160,22 +207,20 @@ export function stopTimerCleanupInterval(): void {
 /**
  * Clean up all thread resources.
  * Called on app unmount to prevent memory leaks.
+ * Uses the comprehensive clearAllTimersForAllThreads function.
  */
 export function cleanupThreadResources(): void {
   stopApprovalCleanupTimer()
   stopTimerCleanupInterval()
 
-  // Clear all delta buffers and timers using the comprehensive cleanup
-  const bufferKeys = deltaBuffers.keys()
-  for (const threadId of bufferKeys) {
-    clearThreadTimers(threadId)
-    clearDeltaBuffer(threadId)
-    clearTurnTimeout(threadId)
-  }
+  // Clear all timers comprehensively
+  clearAllTimersForAllThreads()
+
+  // Clear all delta buffers
   deltaBuffers.clear()
-  flushTimers.clear()
-  turnTimeoutTimers.clear()
+
+  // Clear closing threads set
   closingThreads.clear()
 
-  console.debug('[cleanupThreadResources] Cleaned up all thread resources')
+  log.debug('[cleanupThreadResources] Cleaned up all thread resources', 'timer-cleanup')
 }
