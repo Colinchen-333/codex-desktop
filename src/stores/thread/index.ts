@@ -264,7 +264,7 @@ export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<Threa
 
       // ==================== Snapshot Actions ====================
       createSnapshot: createCreateSnapshot(typedSet, get),
-      revertToSnapshot: createRevertToSnapshot(),
+      revertToSnapshot: createRevertToSnapshot(typedSet, get),
       fetchSnapshots: createFetchSnapshots(typedSet, get),
     }
   })

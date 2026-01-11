@@ -1,4 +1,4 @@
-import { cn } from '../../lib/utils'
+import { cn } from '../../../lib/utils'
 import { Loader2 } from 'lucide-react'
 
 /**
@@ -43,7 +43,7 @@ const SIZE_MAP: Record<SpinnerSize, string> = {
  * Color variant configurations
  */
 const VARIANT_MAP: Record<
-  SpinnerProps['variant'],
+  NonNullable<SpinnerProps['variant']>,
   string
 > = {
   default: 'text-muted-foreground',

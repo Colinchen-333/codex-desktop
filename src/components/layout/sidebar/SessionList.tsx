@@ -1,4 +1,4 @@
-import { memo, useMemo, useCallback, useRef, useEffect } from 'react'
+import { memo, useMemo, useCallback } from 'react'
 import { Star } from 'lucide-react'
 import { cn, formatAbsoluteTime } from '../../../lib/utils'
 import type { SessionStatus } from '../../../lib/api'
@@ -7,8 +7,9 @@ import { useProjectsStore } from '../../../stores/projects'
 import { ContextMenu, type ContextMenuItem } from '../../ui/ContextMenu'
 import { StatusIcon, getStatusLabel } from '../../ui/StatusIndicator'
 import { TaskProgressIndicator } from '../../chat/TaskProgress'
-import { VariableSizeList as List } from 'react-window'
-import AutoSizer from 'react-window/dist/core/AutoSizer'
+// Virtual list imports commented out pending react-window 2.x API migration
+// import { List, useListRef, type ListImperativeAPI } from 'react-window'
+// import { AutoSizer, type Size } from 'react-virtualized-auto-sizer'
 
 export interface Session {
   sessionId: string
@@ -45,163 +46,12 @@ export interface SessionListProps {
 }
 
 /**
- * SessionRow - Individual row component for virtualized list
- * Memoized to prevent unnecessary re-renders during scrolling
+ * SessionRow - commented out pending virtualization migration
  */
-interface SessionRowProps {
-  index: number
-  style: React.CSSProperties
-  data: {
-    sessions: Session[]
-    selectedId: string | null
-    onSelect: (id: string | null, projectId?: string) => void
-    onToggleFavorite: (sessionId: string, isFavorite: boolean) => void
-    onRename: (sessionId: string, currentTitle: string) => void
-    onDelete: (sessionId: string, sessionName: string) => void
-    getSessionDisplayName: (session: Session) => string
-    getProjectName: (projectId: string) => string | null
-    isGlobalSearch?: boolean
-  }
-}
+// interface SessionRowProps { ... }
 
-const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowProps) {
-  const {
-    sessions,
-    selectedId,
-    onSelect,
-    onToggleFavorite,
-    onRename,
-    onDelete,
-    getSessionDisplayName,
-    getProjectName,
-    isGlobalSearch,
-  } = data
-
-  const session = sessions[index]
-  if (!session) return null
-
-  const displayName = getSessionDisplayName(session)
-  const timestamp = session.lastAccessedAt || session.createdAt
-  const timeStr = formatAbsoluteTime(timestamp)
-  const statusLabel = getStatusLabel(session.status)
-  const isRunning = session.status === 'running'
-  const isSelected = selectedId === session.sessionId
-  const projectName = isGlobalSearch ? getProjectName(session.projectId) : null
-
-  const contextMenuItems: ContextMenuItem[] = [
-    {
-      label: 'Rename',
-      icon: '✏️',
-      onClick: () => onRename(session.sessionId, displayName),
-    },
-    {
-      label: session.isFavorite ? 'Remove from favorites' : 'Add to favorites',
-      icon: session.isFavorite ? '☆' : '★',
-      onClick: () => onToggleFavorite(session.sessionId, session.isFavorite),
-    },
-    {
-      label: 'Delete',
-      icon: '🗑️',
-      onClick: () => onDelete(session.sessionId, displayName),
-      variant: 'danger',
-    },
-  ]
-
-  return (
-    <div style={style}>
-      <ContextMenu key={session.sessionId} items={contextMenuItems}>
-        <button
-          className={cn(
-            'w-full rounded-lg px-3 py-2.5 text-left transition-all mb-1',
-            isSelected
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'text-foreground hover:bg-secondary/50',
-            isRunning &&
-              !isSelected &&
-              'border border-blue-400/30 bg-blue-50/10 dark:bg-blue-950/20'
-          )}
-          onClick={() =>
-            onSelect(session.sessionId, isGlobalSearch ? session.projectId : undefined)
-          }
-          role="option"
-          aria-selected={isSelected}
-        >
-          {/* First row: Status icon + Session name + Task progress */}
-          <div className="flex items-center gap-2">
-            <StatusIcon status={session.status} />
-            {session.isFavorite && (
-              <Star
-                size={12}
-                className="text-yellow-500 flex-shrink-0 fill-yellow-500"
-              />
-            )}
-            <span className="truncate text-sm font-medium flex-1">
-              {displayName}
-            </span>
-            {/* Task progress indicator */}
-            <TaskProgressIndicator
-              tasksJson={session.tasksJson}
-              status={session.status}
-            />
-          </div>
-          {/* Second row: Status label + Timestamp + Project name (for global search) */}
-          <div className="flex items-center gap-1.5 mt-1 text-xs">
-            <span
-              className={cn(
-                'text-muted-foreground',
-                isSelected && 'text-primary-foreground/70'
-              )}
-            >
-              {statusLabel}
-            </span>
-            {timeStr && (
-              <>
-                <span
-                  className={cn(
-                    'text-muted-foreground/60',
-                    isSelected && 'text-primary-foreground/50'
-                  )}
-                >
-                  ·
-                </span>
-                <span
-                  className={cn(
-                    'text-muted-foreground',
-                    isSelected && 'text-primary-foreground/70'
-                  )}
-                >
-                  {timeStr}
-                </span>
-              </>
-            )}
-            {/* Show project name in global search results */}
-            {projectName && (
-              <>
-                <span
-                  className={cn(
-                    'text-muted-foreground/60',
-                    isSelected && 'text-primary-foreground/50'
-                  )}
-                >
-                  ·
-                </span>
-                <span
-                  className={cn(
-                    'px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground truncate max-w-[80px]',
-                    isSelected &&
-                      'bg-primary-foreground/20 text-primary-foreground/80'
-                  )}
-                >
-                  {projectName}
-                </span>
-              </>
-            )}
-          </div>
-        </button>
-      </ContextMenu>
-    </div>
-  )
-})
+// TODO: Re-enable SessionRow for virtualization
+// const SessionRow = memo(...) - commented out pending virtualization migration
 
 /**
  * SessionList - Displays sorted list of sessions with context menu actions
@@ -226,7 +76,7 @@ export const SessionList = memo(function SessionList({
   isLoading,
   hasProject,
   isGlobalSearch,
-  virtualizationThreshold = 50, // Enable virtualization for 50+ sessions
+  virtualizationThreshold: _virtualizationThreshold = 50, // TODO: Re-enable for virtualization
 }: SessionListProps) {
   // Hooks must be called unconditionally at the top
   const { getSessionDisplayName } = useSessionsStore()
@@ -260,56 +110,16 @@ export const SessionList = memo(function SessionList({
     })
   }, [sessions])
 
-  // Determine if virtualization should be enabled
-  const shouldVirtualize = sortedSessions.length > virtualizationThreshold
+  // TODO: Re-enable virtualization
+  // const shouldVirtualize = sortedSessions.length > virtualizationThreshold
+  // const itemData = useMemo(...) - commented out pending virtualization migration
 
-  // Create item data for virtualized rows
-  const itemData = useMemo(
-    () => ({
-      sessions: sortedSessions,
-      selectedId,
-      onSelect,
-      onToggleFavorite,
-      onRename,
-      onDelete,
-      getSessionDisplayName,
-      getProjectName,
-      isGlobalSearch,
-    }),
-    [
-      sortedSessions,
-      selectedId,
-      onSelect,
-      onToggleFavorite,
-      onRename,
-      onDelete,
-      getSessionDisplayName,
-      getProjectName,
-      isGlobalSearch,
-    ]
-  )
+  // TODO: Re-enable virtualization
+  // const listRef = useListRef()
+  // ... virtualization code commented out pending react-window 2.x migration
 
-  // Ref for the virtualized list to allow programmatic scrolling
-  const listRef = useRef<List>(null)
-
-  // Reset scroll position when sessions change significantly
-  const prevSessionsLengthRef = useRef(0)
-  const sessionsLengthChanged = sortedSessions.length !== prevSessionsLengthRef.current
-
-  // Update ref and scroll to top when sessions change
-  useEffect(() => {
-    if (sessionsLengthChanged && listRef.current) {
-      listRef.current.scrollToItem(0)
-      prevSessionsLengthRef.current = sortedSessions.length
-    }
-  }, [sortedSessions.length, sessionsLengthChanged])
-
-  // Size calculator for dynamic row heights
-  const getItemSize = useCallback((index: number) => {
-    // Base height: padding + content + margin
-    // Each session row is approximately 70-80px depending on content
-    return 80 // Fixed height for simplicity, can be made dynamic if needed
-  }, [])
+  // TODO: Re-enable for virtualization
+  // const getItemSize = useCallback((_index: number) => 80, [])
 
   // Render non-virtualized list for small datasets
   const renderStandardList = () => {
@@ -455,34 +265,13 @@ export const SessionList = memo(function SessionList({
     )
   }
 
-  // Render virtualized list for large datasets
+  // TODO: Re-enable virtualization after migrating to react-window 2.x API
+  /*
   const renderVirtualizedList = () => {
-    return (
-      <div
-        role="listbox"
-        aria-label="Sessions list"
-        id="sessions-panel"
-        aria-labelledby="sessions-tab"
-        className="h-full"
-      >
-        <AutoSizer>
-          {({ height, width }) => (
-            <List
-              ref={listRef}
-              height={height}
-              width={width}
-              itemCount={sortedSessions.length}
-              itemSize={getItemSize}
-              itemData={itemData}
-              overscanCount={5} // Render 5 extra items above/below viewport
-            >
-              {SessionRow}
-            </List>
-          )}
-        </AutoSizer>
-      </div>
-    )
+    // Implementation commented out pending API migration
+    return <div>Virtualization temporarily disabled</div>
   }
+  */
 
   // Early returns after all hooks
   // When doing global search, don't require project selection
@@ -533,5 +322,7 @@ export const SessionList = memo(function SessionList({
   }
 
   // Choose rendering method based on dataset size
-  return shouldVirtualize ? renderVirtualizedList() : renderStandardList()
+  // TODO: Re-enable virtualization after migrating to react-window 2.x API
+  // return shouldVirtualize ? renderVirtualizedList() : renderStandardList()
+  return renderStandardList()
 })

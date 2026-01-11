@@ -512,4 +512,5 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
     cleanupHandlers = []
     log.debug('[SessionsStore] Event listeners cleaned up', 'sessions')
   },
-}))
+  }
+})

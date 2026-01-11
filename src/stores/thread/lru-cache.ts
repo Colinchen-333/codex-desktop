@@ -11,7 +11,7 @@ import { LRU_CLEANUP_BATCH_SIZE } from './constants'
 import type { LRUCacheNode } from './types'
 
 export class LRUCache<K extends string, V> {
-  private cache: Map<K, LRUCacheNode<V>>
+  private cache: Map<K, LRUCacheNode<K, V>>
   private head: K | null = null
   private tail: K | null = null
   private maxSize: number
@@ -43,7 +43,7 @@ export class LRUCache<K extends string, V> {
       this.moveToFront(key)
     } else {
       // Create new node
-      const newNode: LRUCacheNode<V> = {
+      const newNode: LRUCacheNode<K, V> = {
         value,
         prev: null,
         next: null,

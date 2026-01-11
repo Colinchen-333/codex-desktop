@@ -5,7 +5,7 @@ import {
   SettingsDialogSkeleton,
   ListDialogSkeleton,
   FormDialogSkeleton,
-} from './ui/Skeleton'
+} from './ui/loading/Skeleton'
 import type { ReviewTarget } from '../lib/api'
 
 /**

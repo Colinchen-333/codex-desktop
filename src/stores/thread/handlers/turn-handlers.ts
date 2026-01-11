@@ -180,7 +180,7 @@ export function createHandleTurnCompleted(
       if (!threadState) return state
 
       // P2: Immer optimization - direct mutation instead of spreading
-      Object.entries(threadState.items).forEach(([id, item]) => {
+      Object.entries(threadState.items).forEach(([_id, item]) => {
         // Type guard ensures content is AgentMessageContent
         if (item.type === 'agentMessage' && isAgentMessageContent(item.content) && item.content.isStreaming) {
           item.status = 'completed'
