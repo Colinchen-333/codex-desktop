@@ -65,7 +65,9 @@ export function createStartThread(
         throw new Error(`Maximum number of parallel sessions (${maxSessions}) reached. Please close a session first.`)
       }
 
-      const opSeq = getNextOperationSequence()
+      // Use projectId as temporary threadId for operation sequencing
+      // This prevents concurrent startThread for the same project
+      const opSeq = getNextOperationSequence(projectId)
       startApprovalCleanupTimer(cleanupStaleApprovals, 60000)
       startTimerCleanupInterval(() => new Set(Object.keys(getThreadStore().threads)))
 
@@ -87,8 +89,8 @@ export function createStartThread(
         safeApprovalPolicy
       )
 
-      // Validate operation sequence after async operation
-      if (!isOperationValid(opSeq)) {
+      // Validate operation sequence after async operation (using projectId as key)
+      if (!isOperationValid(projectId, opSeq)) {
         log.warn('[startThread] Another operation started, discarding result', 'thread-actions')
         return
       }
@@ -115,7 +117,7 @@ export function createStartThread(
         return state
       })
     } catch (error) {
-      const currentOpSeq = getCurrentOperationSequence()
+      const currentOpSeq = getCurrentOperationSequence(projectId)
       set((state) => {
         state.globalError = parseError(error)
         state.isLoading = false
@@ -178,7 +180,8 @@ export function createResumeThread(
     await acquireThreadSwitchLock()
 
     try {
-      const opSeq = getNextOperationSequence()
+      // Use threadId for operation sequencing
+      const opSeq = getNextOperationSequence(threadId)
       startApprovalCleanupTimer(cleanupStaleApprovals, 60000)
       startTimerCleanupInterval(() => new Set(Object.keys(getThreadStore().threads)))
 
@@ -191,7 +194,7 @@ export function createResumeThread(
       const response = await threadApi.resume(threadId)
 
       // P1 Fix: Validate operation sequence - rollback state if stale
-      if (!isOperationValid(opSeq)) {
+      if (!isOperationValid(threadId, opSeq)) {
         log.warn(
           `[resumeThread] Another operation started, rolling back state for threadId: ${threadId}`,
           'thread-actions'
@@ -254,7 +257,7 @@ export function createResumeThread(
       }
 
       // Final validation before state update
-      if (!isOperationValid(opSeq)) {
+      if (!isOperationValid(threadId, opSeq)) {
         log.warn(`[resumeThread] Operation became stale before state update`, 'thread-actions')
         return
       }
