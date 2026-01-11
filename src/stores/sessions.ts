@@ -276,6 +276,8 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
   // Update tasks for progress tracking
   updateSessionTasks: async (sessionId: string, tasks: TaskItem[]) => {
     let tasksJson: string
+    let tasksToSend = tasks // Track which tasks to send to API
+
     try {
       tasksJson = JSON.stringify(tasks)
 
@@ -300,6 +302,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
         }
 
         tasksJson = truncatedJson
+        tasksToSend = truncatedTasks // Send truncated tasks to API
         log.info(
           `Truncated tasks from ${tasks.length} to ${truncatedTasks.length} items (${(truncatedSize / 1024).toFixed(1)}KB)`,
           'sessions'
@@ -308,6 +311,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
     } catch (e) {
       log.error(`Failed to serialize tasks: ${e}`, 'sessions')
       tasksJson = '[]'
+      tasksToSend = [] // Send empty array on serialization error
     }
     // Optimistic update
     set((state) => ({
@@ -316,7 +320,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
       ),
     }))
     try {
-      await sessionApi.updateTasks(sessionId, tasks)
+      await sessionApi.updateTasks(sessionId, tasksToSend)
     } catch (error) {
       log.error(`Failed to update session tasks: ${error}`, 'sessions')
     }
