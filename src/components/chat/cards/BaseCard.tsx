@@ -177,10 +177,21 @@ export const BaseCard = memo(
 
     // Update content height for animation
     useEffect(() => {
-      if (contentRef.current) {
-        setContentHeight(contentRef.current.scrollHeight)
+      if (!contentRef.current) return
+
+      const resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.target.scrollHeight
+          setContentHeight(height)
+        }
+      })
+
+      resizeObserver.observe(contentRef.current)
+
+      return () => {
+        resizeObserver.disconnect()
       }
-    }, [children, isExpanded])
+    }, [])
 
     // Handle expand/collapse toggle
     const handleToggle = useCallback(() => {

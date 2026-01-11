@@ -2,6 +2,30 @@ import { invoke } from '@tauri-apps/api/core'
 import { log } from './logger'
 import { withCache, clearCache, clearAllCache, CACHE_KEYS, CACHE_TTL } from './apiCache'
 
+// ==================== Timeout Utility ====================
+
+/**
+ * Wrap Tauri invoke with timeout support
+ * Note: This will reject the promise on timeout but won't cancel the backend call
+ * @param command - Tauri command name
+ * @param args - Command arguments
+ * @param timeoutMs - Timeout in milliseconds (default: 30s)
+ * @returns Promise that rejects on timeout
+ */
+async function invokeWithTimeout<T>(
+  command: string,
+  args?: Record<string, unknown>,
+  timeoutMs: number = 30000
+): Promise<T> {
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`Request timeout after ${timeoutMs}ms: ${command}`))
+    }, timeoutMs)
+  })
+
+  return Promise.race([invoke<T>(command, args), timeoutPromise])
+}
+
 // ==================== Types ====================
 
 export interface Project {
@@ -309,7 +333,8 @@ export const projectApi = {
     invoke<Project>('update_project', { id, displayName, settings }),
 
   getGitInfo: (path: string) => invoke<GitInfo>('get_project_git_info', { path }),
-  getGitDiff: (path: string) => invoke<GitDiffResponse>('get_project_git_diff', { path }),
+  getGitDiff: (path: string) =>
+    invokeWithTimeout<GitDiffResponse>('get_project_git_diff', { path }, 20000), // 20s timeout for git diff
   listFiles: (path: string, query?: string, limit?: number) =>
     invoke<FileEntry[]>('list_project_files', { path, query, limit }),
   getGitBranches: (path: string) => invoke<GitBranch[]>('get_git_branches', { path }),
@@ -421,7 +446,7 @@ export const threadApi = {
     }),
 
   resume: (threadId: string) =>
-    invoke<ThreadResumeResponse>('resume_thread', { threadId }),
+    invokeWithTimeout<ThreadResumeResponse>('resume_thread', { threadId }, 45000), // 45s timeout for resume
 
   sendMessage: (
     threadId: string,
@@ -436,13 +461,17 @@ export const threadApi = {
       sandboxPolicy?: string
     }
   ) =>
-    invoke<TurnStartResponse>('send_message', {
-      threadId,
-      text,
-      images,
-      skills,
-      ...options,
-    }),
+    invokeWithTimeout<TurnStartResponse>(
+      'send_message',
+      {
+        threadId,
+        text,
+        images,
+        skills,
+        ...options,
+      },
+      60000 // 60s timeout for sendMessage (can involve complex processing)
+    ),
 
   interrupt: (threadId: string) =>
     invoke<void>('interrupt_turn', { threadId }),
@@ -467,10 +496,10 @@ export const threadApi = {
 
 export const snapshotApi = {
   create: (sessionId: string, projectPath: string) =>
-    invoke<Snapshot>('create_snapshot', { sessionId, projectPath }),
+    invokeWithTimeout<Snapshot>('create_snapshot', { sessionId, projectPath }, 45000), // 45s timeout for snapshot creation
 
   revert: (snapshotId: string, projectPath: string) =>
-    invoke<void>('revert_to_snapshot', { snapshotId, projectPath }),
+    invokeWithTimeout<void>('revert_to_snapshot', { snapshotId, projectPath }, 45000), // 45s timeout for snapshot revert
 
   list: (sessionId: string) =>
     invoke<Snapshot[]>('list_snapshots', { sessionId }),
@@ -542,11 +571,11 @@ export const serverApi = {
     ),
 
   startReview: (threadId: string, target?: ReviewTarget) =>
-    invoke<ReviewStartResponse>('start_review', { threadId, target }),
+    invokeWithTimeout<ReviewStartResponse>('start_review', { threadId, target }, 60000), // 60s timeout for review start
 
   // Run a local shell command (like CLI's ! prefix)
   runUserShellCommand: (threadId: string, command: string) =>
-    invoke<TurnStartResponse>('run_user_shell_command', { threadId, command }),
+    invokeWithTimeout<TurnStartResponse>('run_user_shell_command', { threadId, command }, 60000), // 60s timeout for shell commands
 }
 
 // ==================== Config API ====================
