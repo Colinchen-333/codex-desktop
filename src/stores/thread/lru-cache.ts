@@ -10,15 +10,22 @@ import { log } from '../../lib/logger'
 import { LRU_CLEANUP_BATCH_SIZE } from './constants'
 import type { LRUCacheNode } from './types'
 
+/**
+ * P1 Fix: Callback function type for eviction notifications
+ */
+export type EvictCallback<K, V> = (key: K, value: V) => void
+
 export class LRUCache<K extends string, V> {
   private cache: Map<K, LRUCacheNode<K, V>>
   private head: K | null = null
   private tail: K | null = null
   private maxSize: number
+  private onEvict?: EvictCallback<K, V> // P1 Fix: Optional eviction callback
 
-  constructor(maxSize: number) {
+  constructor(maxSize: number, onEvict?: EvictCallback<K, V>) {
     this.cache = new Map()
     this.maxSize = maxSize
+    this.onEvict = onEvict // P1 Fix: Store eviction callback
   }
 
   /** Get value by key and update access time */
@@ -82,6 +89,11 @@ export class LRUCache<K extends string, V> {
   delete(key: K): boolean {
     const node = this.cache.get(key)
     if (!node) return false
+
+    // P1 Fix: Call eviction callback if provided
+    if (this.onEvict) {
+      this.onEvict(key, node.value)
+    }
 
     // Remove from linked list
     if (node.prev) {
@@ -151,6 +163,7 @@ export class LRUCache<K extends string, V> {
   /**
    * Evict least recently used entries
    * P2: Optimized batch eviction with direct linked list manipulation
+   * P1 Fix: Now calls eviction callback for each evicted entry
    */
   private evictLRU(): void {
     if (!this.tail) return
@@ -193,8 +206,13 @@ export class LRUCache<K extends string, V> {
       this.head = null
     }
 
-    // Phase 3: Batch delete from cache Map
+    // Phase 3: Batch delete from cache Map and call eviction callbacks
     for (const key of keysToEvict) {
+      const node = this.cache.get(key)
+      // P1 Fix: Call eviction callback before deleting
+      if (node && this.onEvict) {
+        this.onEvict(key, node.value)
+      }
       this.cache.delete(key)
     }
 

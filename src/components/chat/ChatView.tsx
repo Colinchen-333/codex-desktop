@@ -85,6 +85,10 @@ export function ChatView() {
       try {
         const result = await executeCommand(text, buildCommandContext())
         if (result.handled) {
+          // P0 Fix: Restore focus after successful command execution
+          requestAnimationFrame(() => {
+            inputRef.current?.focus()
+          })
           return
         }
       } catch (error) {
@@ -97,7 +101,9 @@ export function ChatView() {
           inputRef.current.style.height = preservedHeight
         }
         // Refocus input for easy retry
-        inputRef.current?.focus()
+        requestAnimationFrame(() => {
+          inputRef.current?.focus()
+        })
         return // P1 Fix: Early return to prevent further execution
       }
     }
@@ -124,6 +130,10 @@ export function ChatView() {
       try {
         addInfoItem('Shell Command', `Running: ${shellCommand}`)
         await serverApi.runUserShellCommand(activeThread.id, shellCommand)
+        // P0 Fix: Restore focus after successful shell command
+        requestAnimationFrame(() => {
+          inputRef.current?.focus()
+        })
       } catch (error) {
         log.error(`Failed to run shell command: ${error}`, 'ChatView')
         showToast('Failed to run shell command', 'error')
@@ -134,7 +144,9 @@ export function ChatView() {
           inputRef.current.style.height = preservedHeight
         }
         // Refocus input for easy retry
-        inputRef.current?.focus()
+        requestAnimationFrame(() => {
+          inputRef.current?.focus()
+        })
       }
       return
     }
@@ -176,6 +188,11 @@ export function ChatView() {
       }
 
       await sendMessage(text, attachedImages.length > 0 ? attachedImages : undefined, skills)
+
+      // P0 Fix: Restore focus after successful message send
+      requestAnimationFrame(() => {
+        inputRef.current?.focus()
+      })
     } catch (error) {
       log.error(`Failed to send message: ${error}`, 'ChatView')
       showToast('Failed to send message. Please try again.', 'error')
@@ -186,7 +203,9 @@ export function ChatView() {
         inputRef.current.style.height = preservedHeight
       }
       // Refocus input for easy retry
-      inputRef.current?.focus()
+      requestAnimationFrame(() => {
+        inputRef.current?.focus()
+      })
     }
   }, [
     inputValue,

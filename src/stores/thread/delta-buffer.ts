@@ -67,16 +67,44 @@ function logPerformance(operation: string, startTime: number, context?: string):
 }
 
 // ==================== Operation Sequence Tracking ====================
-// Prevents race conditions when switching threads during async operations
+// P0 Fix: Per-thread operation sequence tracking to prevent race conditions
+// Each thread maintains its own sequence number, preventing conflicts when
+// switching between threads or when multiple threads are active simultaneously
 
-let operationSequence = 0
+const operationSequences = new Map<string, number>()
 
-export function getNextOperationSequence(): number {
-  return ++operationSequence
+/**
+ * Get the next operation sequence for a specific thread.
+ * Each thread has its own independent sequence counter.
+ *
+ * @param threadId - The thread ID
+ * @returns Next sequence number for this thread
+ */
+export function getNextOperationSequence(threadId: string): number {
+  const current = operationSequences.get(threadId) ?? 0
+  const next = current + 1
+  operationSequences.set(threadId, next)
+  return next
 }
 
-export function getCurrentOperationSequence(): number {
-  return operationSequence
+/**
+ * Get the current operation sequence for a specific thread.
+ *
+ * @param threadId - The thread ID
+ * @returns Current sequence number for this thread
+ */
+export function getCurrentOperationSequence(threadId: string): number {
+  return operationSequences.get(threadId) ?? 0
+}
+
+/**
+ * Clear operation sequence for a thread when it's closed.
+ * Prevents memory leaks from unbounded Map growth.
+ *
+ * @param threadId - The thread ID to clear
+ */
+export function clearOperationSequence(threadId: string): void {
+  operationSequences.delete(threadId)
 }
 
 // ==================== Thread Switch Lock ====================
@@ -230,9 +258,13 @@ export function isThreadSwitchLocked(): boolean {
 /**
  * Validates that an operation is still valid based on its sequence number.
  * Returns true if the operation should continue, false if it's stale.
+ *
+ * @param threadId - The thread ID
+ * @param opSeq - The operation sequence number to validate
+ * @returns True if operation is still valid
  */
-export function isOperationValid(opSeq: number): boolean {
-  return getCurrentOperationSequence() === opSeq
+export function isOperationValid(threadId: string, opSeq: number): boolean {
+  return getCurrentOperationSequence(threadId) === opSeq
 }
 
 // ==================== Delta Buffers ====================
@@ -240,11 +272,23 @@ export function isOperationValid(opSeq: number): boolean {
 
 export const deltaBuffers = new LRUCache<string, DeltaBuffer>(MAX_LRU_CACHE_SIZE)
 
-// Per-thread flush timers - using LRU cache to prevent unbounded growth
-export const flushTimers = new LRUCache<string, ReturnType<typeof setTimeout>>(MAX_LRU_CACHE_SIZE)
+// P1 Fix: Per-thread flush timers with automatic cleanup on eviction
+export const flushTimers = new LRUCache<string, ReturnType<typeof setTimeout>>(
+  MAX_LRU_CACHE_SIZE,
+  (threadId, timer) => {
+    clearTimeout(timer)
+    log.debug(`[LRU eviction] Cleared flush timer for thread: ${threadId}`, 'delta-buffer')
+  }
+)
 
-// Per-thread turn timeout timers - using LRU cache to prevent unbounded growth
-export const turnTimeoutTimers = new LRUCache<string, ReturnType<typeof setTimeout>>(MAX_LRU_CACHE_SIZE)
+// P1 Fix: Per-thread turn timeout timers with automatic cleanup on eviction
+export const turnTimeoutTimers = new LRUCache<string, ReturnType<typeof setTimeout>>(
+  MAX_LRU_CACHE_SIZE,
+  (threadId, timer) => {
+    clearTimeout(timer)
+    log.debug(`[LRU eviction] Cleared turn timeout timer for thread: ${threadId}`, 'delta-buffer')
+  }
+)
 
 // Set of threads currently being closed - prevents race conditions
 // where delta events might recreate buffers during closeThread
@@ -394,10 +438,17 @@ function scheduleIdleFlush(): void {
 
 // ==================== Buffer Creation and Management ====================
 
-export function createEmptyDeltaBuffer(): DeltaBuffer {
+/**
+ * Create an empty delta buffer for a specific thread.
+ * P0 Fix: Now accepts threadId to set proper operation sequence.
+ *
+ * @param threadId - The thread ID
+ * @returns New empty delta buffer
+ */
+export function createEmptyDeltaBuffer(threadId: string): DeltaBuffer {
   return {
     turnId: null,
-    operationSeq: getCurrentOperationSequence(),
+    operationSeq: getCurrentOperationSequence(threadId),
     agentMessages: new Map(),
     commandOutputs: new Map(),
     fileChangeOutputs: new Map(),
@@ -417,7 +468,8 @@ export function getDeltaBuffer(threadId: string): DeltaBuffer | null {
   let buffer = deltaBuffers.get(threadId)
 
   if (!buffer) {
-    buffer = createEmptyDeltaBuffer()
+    // P0 Fix: Pass threadId to create buffer with correct sequence
+    buffer = createEmptyDeltaBuffer(threadId)
     deltaBuffers.set(threadId, buffer)
   }
   return buffer
@@ -427,7 +479,8 @@ export function clearDeltaBuffer(threadId: string): void {
   const buffer = deltaBuffers.get(threadId)
   if (buffer) {
     buffer.turnId = null
-    buffer.operationSeq = getCurrentOperationSequence()
+    // P0 Fix: Pass threadId to get correct sequence
+    buffer.operationSeq = getCurrentOperationSequence(threadId)
     buffer.agentMessages.clear()
     buffer.commandOutputs.clear()
     buffer.fileChangeOutputs.clear()
@@ -688,10 +741,10 @@ export function scheduleFlush(threadId: string, flushFn: () => void, immediate =
   // If buffer is null, thread is closing - don't schedule flush
   if (!buffer) return
 
-  // P0 Enhancement: Validate operation sequence before scheduling
-  if (!isOperationValid(buffer.operationSeq)) {
+  // P0 Fix: Pass threadId to validate operation sequence
+  if (!isOperationValid(threadId, buffer.operationSeq)) {
     log.debug(
-      `[scheduleFlush] Stale operation (buffer: ${buffer.operationSeq}, current: ${getCurrentOperationSequence()}), skipping flush for thread: ${threadId}`,
+      `[scheduleFlush] Stale operation (buffer: ${buffer.operationSeq}, current: ${getCurrentOperationSequence(threadId)}), skipping flush for thread: ${threadId}`,
       'delta-buffer'
     )
     return
@@ -769,10 +822,11 @@ export function scheduleFlush(threadId: string, flushFn: () => void, immediate =
 
 /**
  * Perform full cleanup for a specific thread's turn.
- * Clears all timers, buffers, and pending operations for the thread.
+ * Clears all timers, buffers, pending operations, and operation sequences.
  *
  * P1 Fix: Added idempotency protection to prevent duplicate cleanups.
  * Multiple calls within a short time window (1000ms) are safely ignored.
+ * P0 Fix: Now also clears operation sequence to prevent memory leaks.
  */
 export function performFullTurnCleanup(threadId: string): void {
   // P1 Fix: Check if cleanup was recently performed
@@ -791,6 +845,7 @@ export function performFullTurnCleanup(threadId: string): void {
   // Execute cleanup operations
   clearDeltaBuffer(threadId)      // Clears buffer + flush timer + pending flush
   clearTurnTimeout(threadId)      // Clears turn timeout timer separately
+  clearOperationSequence(threadId) // P0 Fix: Clear operation sequence to prevent memory leak
 
   log.debug(
     `[performFullTurnCleanup] Completed cleanup for thread ${threadId}`,
