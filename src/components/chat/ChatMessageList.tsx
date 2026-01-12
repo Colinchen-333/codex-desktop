@@ -9,8 +9,8 @@
  * - RAF-based scroll handling
  */
 import React, { memo, useMemo, useDeferredValue, useCallback, useRef, useEffect } from 'react'
-import { List } from 'react-window'
-import type { ListImperativeAPI } from 'react-window'
+import { List, useDynamicRowHeight } from 'react-window'
+import type { ListImperativeAPI, DynamicRowHeight } from 'react-window'
 import { useThreadStore, selectFocusedThread } from '../../stores/thread'
 import { isUserMessageContent, isAgentMessageContent } from '../../lib/typeGuards'
 import { MessageItem } from './messages'
@@ -29,7 +29,8 @@ import {
 } from './useMessageListHooks'
 
 /**
- * Virtualized list row component with ResizeObserver support
+ * Virtualized list row component with dynamic height support
+ * Uses react-window 2.x's useDynamicRowHeight for automatic height tracking
  */
 const VirtualizedRow = memo(function VirtualizedRow({
   index,
@@ -37,26 +38,35 @@ const VirtualizedRow = memo(function VirtualizedRow({
   itemOrder,
   items,
   ariaAttributes,
-  observeElement,
-}: VirtualizedRowProps & { observeElement?: (id: string, element: HTMLElement | null) => void }) {
+  dynamicHeight,
+}: VirtualizedRowProps & { dynamicHeight?: DynamicRowHeight }) {
   const id = itemOrder[index]
   const item = items[id]
   const rowRef = useRef<HTMLDivElement>(null)
 
-  // Register element for ResizeObserver
+  // Register element for dynamic height observation via react-window's built-in system
   useEffect(() => {
-    if (observeElement && id) {
-      observeElement(id, rowRef.current)
-      return () => observeElement(id, null)
+    const element = rowRef.current
+    if (dynamicHeight && element) {
+      // observeRowElements returns a cleanup function
+      const cleanup = dynamicHeight.observeRowElements([element])
+      return cleanup
     }
-  }, [observeElement, id])
+  }, [dynamicHeight, index])
+
+  // Set data attribute for react-window's height observation
+  useEffect(() => {
+    if (rowRef.current) {
+      rowRef.current.dataset.index = String(index)
+    }
+  }, [index])
 
   if (!item) {
     return <div style={style} {...ariaAttributes} />
   }
 
   return (
-    <div ref={rowRef} style={style} className="py-1.5" {...ariaAttributes}>
+    <div ref={rowRef} style={style} className="py-1.5" data-index={index} {...ariaAttributes}>
       <MessageItem key={id} item={item} />
     </div>
   )
@@ -116,8 +126,15 @@ export default memo(function ChatMessageList({
     })
   }, [itemOrder, items, deferredFilterText])
 
-  // Use optimized cache hook
-  const { getItemSize, warmupCache, observeElement } = useItemSizeCache(items, filteredItemOrder)
+  // Use react-window's built-in dynamic height support
+  // This properly notifies the List when heights change, fixing the overlap issue
+  const dynamicHeight = useDynamicRowHeight({
+    defaultRowHeight: DEFAULT_ITEM_HEIGHT * 3, // Same as defaultHeight prop
+    key: focusedThread?.thread?.id, // Reset when thread changes
+  })
+
+  // Keep useItemSizeCache for warmup cache and performance metrics only
+  const { warmupCache } = useItemSizeCache(items, filteredItemOrder)
 
   // Auto-scroll behavior
   const { setAutoScroll, trackScrollPosition } = useAutoScroll(
@@ -158,16 +175,16 @@ export default memo(function ChatMessageList({
 
   // Memoize row props to prevent unnecessary re-renders
   const rowProps = useMemo(
-    () => ({ itemOrder: filteredItemOrder, items, observeElement }),
-    [filteredItemOrder, items, observeElement]
+    () => ({ itemOrder: filteredItemOrder, items, dynamicHeight }),
+    [filteredItemOrder, items, dynamicHeight]
   )
 
-  // Create row component with observeElement
+  // Create row component with dynamic height support
   const RowComponent = useCallback(
     (props: VirtualizedRowProps) => (
-      <VirtualizedRow {...props} observeElement={observeElement} />
+      <VirtualizedRow {...props} dynamicHeight={dynamicHeight} />
     ),
-    [observeElement]
+    [dynamicHeight]
   )
 
   return (
@@ -185,10 +202,10 @@ export default memo(function ChatMessageList({
     >
       <div className="mx-auto max-w-3xl h-full">
         {filteredItemOrder.length > 0 ? (
-          <List<VirtualizedRowCustomProps & { observeElement?: typeof observeElement }>
+          <List<VirtualizedRowCustomProps & { dynamicHeight?: DynamicRowHeight }>
             listRef={virtualListRef}
             rowCount={filteredItemOrder.length}
-            rowHeight={getItemSize}
+            rowHeight={dynamicHeight}
             overscanCount={OVERSCAN_COUNT}
             rowProps={rowProps}
             defaultHeight={DEFAULT_ITEM_HEIGHT * 3}
