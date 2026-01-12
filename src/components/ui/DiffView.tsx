@@ -1,4 +1,4 @@
-import { useState, memo, useMemo, useCallback } from 'react'
+import { useState, memo, useMemo } from 'react'
 import { Check, X } from 'lucide-react'
 import { List } from 'react-window'
 import { cn } from '../../lib/utils'
@@ -168,6 +168,49 @@ interface DiffComponentProps {
   hunkStates?: HunkAction[]
 }
 
+interface HunkActionsProps {
+  hunkIndex: number
+  hunkState: HunkAction
+  enableHunkActions?: boolean
+  onHunkAction?: (hunkIndex: number, action: HunkAction) => void
+}
+
+function HunkActions({ hunkIndex, hunkState, enableHunkActions, onHunkAction }: HunkActionsProps) {
+  if (!enableHunkActions || !onHunkAction) return null
+
+  return (
+    <div className="flex items-center gap-1">
+      {hunkState !== 'accept' && (
+        <button
+          onClick={() => onHunkAction(hunkIndex, 'accept')}
+          className="p-1 rounded hover:bg-green-200 dark:hover:bg-green-900/50 text-green-600 dark:text-green-400"
+          title="Accept this change"
+        >
+          <Check size={14} />
+        </button>
+      )}
+      {hunkState !== 'reject' && (
+        <button
+          onClick={() => onHunkAction(hunkIndex, 'reject')}
+          className="p-1 rounded hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400"
+          title="Reject this change"
+        >
+          <X size={14} />
+        </button>
+      )}
+      {hunkState !== 'pending' && (
+        <button
+          onClick={() => onHunkAction(hunkIndex, 'pending')}
+          className="text-[10px] px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80"
+          title="Reset"
+        >
+          Reset
+        </button>
+      )}
+    </div>
+  )
+}
+
 // 虚拟化行组件（Unified 模式）
 const VirtualizedDiffLine = memo(function VirtualizedDiffLine({
   index,
@@ -300,37 +343,12 @@ function UnifiedDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }
               {/* Hunk header */}
               <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50 flex items-center justify-between">
                 <span>@@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</span>
-                {enableHunkActions && onHunkAction && (
-                  <div className="flex items-center gap-1">
-                    {hunkState !== 'accept' && (
-                      <button
-                        onClick={() => onHunkAction(hunkIndex, 'accept')}
-                        className="p-1 rounded hover:bg-green-200 dark:hover:bg-green-900/50 text-green-600 dark:text-green-400"
-                        title="Accept this change"
-                      >
-                        <Check size={14} />
-                      </button>
-                    )}
-                    {hunkState !== 'reject' && (
-                      <button
-                        onClick={() => onHunkAction(hunkIndex, 'reject')}
-                        className="p-1 rounded hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400"
-                        title="Reject this change"
-                      >
-                        <X size={14} />
-                      </button>
-                    )}
-                    {hunkState !== 'pending' && (
-                      <button
-                        onClick={() => onHunkAction(hunkIndex, 'pending')}
-                        className="text-[10px] px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80"
-                        title="Reset"
-                      >
-                        Reset
-                      </button>
-                    )}
-                  </div>
-                )}
+                <HunkActions
+                  hunkIndex={hunkIndex}
+                  hunkState={hunkState}
+                  enableHunkActions={enableHunkActions}
+                  onHunkAction={onHunkAction}
+                />
               </div>
               {/* Lines */}
               {hunk.lines.map((line, lineIndex) => (
@@ -378,12 +396,6 @@ function UnifiedDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }
       {hunks.map((hunk, hunkIndex) => {
         const hunkState = hunkStates[hunkIndex] || 'pending'
 
-        // eslint-disable-next-line react-hooks/rules-of-hooks
-        const RowComponent = useCallback(
-          (props: UnifiedDiffRowProps) => <VirtualizedDiffLine {...props} />,
-          []
-        )
-
         return (
           <div
             key={hunkIndex}
@@ -395,45 +407,20 @@ function UnifiedDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }
             {/* Hunk header */}
             <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50 flex items-center justify-between">
               <span>@@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</span>
-              {enableHunkActions && onHunkAction && (
-                <div className="flex items-center gap-1">
-                  {hunkState !== 'accept' && (
-                    <button
-                      onClick={() => onHunkAction(hunkIndex, 'accept')}
-                      className="p-1 rounded hover:bg-green-200 dark:hover:bg-green-900/50 text-green-600 dark:text-green-400"
-                      title="Accept this change"
-                    >
-                      <Check size={14} />
-                    </button>
-                  )}
-                  {hunkState !== 'reject' && (
-                    <button
-                      onClick={() => onHunkAction(hunkIndex, 'reject')}
-                      className="p-1 rounded hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400"
-                      title="Reject this change"
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                  {hunkState !== 'pending' && (
-                    <button
-                      onClick={() => onHunkAction(hunkIndex, 'pending')}
-                      className="text-[10px] px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80"
-                      title="Reset"
-                    >
-                      Reset
-                    </button>
-                  )}
-                </div>
-              )}
+              <HunkActions
+                hunkIndex={hunkIndex}
+                hunkState={hunkState}
+                enableHunkActions={enableHunkActions}
+                onHunkAction={onHunkAction}
+              />
             </div>
 
-            {/* 虚拟化行列表 */}
+            {/* 虚拟化行列表 - 直接使用 memo 化的组件，无需 useCallback */}
             <List<UnifiedDiffRowCustomProps>
               defaultHeight={Math.min(hunk.lines.length * DIFF_LINE_HEIGHT, 600)}
               rowCount={hunk.lines.length}
               rowHeight={DIFF_LINE_HEIGHT}
-              rowComponent={RowComponent}
+              rowComponent={VirtualizedDiffLine as (props: UnifiedDiffRowProps) => React.ReactElement}
               rowProps={{ lines: hunk.lines, hunkIndex }}
               overscanCount={10}
             />
@@ -509,37 +496,12 @@ function SplitDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }: 
               <div>
                 <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 border-y border-border/50 flex items-center justify-between">
                   <span>+{hunk.newStart},{hunk.newLines}</span>
-                  {enableHunkActions && onHunkAction && (
-                    <div className="flex items-center gap-1">
-                      {hunkState !== 'accept' && (
-                        <button
-                          onClick={() => onHunkAction(hunkIndex, 'accept')}
-                          className="p-1 rounded hover:bg-green-200 dark:hover:bg-green-900/50 text-green-600 dark:text-green-400"
-                          title="Accept this change"
-                        >
-                          <Check size={14} />
-                        </button>
-                      )}
-                      {hunkState !== 'reject' && (
-                        <button
-                          onClick={() => onHunkAction(hunkIndex, 'reject')}
-                          className="p-1 rounded hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400"
-                          title="Reject this change"
-                        >
-                          <X size={14} />
-                        </button>
-                      )}
-                      {hunkState !== 'pending' && (
-                        <button
-                          onClick={() => onHunkAction(hunkIndex, 'pending')}
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80"
-                          title="Reset"
-                        >
-                          Reset
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  <HunkActions
+                    hunkIndex={hunkIndex}
+                    hunkState={hunkState}
+                    enableHunkActions={enableHunkActions}
+                    onHunkAction={onHunkAction}
+                  />
                 </div>
                 {hunk.lines
                   .filter((l) => l.type !== 'remove')
@@ -581,12 +543,6 @@ function SplitDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }: 
         const newLines = hunk.lines.filter((l) => l.type !== 'remove')
         const maxLines = Math.max(oldLines.length, newLines.length)
 
-        // eslint-disable-next-line react-hooks/rules-of-hooks
-        const RowComponent = useCallback(
-          (props: SplitDiffRowProps) => <VirtualizedSplitLine {...props} />,
-          []
-        )
-
         return (
           <div
             key={hunkIndex}
@@ -602,46 +558,21 @@ function SplitDiff({ hunks, enableHunkActions, onHunkAction, hunkStates = [] }: 
               </div>
               <div className="bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 px-3 py-1 flex items-center justify-between">
                 <span>+{hunk.newStart},{hunk.newLines}</span>
-                {enableHunkActions && onHunkAction && (
-                  <div className="flex items-center gap-1">
-                    {hunkState !== 'accept' && (
-                      <button
-                        onClick={() => onHunkAction(hunkIndex, 'accept')}
-                        className="p-1 rounded hover:bg-green-200 dark:hover:bg-green-900/50 text-green-600 dark:text-green-400"
-                        title="Accept this change"
-                      >
-                        <Check size={14} />
-                      </button>
-                    )}
-                    {hunkState !== 'reject' && (
-                      <button
-                        onClick={() => onHunkAction(hunkIndex, 'reject')}
-                        className="p-1 rounded hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400"
-                        title="Reject this change"
-                      >
-                        <X size={14} />
-                      </button>
-                    )}
-                    {hunkState !== 'pending' && (
-                      <button
-                        onClick={() => onHunkAction(hunkIndex, 'pending')}
-                        className="text-[10px] px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80"
-                        title="Reset"
-                      >
-                        Reset
-                      </button>
-                    )}
-                  </div>
-                )}
+                <HunkActions
+                  hunkIndex={hunkIndex}
+                  hunkState={hunkState}
+                  enableHunkActions={enableHunkActions}
+                  onHunkAction={onHunkAction}
+                />
               </div>
             </div>
 
-            {/* 虚拟化行列表 */}
+            {/* 虚拟化行列表 - 直接使用 memo 化的组件，无需 useCallback */}
             <List<SplitDiffRowCustomProps>
               defaultHeight={Math.min(maxLines * DIFF_LINE_HEIGHT, 600)}
               rowCount={maxLines}
               rowHeight={DIFF_LINE_HEIGHT}
-              rowComponent={RowComponent}
+              rowComponent={VirtualizedSplitLine as (props: SplitDiffRowProps) => React.ReactElement}
               rowProps={{ oldLines, newLines, hunkIndex }}
               overscanCount={10}
             />

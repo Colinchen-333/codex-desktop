@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { Sun, Moon, Monitor } from 'lucide-react'
 import { cn } from '../../../lib/utils'
-import { useTheme } from '../../../lib/theme'
+import { useTheme } from '../../../hooks/useTheme'
 
 const THEME_OPTIONS = [
   { value: 'light' as const, label: 'Light', icon: Sun },

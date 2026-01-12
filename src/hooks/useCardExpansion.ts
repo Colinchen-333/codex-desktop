@@ -32,7 +32,7 @@
  * }
  */
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback } from 'react'
 
 /**
  * 卡片展开状态配置选项
@@ -201,7 +201,7 @@ export function useCardExpansion(
   /**
    * 展开的卡片数量
    */
-  const expandedCount = useMemo(() => expandedIds.length, [expandedIds])
+  const expandedCount = expandedIds.length
 
   return {
     isExpanded,

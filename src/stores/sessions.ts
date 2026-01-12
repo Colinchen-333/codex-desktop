@@ -114,6 +114,16 @@ function generateRollbackId(): string {
   return `rollback-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 }
 
+function cloneSessionsSnapshot(sessions: SessionMetadata[]): SessionMetadata[] {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(sessions)
+  }
+  return sessions.map((session) => ({
+    ...session,
+    tags: session.tags ? [...session.tags] : session.tags,
+  }))
+}
+
 let fetchSessionsSeq = 0
 let searchSessionsSeq = 0
 const statusUpdateSeq = new Map<string, number>()
@@ -133,18 +143,26 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
 
   // P1 Fix: Event handlers defined inside the store factory
   const handleStatusUpdate = ({ sessionId, status }: { sessionId: string; status: SessionStatus }) => {
-    void get().updateSessionStatus(sessionId, status)
+    void get()
+      .updateSessionStatus(sessionId, status)
+      .catch((error) => {
+        log.error(`Failed to handle session status update: ${error}`, 'sessions')
+      })
   }
 
   const handleFirstMessage = ({ sessionId, firstMessage }: { sessionId: string; firstMessage: string }) => {
-    void get().setSessionFirstMessage(sessionId, firstMessage)
+    void get()
+      .setSessionFirstMessage(sessionId, firstMessage)
+      .catch((error) => {
+        log.error(`Failed to handle session first message update: ${error}`, 'sessions')
+      })
   }
 
   const initEventListeners = () => {
-    // Prevent duplicate initialization
     if (cleanupHandlers.length > 0) {
-      log.warn('[SessionsStore] Event listeners already initialized, skipping', 'sessions')
-      return
+      log.warn('[SessionsStore] Event listeners already initialized, reinitializing', 'sessions')
+      cleanupHandlers.forEach((cleanup) => cleanup())
+      cleanupHandlers = []
     }
 
     eventBus.on('session:status-update', handleStatusUpdate)
@@ -390,7 +408,7 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
     const newRecord: RollbackRecord = {
       id,
       timestamp: Date.now(),
-      previousSessions: [...sessions], // 深拷贝当前状态
+      previousSessions: cloneSessionsSnapshot(sessions), // 深拷贝当前状态
       description,
     }
 
@@ -527,3 +545,9 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
   },
   }
 })
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    useSessionsStore.getState().cleanup()
+  })
+}

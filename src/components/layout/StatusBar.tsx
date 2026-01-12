@@ -59,7 +59,11 @@ export function StatusBar() {
     }
 
     window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    const cleanup = () => window.removeEventListener('keydown', handleKeyDown)
+    if (import.meta.hot) {
+      import.meta.hot.dispose(cleanup)
+    }
+    return cleanup
   }, [])
 
   return (
@@ -93,4 +97,3 @@ export function StatusBar() {
     </>
   )
 }
-

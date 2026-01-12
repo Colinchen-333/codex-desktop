@@ -12,6 +12,13 @@
  */
 
 import type { ThreadState, SingleThreadState, AnyThreadItem, ThreadItemType } from './types'
+import { defaultTokenUsage, defaultTurnTiming } from './utils'
+
+const EMPTY_ITEMS: Record<string, AnyThreadItem> = {}
+const EMPTY_ITEM_ORDER: string[] = []
+const EMPTY_PENDING_APPROVALS: ThreadState['pendingApprovals'] = []
+const EMPTY_QUEUED_MESSAGES: ThreadState['queuedMessages'] = []
+const EMPTY_SESSION_OVERRIDES: ThreadState['sessionOverrides'] = {}
 
 // ==================== Thread State Selectors ====================
 
@@ -99,7 +106,7 @@ export function selectThreadError(state: ThreadState): string | null {
  */
 export function selectItems(state: ThreadState): Record<string, AnyThreadItem> {
   const focusedThread = selectFocusedThread(state)
-  return focusedThread?.items ?? {}
+  return focusedThread?.items ?? EMPTY_ITEMS
 }
 
 /**
@@ -107,7 +114,7 @@ export function selectItems(state: ThreadState): Record<string, AnyThreadItem> {
  */
 export function selectItemOrder(state: ThreadState): string[] {
   const focusedThread = selectFocusedThread(state)
-  return focusedThread?.itemOrder ?? []
+  return focusedThread?.itemOrder ?? EMPTY_ITEM_ORDER
 }
 
 /**
@@ -175,7 +182,7 @@ export function selectFileChanges(state: ThreadState): AnyThreadItem[] {
  */
 export function selectPendingApprovals(state: ThreadState): ThreadState['pendingApprovals'] {
   const focusedThread = selectFocusedThread(state)
-  return focusedThread?.pendingApprovals ?? []
+  return focusedThread?.pendingApprovals ?? EMPTY_PENDING_APPROVALS
 }
 
 /**
@@ -208,7 +215,7 @@ export function selectPendingApprovalsByType(type: 'command' | 'fileChange') {
  */
 export function selectQueuedMessages(state: ThreadState): ThreadState['queuedMessages'] {
   const focusedThread = selectFocusedThread(state)
-  return focusedThread?.queuedMessages ?? []
+  return focusedThread?.queuedMessages ?? EMPTY_QUEUED_MESSAGES
 }
 
 /**
@@ -232,13 +239,7 @@ export function selectHasQueuedMessages(state: ThreadState): boolean {
  */
 export function selectTokenUsage(state: ThreadState): ThreadState['tokenUsage'] {
   const focusedThread = selectFocusedThread(state)
-  return focusedThread?.tokenUsage ?? {
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
-    modelContextWindow: null,
-  }
+  return focusedThread?.tokenUsage ?? defaultTokenUsage
 }
 
 /**
@@ -264,10 +265,7 @@ export function selectContextWindowUsage(state: ThreadState): number | null {
  */
 export function selectTurnTiming(state: ThreadState): ThreadState['turnTiming'] {
   const focusedThread = selectFocusedThread(state)
-  return focusedThread?.turnTiming ?? {
-    startedAt: null,
-    completedAt: null,
-  }
+  return focusedThread?.turnTiming ?? defaultTurnTiming
 }
 
 /**
@@ -288,7 +286,7 @@ export function selectTurnDuration(state: ThreadState): number | null {
  */
 export function selectSessionOverrides(state: ThreadState): ThreadState['sessionOverrides'] {
   const focusedThread = selectFocusedThread(state)
-  return focusedThread?.sessionOverrides ?? {}
+  return focusedThread?.sessionOverrides ?? EMPTY_SESSION_OVERRIDES
 }
 
 /**

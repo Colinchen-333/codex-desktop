@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
+import { useEffect, useRef, useState, useMemo, useCallback, useReducer } from 'react'
 import { useProjectsStore } from '../../stores/projects'
-import { useThreadStore } from '../../stores/thread'
+import { useThreadStore, selectFocusedThread } from '../../stores/thread'
 import { useSessionsStore } from '../../stores/sessions'
 import {
   useSettingsStore,
@@ -16,10 +16,170 @@ import { log } from '../../lib/logger'
 // Timeout for resume operations to prevent permanent blocking
 const RESUME_TIMEOUT_MS = 30000
 
-// Interface for queued session switches
+// ==================== Session Switch State Machine ====================
+// Explicit state machine for session switching to replace implicit ref flags
+
+/**
+ * Session switch states
+ * - idle: No switch in progress
+ * - transitioning: Switch initiated, checking if session is loaded
+ * - resuming: Loading unloaded session from backend
+ */
+type SessionStatus = 'idle' | 'transitioning' | 'resuming'
+
+/**
+ * Queued session switch with timestamp for staleness detection
+ */
 interface QueuedSessionSwitch {
   sessionId: string
   timestamp: number
+}
+
+/**
+ * Session switch state machine state
+ */
+interface SessionSwitchState {
+  status: SessionStatus
+  targetSessionId: string | null
+  prevSessionId: string | null
+  queue: QueuedSessionSwitch[]
+  timeoutId: ReturnType<typeof setTimeout> | null
+}
+
+/**
+ * Session switch events
+ */
+type SessionSwitchEvent =
+  | { type: 'SELECT_SESSION'; sessionId: string }
+  | { type: 'SESSION_ALREADY_LOADED' }
+  | { type: 'START_RESUME'; timeoutId: ReturnType<typeof setTimeout> }
+  | { type: 'RESUME_COMPLETE'; sessionId: string }
+  | { type: 'RESUME_FAILED' }
+  | { type: 'RESUME_TIMEOUT' }
+  | { type: 'PROCESS_QUEUE' }
+  | { type: 'CLEAR_SESSION' }
+  | { type: 'CLEANUP' }
+
+/**
+ * Initial state for session switch state machine
+ */
+const initialSessionState: SessionSwitchState = {
+  status: 'idle',
+  targetSessionId: null,
+  prevSessionId: null,
+  queue: [],
+  timeoutId: null,
+}
+
+/**
+ * Session switch reducer - handles all state transitions
+ */
+function sessionSwitchReducer(
+  state: SessionSwitchState,
+  event: SessionSwitchEvent
+): SessionSwitchState {
+  switch (event.type) {
+    case 'SELECT_SESSION': {
+      const { sessionId } = event
+
+      // Same session as previous - no-op
+      if (state.prevSessionId === sessionId) {
+        return state
+      }
+
+      // If already transitioning/resuming, queue the request (with deduplication)
+      if (state.status !== 'idle') {
+        const filteredQueue = state.queue.filter((q) => q.sessionId !== sessionId)
+        return {
+          ...state,
+          queue: [...filteredQueue, { sessionId, timestamp: Date.now() }],
+        }
+      }
+
+      // Start transitioning
+      return {
+        ...state,
+        status: 'transitioning',
+        targetSessionId: sessionId,
+      }
+    }
+
+    case 'SESSION_ALREADY_LOADED': {
+      // Session was already loaded, transition complete
+      return {
+        ...state,
+        status: 'idle',
+        prevSessionId: state.targetSessionId,
+      }
+    }
+
+    case 'START_RESUME': {
+      // Starting async resume operation
+      return {
+        ...state,
+        status: 'resuming',
+        timeoutId: event.timeoutId,
+      }
+    }
+
+    case 'RESUME_COMPLETE': {
+      // Resume succeeded
+      return {
+        ...state,
+        status: 'idle',
+        prevSessionId: event.sessionId,
+        targetSessionId: null,
+        timeoutId: null,
+      }
+    }
+
+    case 'RESUME_FAILED':
+    case 'RESUME_TIMEOUT': {
+      // Resume failed or timed out - return to idle
+      return {
+        ...state,
+        status: 'idle',
+        targetSessionId: null,
+        timeoutId: null,
+      }
+    }
+
+    case 'PROCESS_QUEUE': {
+      // Process next queued session switch
+      if (state.queue.length === 0 || state.status !== 'idle') {
+        return state
+      }
+
+      const [next, ...rest] = state.queue
+      return {
+        ...state,
+        status: 'transitioning',
+        targetSessionId: next.sessionId,
+        queue: rest,
+      }
+    }
+
+    case 'CLEAR_SESSION': {
+      // Session deselected
+      return {
+        ...state,
+        status: 'idle',
+        targetSessionId: null,
+        prevSessionId: null,
+      }
+    }
+
+    case 'CLEANUP': {
+      // Component unmounting - clear everything
+      return {
+        ...initialSessionState,
+        timeoutId: null,
+      }
+    }
+
+    default:
+      return state
+  }
 }
 
 export function MainArea() {
@@ -27,16 +187,22 @@ export function MainArea() {
 
   // Multi-session state - only subscribe to what we need for rendering
   const threads = useThreadStore((state) => state.threads)
-  const activeThread = useThreadStore((state) => state.activeThread)
+  // Use proper selector instead of getter to avoid potential re-render loops
+  const focusedThreadState = useThreadStore(selectFocusedThread)
+  const activeThread = focusedThreadState?.thread ?? null
 
   const selectedSessionId = useSessionsStore((state) => state.selectedSessionId)
 
-  // Track previous session ID to detect switches
-  const prevSessionIdRef = useRef<string | null>(null)
+  // Session switch state machine
+  const [sessionState, dispatch] = useReducer(sessionSwitchReducer, initialSessionState)
 
-  // Session switch queue to prevent race conditions
-  const sessionSwitchQueueRef = useRef<QueuedSessionSwitch[]>([])
-  const isTransitioningRef = useRef(false)
+  // Ref to hold current state for async operations (avoids stale closure)
+  const sessionStateRef = useRef(sessionState)
+
+  // Sync ref with state in effect to avoid render-time ref update
+  useEffect(() => {
+    sessionStateRef.current = sessionState
+  }, [sessionState])
 
   // Load Git info when project is selected
   useEffect(() => {
@@ -50,174 +216,95 @@ export function MainArea() {
     }
   }, [selectedProjectId])
 
-  // Track if we're resuming to prevent duplicate calls
-  const isResumingRef = useRef(false)
-  // Track the target session ID for microtask validation
-  const targetSessionIdRef = useRef<string | null>(null)
-  // Timeout ref for auto-reset of isResumingRef
-  const resumeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // Cleanup timeout and queue on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (resumeTimeoutRef.current) {
-        clearTimeout(resumeTimeoutRef.current)
-        resumeTimeoutRef.current = null
+      // Clear timeout if any
+      if (sessionStateRef.current.timeoutId) {
+        clearTimeout(sessionStateRef.current.timeoutId)
       }
-      // Clear session switch queue
-      sessionSwitchQueueRef.current = []
-      isTransitioningRef.current = false
+      dispatch({ type: 'CLEANUP' })
     }
   }, [])
 
-  // Resume thread when session is selected or switched
+  // Process session switch when state machine enters 'transitioning'
   useEffect(() => {
-    // Skip if no session selected
-    if (!selectedSessionId) {
-      prevSessionIdRef.current = null
-      targetSessionIdRef.current = null
+    const { status, targetSessionId } = sessionState
+
+    // Only process when transitioning with a target
+    if (status !== 'transitioning' || !targetSessionId) {
       return
     }
 
-    // Check if session changed
-    if (prevSessionIdRef.current === selectedSessionId) {
-      // Same session, no need to do anything
-      return
-    }
+    const processTransition = async () => {
+      const threadState = useThreadStore.getState()
+      const isLoaded = !!threadState.threads[targetSessionId]
 
-    // Add to switch queue if we're already transitioning
-    if (isTransitioningRef.current) {
-      const queueEntry: QueuedSessionSwitch = {
-        sessionId: selectedSessionId,
-        timestamp: Date.now(),
+      if (isLoaded) {
+        // Session already loaded, just switch to it
+        if (threadState.focusedThreadId !== targetSessionId) {
+          threadState.switchThread(targetSessionId)
+        }
+        dispatch({ type: 'SESSION_ALREADY_LOADED' })
+        return
       }
 
-      // Remove any existing entries for the same session (deduplication)
-      sessionSwitchQueueRef.current = sessionSwitchQueueRef.current.filter(
-        (entry) => entry.sessionId !== selectedSessionId
-      )
-      sessionSwitchQueueRef.current.push(queueEntry)
+      // Check if we can add more sessions
+      if (!threadState.canAddSession()) {
+        log.warn(`[MainArea] Maximum sessions reached, cannot resume: ${targetSessionId}`, 'MainArea')
+        dispatch({ type: 'RESUME_FAILED' })
+        return
+      }
 
-      log.debug(
-        `[MainArea] Session ${selectedSessionId} queued for switch (queue size: ${sessionSwitchQueueRef.current.length})`,
-        'MainArea'
-      )
-      return
-    }
+      // Start resume with timeout protection
+      const timeoutId = setTimeout(() => {
+        log.warn('[MainArea] Resume operation timed out after 30s', 'MainArea')
+        dispatch({ type: 'RESUME_TIMEOUT' })
+      }, RESUME_TIMEOUT_MS)
 
-    // Process the session switch
-    const processSessionSwitch = async (sessionId: string) => {
-      // Set transition lock
-      isTransitioningRef.current = true
+      dispatch({ type: 'START_RESUME', timeoutId })
 
       try {
-        // Check if this session is already loaded in threads
-        const threadState = useThreadStore.getState()
-        const isLoaded = !!threadState.threads[sessionId]
+        await useThreadStore.getState().resumeThread(targetSessionId)
 
-        if (isLoaded) {
-          // Session already loaded, just switch to it
-          if (threadState.focusedThreadId !== sessionId) {
-            threadState.switchThread(sessionId)
-          }
-          prevSessionIdRef.current = sessionId
-          targetSessionIdRef.current = sessionId
-          return
-        }
-
-        // Track the target session while resuming
-        targetSessionIdRef.current = sessionId
-
-        // Skip if already resuming
-        if (isResumingRef.current) {
-          return
-        }
-
-        // Check if we can add more sessions using getState()
-        if (!useThreadStore.getState().canAddSession()) {
-          console.warn('[MainArea] Maximum sessions reached, cannot resume:', sessionId)
-          return
-        }
-
-        // Helper function to start resume with timeout protection
-        const startResumeWithTimeout = (targetSessionId: string) => {
-          // Clear any existing timeout
-          if (resumeTimeoutRef.current) {
-            clearTimeout(resumeTimeoutRef.current)
-            resumeTimeoutRef.current = null
-          }
-
-          isResumingRef.current = true
-
-          let timeoutId: ReturnType<typeof setTimeout> | null = null
-          const timeoutPromise = new Promise<boolean>((resolve) => {
-            timeoutId = setTimeout(() => {
-              if (isResumingRef.current) {
-                console.warn('[MainArea] Resume operation timed out after 30s, releasing transition lock')
-                isResumingRef.current = false
-              }
-              resolve(false)
-            }, RESUME_TIMEOUT_MS)
-          })
-
-          resumeTimeoutRef.current = timeoutId
-
-          // Use getState() to call resumeThread
-          const resumePromise = useThreadStore.getState().resumeThread(targetSessionId)
-            .then(() => true)
-            .catch((error) => {
-              logError(error, {
-                context: 'MainArea',
-                source: 'layout',
-                details: 'Failed to resume session'
-              })
-              return false
-            })
-            .finally(() => {
-              isResumingRef.current = false
-              if (timeoutId) {
-                clearTimeout(timeoutId)
-              }
-              if (resumeTimeoutRef.current === timeoutId) {
-                resumeTimeoutRef.current = null
-              }
-            })
-
-          return Promise.race([resumePromise, timeoutPromise])
-        }
-
-        // Resume the selected session
-        const didResume = await startResumeWithTimeout(sessionId)
-        if (didResume) {
-          prevSessionIdRef.current = sessionId
-          targetSessionIdRef.current = sessionId
-        } else if (targetSessionIdRef.current === sessionId) {
-          targetSessionIdRef.current = null
-        }
-      } finally {
-        // Release transition lock
-        isTransitioningRef.current = false
-
-        // Process next queued switch if any
-        if (sessionSwitchQueueRef.current.length > 0) {
-          const nextSwitch = sessionSwitchQueueRef.current.shift()
-          if (nextSwitch) {
-            log.debug(
-              `[MainArea] Processing next queued session: ${nextSwitch.sessionId}`,
-              'MainArea'
-            )
-            // Use setTimeout to avoid blocking
-            setTimeout(() => {
-              void processSessionSwitch(nextSwitch.sessionId)
-            }, 0)
-          }
-        }
+        // Clear timeout on success
+        clearTimeout(timeoutId)
+        dispatch({ type: 'RESUME_COMPLETE', sessionId: targetSessionId })
+      } catch (error) {
+        clearTimeout(timeoutId)
+        logError(error, {
+          context: 'MainArea',
+          source: 'layout',
+          details: 'Failed to resume session'
+        })
+        dispatch({ type: 'RESUME_FAILED' })
       }
     }
 
-    // Process the current session switch
-    void processSessionSwitch(selectedSessionId)
-  }, [selectedSessionId]) // Only depend on selectedSessionId to prevent loops
+    void processTransition()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentionally depend only on status and targetSessionId to avoid re-running when queue changes
+  }, [sessionState.status, sessionState.targetSessionId])
+
+  // Process queue when returning to idle
+  useEffect(() => {
+    if (sessionState.status === 'idle' && sessionState.queue.length > 0) {
+      // Use setTimeout to avoid synchronous dispatch during render
+      const timerId = setTimeout(() => {
+        dispatch({ type: 'PROCESS_QUEUE' })
+      }, 0)
+      return () => clearTimeout(timerId)
+    }
+  }, [sessionState.status, sessionState.queue.length])
+
+  // Handle session selection changes
+  useEffect(() => {
+    if (!selectedSessionId) {
+      dispatch({ type: 'CLEAR_SESSION' })
+      return
+    }
+
+    dispatch({ type: 'SELECT_SESSION', sessionId: selectedSessionId })
+  }, [selectedSessionId])
 
   // Callback for creating a new session from SessionTabs
   const handleNewSession = useCallback(() => {

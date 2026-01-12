@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { cn } from '../../lib/utils'
 import {
   ToastContext,
@@ -181,13 +181,17 @@ const TOAST_ICON_COLORS: Record<Toast['type'], string> = {
 }
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
+  // P1 Fix: Use ref to store latest onDismiss to avoid timer resets on callback changes
+  const onDismissRef = useRef(onDismiss)
+  onDismissRef.current = onDismiss
+
   useEffect(() => {
     const duration = toast.duration ?? 5000
     if (duration > 0) {
-      const timer = setTimeout(onDismiss, duration)
+      const timer = setTimeout(() => onDismissRef.current(), duration)
       return () => clearTimeout(timer)
     }
-  }, [toast.duration, toast.timestamp, onDismiss])
+  }, [toast.duration, toast.timestamp]) // P1 Fix: Removed onDismiss from deps
 
   const showCount = toast.count !== undefined && toast.count > 1
 

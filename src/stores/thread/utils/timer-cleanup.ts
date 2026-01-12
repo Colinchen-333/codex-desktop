@@ -14,6 +14,12 @@ import {
   clearDeltaBuffer,
   clearAllTimers,
   clearAllTimersForAllThreads,
+  clearOperationSequence,
+  clearFlushMetrics,
+  clearAllOperationSequences,
+  clearAllFlushMetrics,
+  clearThreadSwitchLockQueue,
+  cleanupStaleClosingThreads,
 } from '../delta-buffer'
 import { TIMER_CLEANUP_INTERVAL_MS } from '../constants'
 
@@ -135,6 +141,8 @@ export function cleanupStaleTimers(activeThreadIds: Set<string>): void {
     if (!activeThreadIds.has(threadId) || closingThreads.has(threadId)) {
       clearDeltaBuffer(threadId)
       deltaBuffers.delete(threadId)
+      clearFlushMetrics(threadId)
+      clearOperationSequence(threadId)
       bufferCleanups++
       log.debug(`[cleanupStaleTimers] Cleared orphaned delta buffer for thread: ${threadId}`, 'timer-cleanup')
     }
@@ -152,6 +160,8 @@ export function cleanupStaleTimers(activeThreadIds: Set<string>): void {
       closingCleanups++
     }
   }
+
+  closingCleanups += cleanupStaleClosingThreads()
 
   const totalCleanups = flushCleanups + timeoutCleanups + bufferCleanups + closingCleanups
   if (totalCleanups > 0) {
@@ -175,6 +185,8 @@ export function performImmediateThreadCleanup(threadId: string): void {
   // Clear delta buffer and remove from map
   clearDeltaBuffer(threadId)
   deltaBuffers.delete(threadId)
+  clearOperationSequence(threadId)
+  clearFlushMetrics(threadId)
 
   log.debug(`[performImmediateThreadCleanup] Completed cleanup for thread: ${threadId}`, 'timer-cleanup')
 }
@@ -221,6 +233,9 @@ export function cleanupThreadResources(): void {
 
   // Clear closing threads set
   closingThreads.clear()
+  clearAllOperationSequences()
+  clearAllFlushMetrics()
+  clearThreadSwitchLockQueue()
 
   log.debug('[cleanupThreadResources] Cleaned up all thread resources', 'timer-cleanup')
 }

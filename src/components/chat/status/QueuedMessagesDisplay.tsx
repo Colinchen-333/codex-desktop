@@ -4,11 +4,14 @@
  */
 import { memo } from 'react'
 import { ListChecks, Clock } from 'lucide-react'
-import { useThreadStore, type ThreadState, type QueuedMessage } from '../../../stores/thread'
+import { useThreadStore, type QueuedMessage, selectFocusedThread } from '../../../stores/thread'
 
 export const QueuedMessagesDisplay = memo(function QueuedMessagesDisplay() {
-  const queuedMessages = useThreadStore((state: ThreadState) => state.queuedMessages)
-  const turnStatus = useThreadStore((state: ThreadState) => state.turnStatus)
+  // Use proper selector to avoid re-render loops from getter-based state access
+  const focusedThread = useThreadStore(selectFocusedThread)
+
+  const queuedMessages = focusedThread?.queuedMessages ?? []
+  const turnStatus = focusedThread?.turnStatus ?? 'idle'
 
   if (queuedMessages.length === 0) return null
 

@@ -165,7 +165,7 @@ export function ChatView() {
       let skills: SkillInput[] | undefined
       if (skillMentions.length > 0 && project) {
         try {
-          const response = await serverApi.listSkills([project.path])
+          const response = await serverApi.listSkills([project.path], false, selectedProjectId)
           const allSkills = response.data.flatMap((entry) => entry.skills)
           skills = skillMentions
             .map((name) => {
@@ -220,9 +220,12 @@ export function ChatView() {
   ])
 
   // Handle review target selection from dialog
+  // P0 Fix: Added proper error handling and use activeThread from hook to avoid stale closure
   const handleReviewSelect = useCallback(async (target: ReviewTarget) => {
-    const currentThread = useThreadStore.getState().activeThread
-    if (!currentThread) return
+    if (!activeThread) {
+      showToast('No active session', 'error')
+      return
+    }
     const targetDesc =
       target.type === 'uncommittedChanges'
         ? 'uncommitted changes'
@@ -231,9 +234,14 @@ export function ChatView() {
           : target.type === 'commit'
             ? `commit: ${target.sha.slice(0, 7)}`
             : 'custom instructions'
-    useThreadStore.getState().addInfoItem('Review', `Starting review of ${targetDesc}...`)
-    await serverApi.startReview(currentThread.id, target)
-  }, [])
+    addInfoItem('Review', `Starting review of ${targetDesc}...`)
+    try {
+      await serverApi.startReview(activeThread.id, target)
+    } catch (error) {
+      log.error(`Failed to start review: ${error}`, 'ChatView')
+      showToast('Failed to start review', 'error')
+    }
+  }, [activeThread, addInfoItem, showToast])
 
   // Get current project for review selector
   const currentProject = projects.find((p) => p.id === selectedProjectId)

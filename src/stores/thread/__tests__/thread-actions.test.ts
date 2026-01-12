@@ -183,31 +183,49 @@ function createMockState(
 }
 
 describe('Operation Sequence Tracking', () => {
+  const testThreadId = 'test-thread-001'
+  const testThreadId2 = 'test-thread-002'
+
   beforeEach(() => {
     // Reset by getting the current sequence
   })
 
-  it('should increment operation sequence', () => {
-    const seq1 = getNextOperationSequence()
-    const seq2 = getNextOperationSequence()
+  it('should increment operation sequence per thread', () => {
+    const seq1 = getNextOperationSequence(testThreadId)
+    const seq2 = getNextOperationSequence(testThreadId)
     expect(seq2).toBe(seq1 + 1)
   })
 
   it('should validate operation sequences correctly', () => {
-    const seq = getNextOperationSequence()
-    expect(isOperationValid(seq)).toBe(true)
+    const seq = getNextOperationSequence(testThreadId)
+    expect(isOperationValid(testThreadId, seq)).toBe(true)
 
     // Getting next sequence invalidates the previous
-    const newSeq = getNextOperationSequence()
-    expect(isOperationValid(seq)).toBe(false)
-    expect(isOperationValid(newSeq)).toBe(true)
+    const newSeq = getNextOperationSequence(testThreadId)
+    expect(isOperationValid(testThreadId, seq)).toBe(false)
+    expect(isOperationValid(testThreadId, newSeq)).toBe(true)
   })
 
   it('should return current sequence without incrementing', () => {
-    const seq1 = getNextOperationSequence()
-    const current = getCurrentOperationSequence()
+    const seq1 = getNextOperationSequence(testThreadId2)
+    const current = getCurrentOperationSequence(testThreadId2)
     expect(current).toBe(seq1)
-    expect(getCurrentOperationSequence()).toBe(seq1)
+    expect(getCurrentOperationSequence(testThreadId2)).toBe(seq1)
+  })
+
+  it('should maintain separate sequences per thread', () => {
+    const seqA = getNextOperationSequence('thread-A')
+    const seqB = getNextOperationSequence('thread-B')
+
+    // Both should be valid for their respective threads
+    expect(isOperationValid('thread-A', seqA)).toBe(true)
+    expect(isOperationValid('thread-B', seqB)).toBe(true)
+
+    // Incrementing one shouldn't affect the other
+    const seqA2 = getNextOperationSequence('thread-A')
+    expect(isOperationValid('thread-A', seqA)).toBe(false)
+    expect(isOperationValid('thread-A', seqA2)).toBe(true)
+    expect(isOperationValid('thread-B', seqB)).toBe(true) // Still valid
   })
 })
 

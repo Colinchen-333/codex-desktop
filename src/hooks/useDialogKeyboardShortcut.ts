@@ -59,6 +59,8 @@ export function useDialogKeyboardShortcut({
     isHandlingInputRef.current = inputRef?.current || null
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing) return
+
       // Handle Escape key
       if (e.key === 'Escape' && onCancel) {
         e.preventDefault()
@@ -82,13 +84,18 @@ export function useDialogKeyboardShortcut({
           return
         }
 
-        // For other input elements, require modifier key if requested
-        if (isInputElement && requireModifierKey) {
+        // Check for Cmd (Mac) or Ctrl (Windows/Linux) modifier
+        const hasModifier = e.metaKey || e.ctrlKey
+
+        // Never hijack plain Enter in input elements
+        if (isInputElement && !hasModifier) {
           return
         }
 
-        // Check for Cmd (Mac) or Ctrl (Windows/Linux) modifier
-        const hasModifier = e.metaKey || e.ctrlKey
+        // If modifier key is required, ensure it is pressed
+        if (requireModifierKey && !hasModifier) {
+          return
+        }
 
         // Trigger confirm if:
         // 1. We have a modifier key (Cmd/Ctrl), OR

@@ -100,14 +100,22 @@ export function useItemSizeCache(
   items: Record<string, AnyThreadItem>,
   itemOrder: string[]
 ) {
-  // Main height cache with measured vs estimated distinction
-  const heightCache = useRef<LRUCache<string, HeightCacheEntry>>(
-    new LRUCache(MAX_LRU_CACHE_SIZE)
-  )
-
   // P2: Reverse index for O(1) cache key lookups by item ID
   // Maps item ID -> Set of cache keys for that item
   const cacheKeyIndex = useRef<Map<string, Set<string>>>(new Map())
+  const cacheKeyOwner = useRef<Map<string, string>>(new Map())
+
+  // Main height cache with measured vs estimated distinction
+  const heightCache = useRef<LRUCache<string, HeightCacheEntry>>(
+    new LRUCache(MAX_LRU_CACHE_SIZE, (cacheKey) => {
+      const ownerId = cacheKeyOwner.current.get(cacheKey)
+      if (ownerId) {
+        removeCacheKeyFromIndex(cacheKeyIndex.current, cacheKeyOwner.current, ownerId, cacheKey)
+      } else {
+        cacheKeyOwner.current.delete(cacheKey)
+      }
+    })
+  )
 
   // Track items for change detection
   const prevItemsRef = useRef<Record<string, AnyThreadItem>>(items)
@@ -141,6 +149,7 @@ export function useItemSizeCache(
           const element = entry.target as HTMLElement
           const id = element.dataset.itemId
           if (!id) continue
+          if (observedElementsRef.current.get(id) !== element) continue
 
           const measuredHeight = entry.contentRect.height
           if (measuredHeight <= 0) continue
@@ -166,6 +175,7 @@ export function useItemSizeCache(
             measured: true,
             timestamp: Date.now(),
           })
+          addCacheKeyToIndex(cacheKeyIndex.current, cacheKeyOwner.current, id, cacheKey)
 
           // Notify about height change if callback registered
           onHeightChangeRef.current?.(id, blendedHeight)
@@ -279,8 +289,6 @@ export function useItemSizeCache(
         const age = Date.now() - cached.timestamp
         if (age > CACHE_ENTRY_MAX_AGE_MS) {
           heightCache.current.delete(cacheKey)
-          // P2: Remove from reverse index
-          removeCacheKeyFromIndex(cacheKeyIndex.current, id, cacheKey)
           log.debug(
             `[useMessageListHooks] Cache entry expired for ${id} (age: ${Math.round(age / 1000)}s)`,
             'useMessageListHooks'
@@ -304,7 +312,7 @@ export function useItemSizeCache(
       })
 
       // P2: Add to reverse index
-      addCacheKeyToIndex(cacheKeyIndex.current, id, cacheKey)
+      addCacheKeyToIndex(cacheKeyIndex.current, cacheKeyOwner.current, id, cacheKey)
 
       return height
     },
@@ -340,19 +348,30 @@ function createCacheKey(id: string, item: AnyThreadItem): string {
 /**
  * Add cache key to reverse index for O(1) lookup
  */
-function addCacheKeyToIndex(index: Map<string, Set<string>>, itemId: string, cacheKey: string): void {
+function addCacheKeyToIndex(
+  index: Map<string, Set<string>>,
+  ownerMap: Map<string, string>,
+  itemId: string,
+  cacheKey: string
+): void {
   let keys = index.get(itemId)
   if (!keys) {
     keys = new Set()
     index.set(itemId, keys)
   }
   keys.add(cacheKey)
+  ownerMap.set(cacheKey, itemId)
 }
 
 /**
  * Remove cache key from reverse index
  */
-function removeCacheKeyFromIndex(index: Map<string, Set<string>>, itemId: string, cacheKey: string): void {
+function removeCacheKeyFromIndex(
+  index: Map<string, Set<string>>,
+  ownerMap: Map<string, string>,
+  itemId: string,
+  cacheKey: string
+): void {
   const keys = index.get(itemId)
   if (keys) {
     keys.delete(cacheKey)
@@ -360,6 +379,7 @@ function removeCacheKeyFromIndex(index: Map<string, Set<string>>, itemId: string
       index.delete(itemId)
     }
   }
+  ownerMap.delete(cacheKey)
 }
 
 /**
@@ -374,10 +394,9 @@ function clearCacheForItemOptimized(
 ): void {
   const keys = index.get(id)
   if (keys) {
-    for (const key of keys) {
+    for (const key of Array.from(keys)) {
       cache.delete(key)
     }
-    index.delete(id)
   }
 }
 
@@ -423,6 +442,12 @@ function hasItemChanged(prev: AnyThreadItem, current: AnyThreadItem): boolean {
 
 /**
  * Hook for auto-scroll behavior with improved stability
+ *
+ * P0 Fix: Resolved race condition issues:
+ * 1. Capture target index before RAF to avoid stale closure
+ * 2. Simplified dependency array to prevent duplicate triggers
+ * 3. Added debounce for streaming content updates
+ * 4. Removed redundant scrollIntoView that conflicts with scrollToRow
  */
 export function useAutoScroll(
   virtualListRef: React.MutableRefObject<ListImperativeAPI | null>,
@@ -434,57 +459,88 @@ export function useAutoScroll(
   const scrollRAFRef = useRef<number | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const lastScrollPositionRef = useRef<number>(0)
+  const lastScrolledIndexRef = useRef<number>(-1)
+  const lastScrollTimeRef = useRef<number>(0)
 
-  // Memoize last item info to prevent unnecessary re-renders
-  const lastItemInfo = useMemo(() => {
-    const lastItemId = itemOrder[itemOrder.length - 1] || ''
-    const lastItem = items[lastItemId]
-    const lastItemText =
-      lastItem?.type === 'agentMessage' && isAgentMessageContent(lastItem.content)
-        ? lastItem.content.text.length
-        : 0
-    return { lastItemId, lastItemText }
-  }, [itemOrder, items])
+  // Stable item count ref to use in RAF callback
+  const itemCountRef = useRef(itemOrder.length)
+  useEffect(() => {
+    itemCountRef.current = itemOrder.length
+  }, [itemOrder.length])
+
+  // Stable turnStatus ref
+  const turnStatusRef = useRef(turnStatus)
+  useEffect(() => {
+    turnStatusRef.current = turnStatus
+  }, [turnStatus])
 
   useEffect(() => {
-    if (autoScroll) {
-      if (scrollRAFRef.current) {
-        cancelAnimationFrame(scrollRAFRef.current)
+    if (!autoScroll) return
+
+    // P0 Fix: Debounce streaming updates - only scroll every 100ms during streaming
+    const now = Date.now()
+    const isStreaming = turnStatus === 'running'
+    const minInterval = isStreaming ? 100 : 0
+
+    if (now - lastScrollTimeRef.current < minInterval) {
+      return
+    }
+
+    // P0 Fix: Skip if already scrolled to this index (prevents duplicate scrolls)
+    const targetIndex = itemOrder.length - 1
+    if (targetIndex < 0) return
+
+    // Only skip for same index if NOT streaming (streaming needs continuous scroll)
+    if (!isStreaming && targetIndex === lastScrolledIndexRef.current) {
+      return
+    }
+
+    // Cancel any pending RAF
+    if (scrollRAFRef.current) {
+      cancelAnimationFrame(scrollRAFRef.current)
+    }
+
+    // P0 Fix: Capture values before RAF to avoid stale closures
+    const capturedIndex = targetIndex
+    const capturedIsStreaming = isStreaming
+
+    scrollRAFRef.current = requestAnimationFrame(() => {
+      // P0 Fix: Use captured values instead of potentially stale refs
+      if (virtualListRef.current && capturedIndex >= 0) {
+        virtualListRef.current.scrollToRow({
+          index: capturedIndex,
+          align: 'end',
+          behavior: capturedIsStreaming ? 'instant' : 'smooth',
+        })
+        lastScrolledIndexRef.current = capturedIndex
+        lastScrollTimeRef.current = Date.now()
       }
 
-      scrollRAFRef.current = requestAnimationFrame(() => {
-        const isStreaming = turnStatus === 'running'
-
-        if (virtualListRef.current && itemOrder.length > 0) {
-          virtualListRef.current.scrollToRow({
-            index: itemOrder.length - 1,
-            align: 'end',
-            behavior: isStreaming ? 'instant' : 'smooth',
-          })
-        }
-
-        messagesEndRef.current?.scrollIntoView({
-          behavior: isStreaming ? 'instant' : 'smooth',
+      // P0 Fix: Only use messagesEndRef as fallback when virtualList is not available
+      if (!virtualListRef.current && messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({
+          behavior: capturedIsStreaming ? 'instant' : 'smooth',
         })
+      }
 
-        scrollRAFRef.current = null
-      })
-    }
+      scrollRAFRef.current = null
+    })
 
     return () => {
       if (scrollRAFRef.current) {
         cancelAnimationFrame(scrollRAFRef.current)
+        scrollRAFRef.current = null
       }
     }
   }, [
+    // P0 Fix: Simplified dependency array
+    // Removed lastItemInfo.lastItemText - causes excessive re-renders during streaming
+    // The debounce logic above handles streaming updates properly
     itemOrder.length,
-    lastItemInfo.lastItemText,
     autoScroll,
     turnStatus,
     virtualListRef,
     messagesEndRef,
-    itemOrder,
-    lastItemInfo,
   ])
 
   // Stable scroll position tracker

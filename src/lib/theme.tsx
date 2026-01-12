@@ -1,17 +1,6 @@
-import { useEffect, useState, useContext, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { parseTheme } from './validation'
 import { ThemeContext, type Theme } from './ThemeContext'
-
-/**
- * Hook to access the current theme context
- */
-export function useTheme() {
-  const context = useContext(ThemeContext)
-  if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider')
-  }
-  return context
-}
 
 const THEME_KEY = 'codex-desktop-theme'
 

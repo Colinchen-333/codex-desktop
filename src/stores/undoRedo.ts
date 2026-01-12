@@ -8,6 +8,22 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 
+function areOperationStatesEquivalent(a?: OperationState, b?: OperationState): boolean {
+  if (!a || !b) return false
+  if (a.itemId !== b.itemId) return false
+  if (a.itemOrder && b.itemOrder && a.itemOrder.length !== b.itemOrder.length) return false
+  if (a.itemData?.content !== undefined || b.itemData?.content !== undefined) {
+    try {
+      const aContent = a.itemData?.content ?? null
+      const bContent = b.itemData?.content ?? null
+      return JSON.stringify(aContent) === JSON.stringify(bContent)
+    } catch {
+      return false
+    }
+  }
+  return true
+}
+
 // ==================== Type Definitions ====================
 
 /**
@@ -164,7 +180,9 @@ export const useUndoRedoStore = create<UndoRedoState>()(
           if (
             lastOp.type === type &&
             timeSinceLastOp <= OPERATION_MERGE_WINDOW_MS &&
-            lastOp.previousState.itemId === operation.previousState.itemId
+            lastOp.previousState.itemId === operation.previousState.itemId &&
+            lastOp.nextState &&
+            areOperationStatesEquivalent(lastOp.nextState, operation.previousState)
           ) {
             // Merge: update the nextState of last operation
             lastOp.nextState = operation.nextState

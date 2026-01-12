@@ -261,9 +261,9 @@ export function createHandleAgentMessageDelta(get: () => ThreadState) {
     if (!buffer) return
 
     // P0 Enhancement: Validate operation sequence before processing delta
-    if (!isOperationValid(buffer.operationSeq)) {
+    if (!isOperationValid(threadId, buffer.operationSeq)) {
       log.debug(
-        `[handleAgentMessageDelta] Stale operation (buffer: ${buffer.operationSeq}, current: ${getCurrentOperationSequence()}), discarding delta for item: ${event.itemId}`,
+        `[handleAgentMessageDelta] Stale operation (buffer: ${buffer.operationSeq}, current: ${getCurrentOperationSequence(threadId)}), discarding delta for item: ${event.itemId}`,
         'message-handlers'
       )
       return
@@ -301,7 +301,7 @@ export function createHandleCommandExecutionOutputDelta(get: () => ThreadState) 
     if (!buffer) return
 
     // P0 Enhancement: Validate operation sequence before processing delta
-    if (!isOperationValid(buffer.operationSeq)) {
+    if (!isOperationValid(threadId, buffer.operationSeq)) {
       log.debug(
         `[handleCommandExecutionOutputDelta] Stale operation, discarding delta for item: ${event.itemId}`,
         'message-handlers'
@@ -336,7 +336,7 @@ export function createHandleFileChangeOutputDelta(get: () => ThreadState) {
     if (!buffer) return
 
     // P0 Enhancement: Validate operation sequence before processing delta
-    if (!isOperationValid(buffer.operationSeq)) {
+    if (!isOperationValid(threadId, buffer.operationSeq)) {
       log.debug(
         `[handleFileChangeOutputDelta] Stale operation, discarding delta for item: ${event.itemId}`,
         'message-handlers'
@@ -371,7 +371,7 @@ export function createHandleReasoningSummaryTextDelta(get: () => ThreadState) {
     if (!buffer) return
 
     // P0 Enhancement: Validate operation sequence before processing delta
-    if (!isOperationValid(buffer.operationSeq)) {
+    if (!isOperationValid(threadId, buffer.operationSeq)) {
       log.debug(
         `[handleReasoningSummaryTextDelta] Stale operation, discarding delta for item: ${event.itemId}`,
         'message-handlers'
@@ -423,7 +423,7 @@ export function createHandleReasoningTextDelta(get: () => ThreadState) {
     if (!buffer) return
 
     // P0 Enhancement: Validate operation sequence before processing delta
-    if (!isOperationValid(buffer.operationSeq)) {
+    if (!isOperationValid(threadId, buffer.operationSeq)) {
       log.debug(
         `[handleReasoningTextDelta] Stale operation, discarding delta for item: ${event.itemId}`,
         'message-handlers'
@@ -467,7 +467,7 @@ export function createHandleMcpToolCallProgress(get: () => ThreadState) {
     if (!buffer) return
 
     // P0 Enhancement: Validate operation sequence before processing delta
-    if (!isOperationValid(buffer.operationSeq)) {
+    if (!isOperationValid(threadId, buffer.operationSeq)) {
       log.debug(
         `[handleMcpToolCallProgress] Stale operation, discarding progress for item: ${event.itemId}`,
         'message-handlers'

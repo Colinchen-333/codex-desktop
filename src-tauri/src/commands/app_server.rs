@@ -433,7 +433,7 @@ pub async fn get_account_rate_limits(
         .ok_or_else(|| crate::Error::AppServer("App server not running".to_string()))?;
 
     let response: serde_json::Value = server
-        .send_request("account/rateLimits", serde_json::json!({}))
+        .send_request("account/rateLimits/read", serde_json::json!({}))
         .await?;
 
     Ok(response)

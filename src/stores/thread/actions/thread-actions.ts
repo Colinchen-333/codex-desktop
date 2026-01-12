@@ -23,6 +23,7 @@ import {
   acquireThreadSwitchLock,
   releaseThreadSwitchLock,
   closingThreads,
+  markThreadAsClosing,
   performFullTurnCleanup,
 } from '../delta-buffer'
 import {
@@ -38,6 +39,31 @@ import {
   stopTimerCleanupInterval,
   performImmediateThreadCleanup,
 } from '../utils/timer-cleanup'
+
+function beginThreadOperation(
+  set: (fn: (state: WritableDraft<ThreadState>) => ThreadState | void) => void,
+  getThreadStore: () => ThreadState,
+  cleanupStaleApprovals: () => Promise<void>,
+  opKey: string
+): number {
+  const opSeq = getNextOperationSequence(opKey)
+  startApprovalCleanupTimer(cleanupStaleApprovals, 60000)
+  startTimerCleanupInterval(() => new Set(Object.keys(getThreadStore().threads)))
+  set((state) => {
+    state.isLoading = true
+    state.globalError = null
+    return state
+  })
+  return opSeq
+}
+
+function stopCleanupTimersIfIdle(get: () => ThreadState, context: string): void {
+  if (Object.keys(get().threads).length === 0) {
+    stopApprovalCleanupTimer()
+    stopTimerCleanupInterval()
+    log.debug(`[${context}] No threads remaining, stopped cleanup timers`, 'thread-actions')
+  }
+}
 
 // ==================== Start Thread Action ====================
 
@@ -65,15 +91,9 @@ export function createStartThread(
         throw new Error(`Maximum number of parallel sessions (${maxSessions}) reached. Please close a session first.`)
       }
 
-      const opSeq = getNextOperationSequence()
-      startApprovalCleanupTimer(cleanupStaleApprovals, 60000)
-      startTimerCleanupInterval(() => new Set(Object.keys(getThreadStore().threads)))
-
-      set((state) => {
-        state.isLoading = true
-        state.globalError = null
-        return state
-      })
+      // Use projectId as temporary threadId for operation sequencing
+      // This prevents concurrent startThread for the same project
+      const opSeq = beginThreadOperation(set, getThreadStore, cleanupStaleApprovals, projectId)
 
       const safeModel = model?.trim() || undefined
       const safeSandboxMode = normalizeSandboxMode(sandboxMode)
@@ -87,8 +107,8 @@ export function createStartThread(
         safeApprovalPolicy
       )
 
-      // Validate operation sequence after async operation
-      if (!isOperationValid(opSeq)) {
+      // Validate operation sequence after async operation (using projectId as key)
+      if (!isOperationValid(projectId, opSeq)) {
         log.warn('[startThread] Another operation started, discarding result', 'thread-actions')
         return
       }
@@ -102,6 +122,7 @@ export function createStartThread(
           state.isLoading = false
           return state
         })
+        stopCleanupTimersIfIdle(get, 'startThread')
         return
       }
 
@@ -115,16 +136,13 @@ export function createStartThread(
         return state
       })
     } catch (error) {
-      const currentOpSeq = getCurrentOperationSequence()
+      const currentOpSeq = getCurrentOperationSequence(projectId)
       set((state) => {
         state.globalError = parseError(error)
         state.isLoading = false
         return state
       })
-      if (Object.keys(get().threads).length === 0) {
-        stopApprovalCleanupTimer()
-        stopTimerCleanupInterval()
-      }
+      stopCleanupTimersIfIdle(get, 'startThread')
       log.error(`[startThread] Failed with opSeq mismatch check: ${currentOpSeq}`, 'thread-actions')
       throw error
     } finally {
@@ -174,33 +192,32 @@ export function createResumeThread(
       focusedThreadId: get().focusedThreadId,
     }
 
+    const rollbackToInitialState = () => {
+      set((state) => {
+        state.isLoading = initialState.isLoading
+        state.globalError = initialState.globalError
+        state.focusedThreadId = initialState.focusedThreadId
+        return state
+      })
+    }
+
     // Acquire thread switch lock to prevent concurrent operations
     await acquireThreadSwitchLock()
 
     try {
-      const opSeq = getNextOperationSequence()
-      startApprovalCleanupTimer(cleanupStaleApprovals, 60000)
-      startTimerCleanupInterval(() => new Set(Object.keys(getThreadStore().threads)))
-
-      set((state) => {
-        state.isLoading = true
-        state.globalError = null
-        return state
-      })
+      // Use threadId for operation sequencing
+      const opSeq = beginThreadOperation(set, getThreadStore, cleanupStaleApprovals, threadId)
 
       const response = await threadApi.resume(threadId)
 
       // P1 Fix: Validate operation sequence - rollback state if stale
-      if (!isOperationValid(opSeq)) {
+      if (!isOperationValid(threadId, opSeq)) {
         log.warn(
           `[resumeThread] Another operation started, rolling back state for threadId: ${threadId}`,
           'thread-actions'
         )
-        set((state) => {
-          state.isLoading = initialState.isLoading
-          state.globalError = initialState.globalError
-          return state
-        })
+        rollbackToInitialState()
+        stopCleanupTimersIfIdle(get, 'resumeThread')
         return
       }
 
@@ -210,11 +227,8 @@ export function createResumeThread(
           `[resumeThread] Thread ${response.thread.id} is being closed, rolling back state`,
           'thread-actions'
         )
-        set((state) => {
-          state.isLoading = initialState.isLoading
-          state.globalError = initialState.globalError
-          return state
-        })
+        rollbackToInitialState()
+        stopCleanupTimersIfIdle(get, 'resumeThread')
         return
       }
 
@@ -254,8 +268,10 @@ export function createResumeThread(
       }
 
       // Final validation before state update
-      if (!isOperationValid(opSeq)) {
+      if (!isOperationValid(threadId, opSeq)) {
         log.warn(`[resumeThread] Operation became stale before state update`, 'thread-actions')
+        rollbackToInitialState()
+        stopCleanupTimersIfIdle(get, 'resumeThread')
         return
       }
 
@@ -293,11 +309,7 @@ export function createResumeThread(
       })
 
       // P1 Fix: Stop cleanup timers if no threads remain
-      if (Object.keys(get().threads).length === 0) {
-        stopApprovalCleanupTimer()
-        stopTimerCleanupInterval()
-        log.debug('[resumeThread] No threads remaining, stopped cleanup timers', 'thread-actions')
-      }
+      stopCleanupTimersIfIdle(get, 'resumeThread')
 
       throw error
     } finally {
@@ -348,7 +360,10 @@ export function createCloseThread(
 
     // Mark thread as closing IMMEDIATELY to prevent any new operations
     // This must happen before any async operations or state changes
-    closingThreads.add(threadId)
+    const releasePromise = markThreadAsClosing(threadId).catch((error) => {
+      log.warn(`[closeThread] Failed to mark thread as closing: ${error}`, 'thread-actions')
+      return () => {}
+    })
     log.debug(`[closeThread] Marked thread ${threadId} as closing`, 'thread-actions')
 
     // Perform comprehensive immediate cleanup of all thread resources
@@ -376,8 +391,7 @@ export function createCloseThread(
     if (Object.keys(updatedThreads).length === 0) {
       stopApprovalCleanupTimer()
       stopTimerCleanupInterval()
-      // Clear closing threads set when no threads remain
-      closingThreads.clear()
+      void releasePromise.then((release) => release())
       log.debug('[closeThread] All threads closed, cleared closingThreads set', 'thread-actions')
     } else {
       // Start periodic cleanup if there are still threads
@@ -385,10 +399,12 @@ export function createCloseThread(
 
       // Remove from closing set after a short delay to ensure all pending events are handled
       // This allows any in-flight events to be properly rejected
-      setTimeout(() => {
-        closingThreads.delete(threadId)
-        log.debug(`[closeThread] Removed thread ${threadId} from closing set`, 'thread-actions')
-      }, CLOSING_THREAD_CLEANUP_DELAY_MS)
+      void releasePromise.then((release) => {
+        setTimeout(() => {
+          release()
+          log.debug(`[closeThread] Removed thread ${threadId} from closing set`, 'thread-actions')
+        }, CLOSING_THREAD_CLEANUP_DELAY_MS)
+      })
     }
   }
 }
@@ -403,11 +419,18 @@ export function createCloseAllThreads(
     const { threads } = get()
     const threadIds = Object.keys(threads)
 
-    // Mark all threads as closing first to prevent race conditions
-    threadIds.forEach((threadId) => {
-      closingThreads.add(threadId)
-    })
+    if (threadIds.length === 0) {
+      stopApprovalCleanupTimer()
+      stopTimerCleanupInterval()
+      return
+    }
 
+    const releasePromises = threadIds.map((threadId) =>
+      markThreadAsClosing(threadId).catch((error) => {
+        log.warn(`[closeAllThreads] Failed to mark thread as closing: ${error}`, 'thread-actions')
+        return () => {}
+      })
+    )
     log.debug(`[closeAllThreads] Marked ${threadIds.length} threads as closing`, 'thread-actions')
 
     // Clean up all thread-specific resources using comprehensive cleanup
@@ -426,9 +449,10 @@ export function createCloseAllThreads(
     stopApprovalCleanupTimer()
     stopTimerCleanupInterval()
 
-    // Clear the closing threads set since all threads are gone
-    closingThreads.clear()
-    log.debug('[closeAllThreads] Cleared closingThreads set', 'thread-actions')
+    void Promise.all(releasePromises).then((releases) => {
+      releases.forEach((release) => release())
+      log.debug('[closeAllThreads] Cleared closingThreads set', 'thread-actions')
+    })
   }
 }
 

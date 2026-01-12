@@ -1,6 +1,6 @@
 import { memo, useMemo, useCallback } from 'react'
 import { Star } from 'lucide-react'
-import { FixedSizeList as List } from 'react-window'
+import { List } from 'react-window'
 import { AutoSizer } from 'react-virtualized-auto-sizer'
 import { cn, formatAbsoluteTime } from '../../../lib/utils'
 import type { SessionStatus } from '../../../lib/api'
@@ -45,37 +45,45 @@ export interface SessionListProps {
 }
 
 /**
- * P0 Fix: SessionRow component for virtualized rendering
+ * P0 Fix: SessionRow component props for react-window v2
  */
-interface SessionRowProps {
+interface SessionRowCustomProps {
+  sessions: Session[]
+  selectedId: string | null
+  onSelect: (id: string | null, projectId?: string) => void
+  onToggleFavorite: (sessionId: string, isFavorite: boolean) => void
+  onRename: (sessionId: string, currentTitle: string) => void
+  onDelete: (sessionId: string, sessionName: string) => void
+  getSessionDisplayName: (session: Session) => string
+  getProjectName: (projectId: string) => string | null
+  isGlobalSearch: boolean
+}
+
+// Full props including react-window v2's injected props
+interface SessionRowProps extends SessionRowCustomProps {
   index: number
   style: React.CSSProperties
-  data: {
-    sessions: Session[]
-    selectedId: string | null
-    onSelect: (id: string | null, projectId?: string) => void
-    onToggleFavorite: (sessionId: string, isFavorite: boolean) => void
-    onRename: (sessionId: string, currentTitle: string) => void
-    onDelete: (sessionId: string, sessionName: string) => void
-    getSessionDisplayName: (session: Session) => string
-    getProjectName: (projectId: string) => string | null
-    isGlobalSearch: boolean
+  ariaAttributes: {
+    'aria-posinset': number
+    'aria-setsize': number
+    role: 'listitem'
   }
 }
 
-const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowProps) {
-  const {
-    sessions,
-    selectedId,
-    onSelect,
-    onToggleFavorite,
-    onRename,
-    onDelete,
-    getSessionDisplayName,
-    getProjectName,
-    isGlobalSearch,
-  } = data
-
+function SessionRowInner({
+  index,
+  style,
+  ariaAttributes,
+  sessions,
+  selectedId,
+  onSelect,
+  onToggleFavorite,
+  onRename,
+  onDelete,
+  getSessionDisplayName,
+  getProjectName,
+  isGlobalSearch,
+}: SessionRowProps) {
   const session = sessions[index]
   const displayName = getSessionDisplayName(session)
   const timestamp = session.lastAccessedAt || session.createdAt
@@ -105,7 +113,7 @@ const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowPr
   ]
 
   return (
-    <div style={style} className="px-1">
+    <div style={style} className="px-1" {...ariaAttributes}>
       <ContextMenu items={contextMenuItems}>
         <button
           className={cn(
@@ -185,7 +193,7 @@ const SessionRow = memo(function SessionRow({ index, style, data }: SessionRowPr
       </ContextMenu>
     </div>
   )
-})
+}
 
 /**
  * SessionList - Displays sorted list of sessions with context menu actions
@@ -210,7 +218,9 @@ export const SessionList = memo(function SessionList({
   isLoading,
   hasProject,
   isGlobalSearch,
-  virtualizationThreshold = 50,
+  // P0 Fix: Temporarily disable virtualization (set high threshold) until layout issues are resolved
+  // The parent container uses overflow-y-auto which conflicts with AutoSizer's height measurement
+  virtualizationThreshold = 1000,
 }: SessionListProps) {
   // Hooks must be called unconditionally at the top
   const { getSessionDisplayName } = useSessionsStore()
@@ -247,8 +257,8 @@ export const SessionList = memo(function SessionList({
   // P0 Fix: Enable virtualization for large lists
   const shouldVirtualize = sortedSessions.length > virtualizationThreshold
 
-  // Memoize item data to prevent re-renders
-  const itemData = useMemo(
+  // Memoize row props to prevent re-renders (react-window v2 API)
+  const rowProps: SessionRowCustomProps = useMemo(
     () => ({
       sessions: sortedSessions,
       selectedId,
@@ -273,8 +283,8 @@ export const SessionList = memo(function SessionList({
     ]
   )
 
-  // Item size: 80px per row (consistent height)
-  const itemSize = 80
+  // Row height: 80px per row (consistent height)
+  const rowHeight = 80
 
   // Render non-virtualized list for small datasets
   const renderStandardList = () => {
@@ -420,27 +430,41 @@ export const SessionList = memo(function SessionList({
     )
   }
 
-  // P0 Fix: Virtualized list for large datasets
+  // P0 Fix: Virtualized list for large datasets using react-window v2 API
   const renderVirtualizedList = () => {
     return (
-      <AutoSizer>
-        {({ height, width }: { height: number; width: number }) => (
-          <List
-            height={height}
-            width={width}
-            itemCount={sortedSessions.length}
-            itemSize={itemSize}
-            itemData={itemData}
-            overscanCount={5}
-            role="listbox"
-            aria-label="Sessions list (virtualized)"
-            id="sessions-panel"
-            aria-labelledby="sessions-tab"
-          >
-            {SessionRow}
-          </List>
-        )}
-      </AutoSizer>
+      <div className="h-full min-h-0 flex-1">
+        <AutoSizer
+          renderProp={({ height, width }) => {
+            // Guard against undefined dimensions during initial render
+            if (height === undefined || width === undefined || height === 0 || width === 0) {
+              return (
+                <div
+                  style={{ height: rowHeight * 5, width: '100%' }}
+                  className="flex items-center justify-center text-muted-foreground"
+                >
+                  Loading...
+                </div>
+              )
+            }
+            return (
+              <List<SessionRowCustomProps>
+                style={{ height, width }}
+                rowCount={sortedSessions.length}
+                rowHeight={rowHeight}
+                rowProps={rowProps}
+                rowComponent={SessionRowInner}
+                overscanCount={5}
+                defaultHeight={rowHeight * 5}
+                role="listbox"
+                aria-label="Sessions list (virtualized)"
+                id="sessions-panel"
+                aria-labelledby="sessions-tab"
+              />
+            )
+          }}
+        />
+      </div>
     )
   }
 

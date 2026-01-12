@@ -5,18 +5,22 @@
  */
 import { memo, useState, useEffect, useRef } from 'react'
 import { Clock } from 'lucide-react'
-import { useThreadStore, type ThreadState } from '../../../stores/thread'
+import { useThreadStore, selectFocusedThread } from '../../../stores/thread'
 import { useAppStore, type AppState } from '../../../stores/app'
 import { isReasoningContent } from '../../../lib/typeGuards'
 import { parseReasoningSummary } from '../utils'
 
 export const WorkingStatusBar = memo(function WorkingStatusBar() {
-  const turnStatus = useThreadStore((state: ThreadState) => state.turnStatus)
-  const turnTiming = useThreadStore((state: ThreadState) => state.turnTiming)
-  // tokenUsage is accessed via getState() in the interval to avoid dependency issues
-  const pendingApprovals = useThreadStore((state: ThreadState) => state.pendingApprovals)
-  const items = useThreadStore((state: ThreadState) => state.items)
-  const itemOrder = useThreadStore((state: ThreadState) => state.itemOrder)
+  // Use proper selector to avoid re-render loops from getter-based state access
+  const focusedThread = useThreadStore(selectFocusedThread)
+  const focusedThreadId = focusedThread?.thread?.id ?? null
+
+  // Extract data from focused thread state
+  const turnStatus = focusedThread?.turnStatus ?? 'idle'
+  const turnTiming = focusedThread?.turnTiming ?? { startedAt: null, completedAt: null }
+  const pendingApprovals = focusedThread?.pendingApprovals ?? []
+  const items = focusedThread?.items ?? {}
+  const itemOrder = focusedThread?.itemOrder ?? []
   const escapePending = useAppStore((state: AppState) => state.escapePending)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [tokenRate, setTokenRate] = useState(0)
@@ -25,17 +29,21 @@ export const WorkingStatusBar = memo(function WorkingStatusBar() {
 
   // Real-time elapsed time update at 50ms for smoother display (like CLI)
   useEffect(() => {
-    if (turnStatus !== 'running' || !turnTiming.startedAt) {
+    if (turnStatus !== 'running' || !turnTiming.startedAt || !focusedThreadId) {
       return
     }
 
-    // Reset refs when starting - use getState() to avoid dependency issues
-    const initialTokens = useThreadStore.getState().tokenUsage.totalTokens
+    const getThreadSnapshot = () => useThreadStore.getState().threads[focusedThreadId]
+
+    // Reset refs when starting - use focused thread snapshot to avoid races
+    const initialTokens = getThreadSnapshot()?.tokenUsage.totalTokens ?? 0
     prevTokensRef.current = initialTokens
     prevTimeRef.current = Date.now()
+
     const interval = setInterval(() => {
       const now = Date.now()
-      const startedAt = useThreadStore.getState().turnTiming.startedAt
+      const threadState = getThreadSnapshot()
+      const startedAt = threadState?.turnTiming.startedAt
       if (startedAt) {
         setElapsedMs(now - startedAt)
       }
@@ -44,7 +52,7 @@ export const WorkingStatusBar = memo(function WorkingStatusBar() {
       const timeDelta = (now - prevTimeRef.current) / 1000
       if (timeDelta >= 0.5) {
         // Update rate every 500ms for stability
-        const currentTokens = useThreadStore.getState().tokenUsage.totalTokens
+        const currentTokens = threadState?.tokenUsage.totalTokens ?? 0
         const tokenDelta = currentTokens - prevTokensRef.current
         if (tokenDelta > 0 && timeDelta > 0) {
           setTokenRate(Math.round(tokenDelta / timeDelta))
@@ -54,7 +62,7 @@ export const WorkingStatusBar = memo(function WorkingStatusBar() {
       }
     }, 50) // 50ms update for smoother time display
     return () => clearInterval(interval)
-  }, [turnStatus, turnTiming.startedAt]) // Remove tokenUsage.totalTokens - use getState() instead
+  }, [turnStatus, turnTiming.startedAt, focusedThreadId])
 
   // Find current reasoning summary (streaming or recent)
   // React Compiler will automatically optimize this computation

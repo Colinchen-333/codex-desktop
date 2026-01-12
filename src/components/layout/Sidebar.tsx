@@ -23,14 +23,27 @@ import { SidebarTabs, SessionSearch, ProjectList, SessionList, SidebarDialogs, u
 
 export function Sidebar() {
   const { sidebarTab: activeTab, setSidebarTab: setActiveTab } = useAppStore()
-  const { projects, selectedProjectId, addProject } = useProjectsStore()
-  const { sessions, selectedSessionId, updateSession, isLoading: sessionsLoading, searchQuery, searchResults, isSearching } = useSessionsStore()
+  const { projects, selectedProjectId, addProject, selectProject } = useProjectsStore()
+  const {
+    sessions,
+    selectedSessionId,
+    updateSession,
+    isLoading: sessionsLoading,
+    searchQuery,
+    searchResults,
+    isSearching,
+    selectSession,
+    fetchSessions,
+  } = useSessionsStore()
+  const closeAllThreads = useThreadStore((state) => state.closeAllThreads)
+  const startThread = useThreadStore((state) => state.startThread)
+  const settings = useSettingsStore((state) => state.settings)
   const { showToast } = useToast()
   const dialogs = useSidebarDialogs()
 
   useEffect(() => {
-    if (selectedProjectId) void useSessionsStore.getState().fetchSessions(selectedProjectId)
-  }, [selectedProjectId])
+    if (selectedProjectId) void fetchSessions(selectedProjectId)
+  }, [fetchSessions, selectedProjectId])
 
   const displaySessions = searchQuery ? searchResults : sessions
   const isGlobalSearch = !!searchQuery
@@ -38,21 +51,20 @@ export function Sidebar() {
   const handleSelectProject = useCallback((projectId: string | null) => {
     if (!projectId) return
     if (projectId !== selectedProjectId) {
-      useSessionsStore.getState().selectSession(null)
-      useThreadStore.getState().closeAllThreads()
+      selectSession(null)
+      closeAllThreads()
     }
-    useProjectsStore.getState().selectProject(projectId)
-    useAppStore.getState().setSidebarTab('sessions')
-  }, [selectedProjectId])
+    selectProject(projectId)
+    setActiveTab('sessions')
+  }, [closeAllThreads, selectProject, selectSession, selectedProjectId, setActiveTab])
 
   const handleSelectSession = useCallback((sessionId: string | null, sessionProjectId?: string) => {
-    const currentProjectId = useProjectsStore.getState().selectedProjectId
-    if (sessionProjectId && sessionProjectId !== currentProjectId) {
-      useThreadStore.getState().closeAllThreads()
-      useProjectsStore.getState().selectProject(sessionProjectId)
+    if (sessionProjectId && sessionProjectId !== selectedProjectId) {
+      closeAllThreads()
+      selectProject(sessionProjectId)
     }
-    useSessionsStore.getState().selectSession(sessionId)
-  }, [])
+    selectSession(sessionId)
+  }, [closeAllThreads, selectProject, selectSession, selectedProjectId])
 
   const handleAddProject = async () => {
     try {
@@ -69,18 +81,17 @@ export function Sidebar() {
 
   const handleNewSession = async () => {
     if (!selectedProjectId) { showToast('Please select a project first', 'error'); return }
-    const project = useProjectsStore.getState().projects.find((p) => p.id === selectedProjectId)
+    const project = projects.find((p) => p.id === selectedProjectId)
     if (!project) return
-    const settings = useSettingsStore.getState().settings
     const effective = mergeProjectSettings(settings, project.settingsJson)
     const cwd = getEffectiveWorkingDirectory(project.path, project.settingsJson)
     try {
-      useSessionsStore.getState().selectSession(null)
-      await useThreadStore.getState().startThread(selectedProjectId, cwd, effective.model, effective.sandboxMode, effective.approvalPolicy)
+      selectSession(null)
+      await startThread(selectedProjectId, cwd, effective.model, effective.sandboxMode, effective.approvalPolicy)
       const newThread = useThreadStore.getState().activeThread
-      if (newThread) useSessionsStore.getState().selectSession(newThread.id)
-      await useSessionsStore.getState().fetchSessions(selectedProjectId)
-      useAppStore.getState().setSidebarTab('sessions')
+      if (newThread) selectSession(newThread.id)
+      await fetchSessions(selectedProjectId)
+      setActiveTab('sessions')
       showToast('New session started', 'success')
     } catch (error) {
       log.error(`Failed to start new session: ${error}`, 'Sidebar')

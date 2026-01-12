@@ -154,10 +154,14 @@ function LoginStep({
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // P0 Fix: Track mounted state to prevent state updates after unmount
+  const isMountedRef = useRef(true)
 
   // Cleanup polling on unmount
   useEffect(() => {
+    isMountedRef.current = true
     return () => {
+      isMountedRef.current = false
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current)
         pollIntervalRef.current = null
@@ -180,18 +184,37 @@ function LoginStep({
       }
       // Poll for login completion
       pollIntervalRef.current = setInterval(async () => {
-        const info = await serverApi.getAccountInfo()
-        if (info.account) {
+        // P0 Fix: Check if still mounted before performing any operations
+        if (!isMountedRef.current) {
           if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current)
             pollIntervalRef.current = null
           }
-          if (pollTimeoutRef.current) {
-            clearTimeout(pollTimeoutRef.current)
-            pollTimeoutRef.current = null
+          return
+        }
+
+        try {
+          const info = await serverApi.getAccountInfo()
+          // P0 Fix: Check mounted again after async operation
+          if (!isMountedRef.current) return
+
+          if (info.account) {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current)
+              pollIntervalRef.current = null
+            }
+            if (pollTimeoutRef.current) {
+              clearTimeout(pollTimeoutRef.current)
+              pollTimeoutRef.current = null
+            }
+            await onRefresh()
+            if (isMountedRef.current) {
+              setIsLoggingIn(false)
+            }
           }
-          await onRefresh()
-          setIsLoggingIn(false)
+        } catch {
+          // P0 Fix: Silently ignore errors during polling to prevent crashes
+          // The timeout will handle eventual cleanup
         }
       }, 2000)
       // Stop polling after 60 seconds
@@ -200,7 +223,10 @@ function LoginStep({
           clearInterval(pollIntervalRef.current)
           pollIntervalRef.current = null
         }
-        setIsLoggingIn(false)
+        // P0 Fix: Check mounted before state update
+        if (isMountedRef.current) {
+          setIsLoggingIn(false)
+        }
       }, 60000)
     } catch (error) {
       logError(error, {
@@ -208,7 +234,10 @@ function LoginStep({
         source: 'onboarding',
         details: 'Login failed'
       })
-      setIsLoggingIn(false)
+      // P0 Fix: Check mounted before state update
+      if (isMountedRef.current) {
+        setIsLoggingIn(false)
+      }
     }
   }
 

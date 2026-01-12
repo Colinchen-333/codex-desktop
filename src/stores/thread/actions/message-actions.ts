@@ -85,7 +85,7 @@ export function createDispatchNextQueuedMessage(
   dequeueQueuedMessage: (threadId: string) => QueuedMessage | null,
   requeueMessageFront: (threadId: string, message: QueuedMessage) => void
 ) {
-  return async (threadId: string) => {
+  const dispatchNextQueuedMessage = async (threadId: string) => {
     const threadState = get().threads[threadId]
     if (!threadState || threadState.turnStatus === 'running') return
 
@@ -130,7 +130,7 @@ export function createDispatchNextQueuedMessage(
           const currentState = get()
           const currentThread = currentState.threads[threadId]
           if (currentThread && currentThread.turnStatus !== 'running' && currentThread.queuedMessages.length > 0) {
-            void createDispatchNextQueuedMessage(get, dequeueQueuedMessage, requeueMessageFront)(threadId)
+            void dispatchNextQueuedMessage(threadId)
           }
         }, backoffDelay)
       } else {
@@ -153,6 +153,8 @@ export function createDispatchNextQueuedMessage(
       throw error
     }
   }
+
+  return dispatchNextQueuedMessage
 }
 
 // ==================== Send Message Action ====================

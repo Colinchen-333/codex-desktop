@@ -2,7 +2,7 @@
  * ChatImageUpload - Handles image upload via drag & drop and paste
  * Extracted from ChatView.tsx for better modularity
  */
-import React, { useCallback, memo } from 'react'
+import React, { useCallback, useEffect, useRef, memo } from 'react'
 import { Image as ImageIcon } from 'lucide-react'
 import { useToast } from '../ui/Toast'
 import { MAX_IMAGE_SIZE, MAX_IMAGES_COUNT } from './types'
@@ -29,6 +29,22 @@ export function useImageUpload(
   setAttachedImages: React.Dispatch<React.SetStateAction<string[]>>
 ) {
   const { showToast } = useToast()
+  const isMountedRef = useRef(true)
+  const readersRef = useRef<Set<FileReader>>(new Set())
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      readersRef.current.forEach((reader) => {
+        reader.onload = null
+        reader.onerror = null
+        reader.onabort = null
+        reader.abort()
+      })
+      readersRef.current.clear()
+    }
+  }, [])
 
   const handleImageFile = useCallback(
     (file: File) => {
@@ -49,15 +65,33 @@ export function useImageUpload(
         }
 
         const reader = new FileReader()
+        readersRef.current.add(reader)
+        const finalizeReader = () => {
+          reader.onload = null
+          reader.onerror = null
+          reader.onabort = null
+          readersRef.current.delete(reader)
+        }
         reader.onload = (e) => {
           const base64 = e.target?.result as string
+          if (!isMountedRef.current) {
+            finalizeReader()
+            return
+          }
           setAttachedImages((current) => {
             if (current.length >= MAX_IMAGES_COUNT) return current
             return [...current, base64]
           })
+          finalizeReader()
         }
         reader.onerror = () => {
-          showToast('Failed to read image file', 'error')
+          if (isMountedRef.current) {
+            showToast('Failed to read image file', 'error')
+          }
+          finalizeReader()
+        }
+        reader.onabort = () => {
+          finalizeReader()
         }
         reader.readAsDataURL(file)
         return prev

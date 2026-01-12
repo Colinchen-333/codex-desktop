@@ -5,6 +5,10 @@ import { logError } from '../lib/errorUtils'
 // Cache TTL for models list
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
+// P0 Fix: In-flight promise to prevent concurrent API calls
+let inFlightFetch: Promise<void> | null = null
+let fetchSeq = 0
+
 interface ModelsState {
   models: Model[]
   isLoading: boolean
@@ -24,32 +28,57 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
   lastFetched: null,
 
   fetchModels: async () => {
+    // P0 Fix: If already fetching, wait for the in-flight request
+    if (inFlightFetch) {
+      return inFlightFetch
+    }
+
     // Don't refetch if we already have models and fetched recently
-    const { models, lastFetched } = get()
+    const { models, lastFetched, isLoading } = get()
     const now = Date.now()
+
+    // P0 Fix: Also check isLoading as additional guard
+    if (isLoading) {
+      return inFlightFetch ?? Promise.resolve()
+    }
+
     if (models.length > 0 && lastFetched && now - lastFetched < MODEL_CACHE_TTL_MS) {
-      return
+      return Promise.resolve()
     }
 
     set({ isLoading: true, error: null })
-    try {
-      const response = await serverApi.getModels()
-      set({
-        models: response.data,
-        isLoading: false,
-        lastFetched: now,
-      })
-    } catch (error) {
-      logError(error, {
-        context: 'fetchModels',
-        source: 'models',
-        details: 'Failed to fetch models'
-      })
-      set({
-        error: error instanceof Error ? error.message : String(error),
-        isLoading: false,
-      })
-    }
+
+    // P0 Fix: Create and store the in-flight promise
+    const requestId = (fetchSeq += 1)
+    inFlightFetch = (async () => {
+      try {
+        const response = await serverApi.getModels()
+        if (requestId === fetchSeq) {
+          set({
+            models: response.data,
+            isLoading: false,
+            lastFetched: Date.now(), // Use actual completion time
+          })
+        }
+      } catch (error) {
+        logError(error, {
+          context: 'fetchModels',
+          source: 'models',
+          details: 'Failed to fetch models'
+        })
+        if (requestId === fetchSeq) {
+          set({
+            error: error instanceof Error ? error.message : String(error),
+            isLoading: false,
+          })
+        }
+      } finally {
+        // P0 Fix: Clear in-flight promise when done
+        inFlightFetch = null
+      }
+    })()
+
+    return inFlightFetch
   },
 
   getDefaultModel: () => {

@@ -20,11 +20,48 @@ interface CacheEntry<T> {
 // 使用 Map 存储缓存，key 为缓存键，value 为缓存条目
 const cache = new Map<string, CacheEntry<unknown>>()
 const inFlight = new Map<string, Promise<unknown>>()
+const requestSeq = new Map<string, number>()
+const inFlightTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 
 /**
- * P1 Fix: Error TTL (5 seconds) - much shorter than success responses
+ * P1 Fix: Error TTL (15 seconds) - shorter than success responses
  */
-const ERROR_TTL_MS = 5000
+const ERROR_TTL_MS = 15000
+const MAX_CACHE_ENTRIES = 200
+const MAX_IN_FLIGHT_MS = 5 * 60 * 1000
+
+function clearInFlightTimeout(key: string): void {
+  const timeoutId = inFlightTimeouts.get(key)
+  if (timeoutId) {
+    clearTimeout(timeoutId)
+    inFlightTimeouts.delete(key)
+  }
+}
+
+function deleteCacheEntry(key: string): void {
+  cache.delete(key)
+  if (!inFlight.has(key)) {
+    requestSeq.delete(key)
+  }
+}
+
+function pruneCache(now: number): void {
+  for (const [key, entry] of cache) {
+    if (entry.expiry <= now && !inFlight.has(key)) {
+      cache.delete(key)
+      requestSeq.delete(key)
+    }
+  }
+
+  if (cache.size <= MAX_CACHE_ENTRIES) return
+
+  let overflow = cache.size - MAX_CACHE_ENTRIES
+  for (const key of cache.keys()) {
+    deleteCacheEntry(key)
+    overflow -= 1
+    if (overflow <= 0) break
+  }
+}
 
 /**
  * 使用缓存包装 API 调用
@@ -46,15 +83,21 @@ export async function withCache<T>(
   cacheErrors: boolean = true  // P1 Fix: New parameter to control error caching
 ): Promise<T> {
   const now = Date.now()
+  pruneCache(now)
   const cached = cache.get(key) as CacheEntry<T> | undefined
 
   // 如果缓存存在且未过期
   if (cached && cached.expiry > now) {
     // P1 Fix: If cached entry is an error, re-throw it
     if (cached.isError) {
-      throw cached.data
+      if (!cacheErrors) {
+        deleteCacheEntry(key)
+      } else {
+        throw cached.data
+      }
+    } else {
+      return cached.data
     }
-    return cached.data
   }
 
   const existing = inFlight.get(key) as Promise<T> | undefined
@@ -63,26 +106,50 @@ export async function withCache<T>(
   }
 
   // 调用实际的 API 获取数据
-  const request = fetcher()
+  const requestId = (requestSeq.get(key) ?? 0) + 1
+  requestSeq.set(key, requestId)
+
+  const request = Promise.resolve()
+    .then(fetcher)
     .then((data) => {
-      cache.set(key, { data, expiry: now + ttlMs, isError: false })
+      // P1 Fix: Calculate expiry at completion time, not request start time
+      if (requestSeq.get(key) === requestId) {
+        cache.set(key, { data, expiry: Date.now() + ttlMs, isError: false })
+      }
+      pruneCache(Date.now())
       inFlight.delete(key)
+      clearInFlightTimeout(key)
       return data
     })
     .catch((error) => {
       // P1 Fix: Cache error responses with shorter TTL
-      if (cacheErrors) {
+      // Also use completion time for expiry calculation
+      if (cacheErrors && requestSeq.get(key) === requestId) {
         cache.set(key, {
           data: error,
-          expiry: now + ERROR_TTL_MS,
+          expiry: Date.now() + ERROR_TTL_MS,
           isError: true,
         })
       }
+      pruneCache(Date.now())
       inFlight.delete(key)
+      clearInFlightTimeout(key)
       throw error
     })
 
   inFlight.set(key, request)
+  clearInFlightTimeout(key)
+  inFlightTimeouts.set(
+    key,
+    setTimeout(() => {
+      if (inFlight.get(key) === request) {
+        inFlight.delete(key)
+        cache.delete(key)
+        requestSeq.delete(key)
+      }
+      inFlightTimeouts.delete(key)
+    }, MAX_IN_FLIGHT_MS)
+  )
 
   return request
 }
@@ -97,8 +164,15 @@ export async function withCache<T>(
  * clearCache('skills') // 清除技能列表缓存
  */
 export function clearCache(key: string): void {
-  cache.delete(key)
+  const hadInFlight = inFlight.has(key)
   inFlight.delete(key)
+  clearInFlightTimeout(key)
+  cache.delete(key)
+  if (hadInFlight) {
+    requestSeq.set(key, (requestSeq.get(key) ?? 0) + 1)
+  } else {
+    requestSeq.delete(key)
+  }
 }
 
 /**
@@ -108,6 +182,11 @@ export function clearCache(key: string): void {
 export function clearAllCache(): void {
   cache.clear()
   inFlight.clear()
+  requestSeq.clear()
+  for (const timeoutId of inFlightTimeouts.values()) {
+    clearTimeout(timeoutId)
+  }
+  inFlightTimeouts.clear()
 }
 
 /**

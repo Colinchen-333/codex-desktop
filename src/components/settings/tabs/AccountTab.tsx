@@ -191,10 +191,14 @@ export const AccountTab = memo(function AccountTab({
   const [showClearDataConfirm, setShowClearDataConfirm] = useState(false)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // P1 Fix: Track mounted state to prevent state updates after unmount
+  const isMountedRef = useRef(true)
 
   // Cleanup polling on unmount
   useEffect(() => {
+    isMountedRef.current = true
     return () => {
+      isMountedRef.current = false
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current)
         pollIntervalRef.current = null
@@ -228,12 +232,23 @@ export const AccountTab = memo(function AccountTab({
       }
       // Poll for login completion
       pollIntervalRef.current = setInterval(async () => {
+        // P1 Fix: Check if still mounted before performing any operations
+        if (!isMountedRef.current) {
+          clearPolling()
+          return
+        }
+
         try {
           const info = await serverApi.getAccountInfo()
+          // P1 Fix: Check mounted again after async operation
+          if (!isMountedRef.current) return
+
           if (info.account) {
             clearPolling()
             await onRefresh()
-            setIsLoggingIn(false)
+            if (isMountedRef.current) {
+              setIsLoggingIn(false)
+            }
           }
         } catch (pollError) {
           log.error(`Polling error: ${pollError}`, 'AccountTab')
@@ -242,11 +257,17 @@ export const AccountTab = memo(function AccountTab({
       // Stop polling after 60 seconds
       pollTimeoutRef.current = setTimeout(() => {
         clearPolling()
-        setIsLoggingIn(false)
+        // P1 Fix: Check mounted before state update
+        if (isMountedRef.current) {
+          setIsLoggingIn(false)
+        }
       }, 60000)
     } catch (error) {
       log.error(`Login failed: ${error}`, 'AccountTab')
-      setIsLoggingIn(false)
+      // P1 Fix: Check mounted before state update
+      if (isMountedRef.current) {
+        setIsLoggingIn(false)
+      }
     }
   }, [clearPolling, onRefresh])
 

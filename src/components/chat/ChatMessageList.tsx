@@ -11,8 +11,7 @@
 import React, { memo, useMemo, useDeferredValue, useCallback, useRef, useEffect } from 'react'
 import { List } from 'react-window'
 import type { ListImperativeAPI } from 'react-window'
-import { useShallow } from 'zustand/react/shallow'
-import { type ThreadState, useThreadStore } from '../../stores/thread'
+import { useThreadStore, selectFocusedThread } from '../../stores/thread'
 import { isUserMessageContent, isAgentMessageContent } from '../../lib/typeGuards'
 import { MessageItem } from './messages'
 import { ChatEmptyState } from './ChatEmptyState'
@@ -85,16 +84,13 @@ export default memo(function ChatMessageList({
   onDrop,
   filterText = '',
 }: ChatMessageListProps) {
-  // P1 Fix: Use shallow selector to prevent re-renders when only values change
-  const messageListData = useThreadStore(
-    useShallow((state: ThreadState) => ({
-      items: state.items,
-      itemOrder: state.itemOrder,
-      turnStatus: state.turnStatus,
-    }))
-  )
+  // P1 Fix: Use proper selector to prevent re-renders from getter-based state access
+  const focusedThread = useThreadStore(selectFocusedThread)
 
-  const { items, itemOrder, turnStatus } = messageListData
+  // Extract data from focused thread state
+  const items = focusedThread?.items ?? {}
+  const itemOrder = focusedThread?.itemOrder ?? []
+  const turnStatus = focusedThread?.turnStatus ?? 'idle'
 
   // Use deferred value for filter to avoid blocking renders
   const deferredFilterText = useDeferredValue(filterText)

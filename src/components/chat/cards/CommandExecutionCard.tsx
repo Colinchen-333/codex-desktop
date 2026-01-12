@@ -8,10 +8,11 @@
  * - item.content changes meaningfully (shallow comparison)
  */
 import { memo, useState, useEffect, useRef } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Terminal } from 'lucide-react'
 import { cn } from '../../../lib/utils'
 import { isCommandExecutionContent } from '../../../lib/typeGuards'
-import { useThreadStore } from '../../../stores/thread'
+import { useThreadStore, selectFocusedThread, type ThreadState } from '../../../stores/thread'
 import { log } from '../../../lib/logger'
 import { formatTimestamp, truncateOutput, shallowContentEqual } from '../utils'
 import { MAX_OUTPUT_LINES } from '../types'
@@ -29,8 +30,14 @@ import type { MessageItemProps } from '../types'
  */
 export const CommandExecutionCard = memo(
   function CommandExecutionCard({ item }: MessageItemProps) {
-  // Hooks must be called unconditionally at the top
-  const { respondToApproval, activeThread, sendMessage } = useThreadStore()
+  // Use selector to avoid infinite re-render loops from getter-based state access
+  const { activeThread, respondToApproval, sendMessage } = useThreadStore(
+    useShallow((state: ThreadState) => ({
+      activeThread: selectFocusedThread(state)?.thread ?? null,
+      respondToApproval: state.respondToApproval,
+      sendMessage: state.sendMessage,
+    }))
+  )
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [isExpanded, setIsExpanded] = useState(true)
   const [showFullOutput, setShowFullOutput] = useState(false)
@@ -41,6 +48,8 @@ export const CommandExecutionCard = memo(
   const [isApproving, setIsApproving] = useState(false)
   // Synchronous lock to prevent double-click race condition (state updates are async)
   const isApprovingRef = useRef(false)
+  // P0 Fix: Add synchronous lock for explain to prevent double-click race condition
+  const isExplainingRef = useRef(false)
   const outputRef = useRef<HTMLPreElement>(null)
   const feedbackInputRef = useRef<HTMLInputElement>(null)
 
@@ -95,10 +104,15 @@ export const CommandExecutionCard = memo(
 
   // Handle explain request - like CLI's 'x' option
   const handleExplain = async () => {
+    // P0 Fix: Prevent double-click race condition using synchronous ref check
+    if (isExplainingRef.current) return
+    isExplainingRef.current = true
+
     // CRITICAL: Validate thread hasn't changed since component rendered
     const currentThread = useThreadStore.getState().activeThread
     if (!currentThread || !activeThread || currentThread.id !== activeThread.id) {
       log.error('Thread changed before explain, aborting', 'CommandExecutionCard')
+      isExplainingRef.current = false
       return
     }
 
@@ -114,6 +128,7 @@ export const CommandExecutionCard = memo(
     } catch {
       setExplanation('Unable to generate explanation.')
     } finally {
+      isExplainingRef.current = false
       setIsExplaining(false)
     }
   }
@@ -121,7 +136,8 @@ export const CommandExecutionCard = memo(
   // Handle feedback submission - like CLI's 'e' option
   const handleFeedbackSubmit = async () => {
     // Prevent double submission
-    if (isApproving) return
+    if (isApprovingRef.current) return
+    isApprovingRef.current = true
 
     // CRITICAL: Validate thread hasn't changed since component rendered
     const currentThread = useThreadStore.getState().activeThread
@@ -129,6 +145,7 @@ export const CommandExecutionCard = memo(
       log.error('Thread changed before feedback submit, aborting', 'CommandExecutionCard')
       setFeedbackText('')
       setApprovalMode('select')
+      isApprovingRef.current = false
       return
     }
 
@@ -139,6 +156,7 @@ export const CommandExecutionCard = memo(
         await sendMessage(feedbackText.trim())
       }
     } finally {
+      isApprovingRef.current = false
       setIsApproving(false)
       setFeedbackText('')
       setApprovalMode('select')

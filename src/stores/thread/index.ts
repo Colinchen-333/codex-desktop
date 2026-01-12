@@ -308,3 +308,23 @@ export { clearThreadTimers, getTimerStats, cleanupThreadResources } from './util
 // Export LRU cache for use in components (e.g., ChatView itemSizeCache)
 export { LRUCache } from './lru-cache'
 export { MAX_LRU_CACHE_SIZE } from './constants'
+
+// Export selectors for optimized state access
+// Use these instead of getter-based state access to avoid potential re-render loops
+export {
+  selectFocusedThread,
+  selectFocusedThreadId,
+  selectTurnStatus,
+  selectItems,
+  selectItemOrder,
+  selectOrderedItems,
+  selectPendingApprovals,
+  selectQueuedMessages,
+  selectTokenUsage,
+  selectTurnTiming,
+  selectSessionOverrides,
+  selectActiveThread,
+  selectCanAddSession,
+  selectIsLoading,
+  selectGlobalError,
+} from './selectors'

@@ -63,9 +63,20 @@ export function ContextMenu({ items, children, className }: ContextMenuProps) {
     }
   }, [isOpen])
 
+  // P0 Fix: Track if position has been adjusted to prevent infinite loop
+  // The issue was that position in dependency + setPosition in effect body = potential loop
+  const hasAdjustedRef = useRef(false)
+
+  // Reset adjustment flag when menu opens at new position
+  useEffect(() => {
+    if (isOpen) {
+      hasAdjustedRef.current = false
+    }
+  }, [isOpen])
+
   // Adjust position if menu would overflow viewport - legitimate DOM measurement update
   useLayoutEffect(() => {
-    if (!isOpen || !menuRef.current) {
+    if (!isOpen || !menuRef.current || hasAdjustedRef.current) {
       return
     }
 
@@ -84,6 +95,8 @@ export function ContextMenu({ items, children, className }: ContextMenuProps) {
     }
 
     if (newX !== position.x || newY !== position.y) {
+      // P0 Fix: Mark as adjusted to prevent re-triggering
+      hasAdjustedRef.current = true
       // eslint-disable-next-line react-hooks/set-state-in-effect -- Position update based on DOM measurements
       setPosition({ x: newX, y: newY })
     }

@@ -4,9 +4,8 @@
  */
 import React, { useCallback, useEffect, memo } from 'react'
 import { X, Paperclip, StopCircle, ArrowUp } from 'lucide-react'
-import { useShallow } from 'zustand/react/shallow'
 import { cn } from '../../lib/utils'
-import { useThreadStore, type ThreadState } from '../../stores/thread'
+import { useThreadStore, selectFocusedThread } from '../../stores/thread'
 import { SlashCommandPopup } from './SlashCommandPopup'
 import { FileMentionPopup } from './FileMentionPopup'
 import { type SlashCommand } from '../../lib/slashCommands'
@@ -126,13 +125,11 @@ export default memo(function ChatInputArea({
   projects,
   selectedProjectId,
 }: ChatInputAreaProps) {
-  // P1 Fix: Combine selector to prevent multiple subscriptions
-  const { turnStatus, interrupt } = useThreadStore(
-    useShallow((state: ThreadState) => ({
-      turnStatus: state.turnStatus,
-      interrupt: state.interrupt,
-    }))
-  )
+  // P1 Fix: Use proper selector to avoid re-render loops from getter-based state access
+  const focusedThread = useThreadStore(selectFocusedThread)
+  const interrupt = useThreadStore((state) => state.interrupt)
+
+  const turnStatus = focusedThread?.turnStatus ?? 'idle'
 
   const {
     showSlashCommands,

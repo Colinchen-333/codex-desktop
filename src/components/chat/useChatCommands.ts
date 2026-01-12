@@ -2,8 +2,8 @@
  * useChatCommands - Hook for building command context
  * Extracted from ChatView.tsx to reduce component complexity
  */
-import { useCallback } from 'react'
-import { useThreadStore, type ThreadState } from '../../stores/thread'
+import { useCallback, useMemo } from 'react'
+import { useThreadStore, type ThreadState, selectFocusedThread } from '../../stores/thread'
 import { useProjectsStore, type ProjectsState } from '../../stores/projects'
 import { useSessionsStore, type SessionsState } from '../../stores/sessions'
 import {
@@ -38,8 +38,10 @@ export function useChatCommands({
   const sendMessage = useThreadStore((state: ThreadState) => state.sendMessage)
   const addInfoItem = useThreadStore((state: ThreadState) => state.addInfoItem)
   const clearThread = useThreadStore((state: ThreadState) => state.clearThread)
-  const tokenUsage = useThreadStore((state: ThreadState) => state.tokenUsage)
-  const activeThread = useThreadStore((state: ThreadState) => state.activeThread)
+  // Use proper selector instead of getter to avoid potential re-render loops
+  const focusedThreadState = useThreadStore(selectFocusedThread)
+  const activeThread = useMemo(() => focusedThreadState?.thread ?? null, [focusedThreadState])
+  const tokenUsage = useMemo(() => focusedThreadState?.tokenUsage ?? { totalTokens: 0, modelContextWindow: null }, [focusedThreadState])
   const startThread = useThreadStore((state: ThreadState) => state.startThread)
   const resumeThread = useThreadStore((state: ThreadState) => state.resumeThread)
 
@@ -142,7 +144,7 @@ export function useChatCommands({
       const project = projects.find((p) => p.id === selectedProjectId)
       if (!project) return
       try {
-        const response = await serverApi.listSkills([project.path])
+        const response = await serverApi.listSkills([project.path], false, selectedProjectId)
         const lines = response.data.flatMap((entry) =>
           entry.skills.map((skill) => `- ${skill.name}: ${skill.description}`)
         )

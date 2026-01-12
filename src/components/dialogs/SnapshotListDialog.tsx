@@ -1,12 +1,13 @@
 import { useEffect, useState, useRef } from 'react'
 import { cn } from '../../lib/utils'
-import { useThreadStore } from '../../stores/thread'
+import { useThreadStore, selectFocusedThread, type ThreadState } from '../../stores/thread'
 import { useProjectsStore } from '../../stores/projects'
 import { useToast } from '../ui/Toast'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useDialogKeyboardShortcut } from '../../hooks/useDialogKeyboardShortcut'
 import type { Snapshot } from '../../lib/api'
 import { logError } from '../../lib/errorUtils'
+import { ErrorBoundary } from '../ui/ErrorBoundary'
 
 interface SnapshotListDialogProps {
   isOpen: boolean
@@ -45,7 +46,10 @@ function getSnapshotTypeLabel(type: string): string {
 }
 
 export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps) {
-  const { snapshots, activeThread } = useThreadStore()
+  // Use selectors to avoid infinite re-render loops from getter-based state access
+  const focusedThread = useThreadStore(selectFocusedThread)
+  const activeThread = focusedThread?.thread ?? null
+  const snapshots = focusedThread?.snapshots ?? []
   // fetchSnapshots, revertToSnapshot are called via getState() to avoid dependency issues
   const { projects, selectedProjectId } = useProjectsStore()
   const { showToast } = useToast()
@@ -111,31 +115,49 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
 
   if (!isOpen) return null
 
-  return (
+  const errorFallback = (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-lg rounded-lg bg-background shadow-xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <h2 className="text-lg font-semibold">Snapshots</h2>
-          <button
-            className="text-muted-foreground hover:text-foreground"
-            onClick={onClose}
-          >
-            ✕
-          </button>
-        </div>
+      <div className="w-full max-w-md rounded-lg bg-background p-6 text-center shadow-xl">
+        <h2 className="text-lg font-semibold">Snapshots unavailable</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Something went wrong while loading snapshots.
+        </p>
+        <button
+          className="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  )
 
-        {/* Content */}
-        <div className="max-h-[400px] overflow-y-auto p-4">
-          {!activeThread ? (
-            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-              No active session. Start a session to create snapshots.
-            </div>
-          ) : isLoading ? (
-            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-              <div className="animate-spin mr-2">⏳</div>
-              Loading snapshots...
-            </div>
+  return (
+    <ErrorBoundary fallback={errorFallback}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="w-full max-w-lg rounded-lg bg-background shadow-xl">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <h2 className="text-lg font-semibold">Snapshots</h2>
+            <button
+              className="text-muted-foreground hover:text-foreground"
+              onClick={onClose}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="max-h-[400px] overflow-y-auto p-4">
+            {!activeThread ? (
+              <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+                No active session. Start a session to create snapshots.
+              </div>
+            ) : isLoading ? (
+              <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+                <div className="animate-spin mr-2">⏳</div>
+                Loading snapshots...
+              </div>
           ) : snapshots.length === 0 ? (
             <div className="flex h-32 flex-col items-center justify-center text-sm text-muted-foreground">
               <div className="text-3xl mb-3">📸</div>
@@ -216,6 +238,7 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
           onCancel={handleRevertCancel}
         />
       </div>
-    </div>
+      </div>
+    </ErrorBoundary>
   )
 }

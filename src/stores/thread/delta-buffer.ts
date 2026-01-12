@@ -107,6 +107,14 @@ export function clearOperationSequence(threadId: string): void {
   operationSequences.delete(threadId)
 }
 
+/**
+ * Clear all operation sequences.
+ * Used during global cleanup to prevent leaks on app shutdown.
+ */
+export function clearAllOperationSequences(): void {
+  operationSequences.clear()
+}
+
 // ==================== Thread Switch Lock ====================
 // Prevents concurrent thread operations that could cause race conditions
 // P0 Enhancement: Added lock queue to prevent timeout errors during high concurrency
@@ -117,6 +125,7 @@ let pendingLockResolve: (() => void) | null = null
 // P0 Enhancement: Lock waiting queue to handle multiple concurrent lock requests
 // Instead of timing out, requests wait in queue for their turn
 interface LockRequest {
+  id: number  // P0 Fix: Unique ID for reliable lookup instead of function reference comparison
   resolve: () => void
   reject: (error: Error) => void
   requestedAt: number
@@ -124,6 +133,79 @@ interface LockRequest {
 }
 
 const lockWaitQueue: LockRequest[] = []
+let lockRequestIdCounter = 0  // P0 Fix: Counter for unique request IDs
+const MAX_LOCK_REQUEST_ID = Number.MAX_SAFE_INTEGER - 1
+
+// ==================== Lock Wait Telemetry ====================
+
+interface LockWaitMetrics {
+  totalWaitMs: number
+  maxWaitMs: number
+  waitCount: number
+  queueWaitCount: number
+  timeoutCount: number
+}
+
+const lockWaitMetrics: LockWaitMetrics = {
+  totalWaitMs: 0,
+  maxWaitMs: 0,
+  waitCount: 0,
+  queueWaitCount: 0,
+  timeoutCount: 0,
+}
+
+const LOCK_WAIT_WARN_THRESHOLD_MS = 1000
+
+function recordLockWait(waitMs: number, fromQueue: boolean): void {
+  lockWaitMetrics.totalWaitMs += waitMs
+  lockWaitMetrics.waitCount += 1
+  if (fromQueue) {
+    lockWaitMetrics.queueWaitCount += 1
+  }
+  if (waitMs > lockWaitMetrics.maxWaitMs) {
+    lockWaitMetrics.maxWaitMs = waitMs
+  }
+
+  if (waitMs >= LOCK_WAIT_WARN_THRESHOLD_MS) {
+    log.warn(`[acquireThreadSwitchLock] Slow lock wait: ${waitMs}ms`, 'delta-buffer')
+  }
+}
+
+function recordLockTimeout(): void {
+  lockWaitMetrics.timeoutCount += 1
+}
+
+export function getLockWaitMetrics(): LockWaitMetrics {
+  return { ...lockWaitMetrics }
+}
+
+function nextLockRequestId(): number {
+  if (lockRequestIdCounter >= MAX_LOCK_REQUEST_ID) {
+    log.warn('[acquireThreadSwitchLock] Lock request ID counter reset to avoid overflow', 'delta-buffer')
+    lockRequestIdCounter = 0
+  }
+
+  let candidate = ++lockRequestIdCounter
+  if (lockWaitQueue.length === 0) {
+    return candidate
+  }
+
+  const maxAttempts = Math.max(MAX_LOCK_QUEUE_SIZE, 1) + 1
+  let attempts = 0
+  while (lockWaitQueue.some((req) => req.id === candidate)) {
+    if (lockRequestIdCounter >= MAX_LOCK_REQUEST_ID) {
+      log.warn('[acquireThreadSwitchLock] Lock request ID counter reset to avoid overflow', 'delta-buffer')
+      lockRequestIdCounter = 0
+    }
+    candidate = ++lockRequestIdCounter
+    attempts += 1
+    if (attempts > maxAttempts) {
+      throw new Error('Lock request id collision overflow; lock queue may be stuck')
+    }
+  }
+
+  return candidate
+}
 
 /**
  * Process the next request in the lock wait queue.
@@ -143,6 +225,7 @@ function processNextLockRequest(): void {
     nextRequest.resolve()
 
     const waitTime = Date.now() - nextRequest.requestedAt
+    recordLockWait(waitTime, true)
     log.debug(
       `[processNextLockRequest] Processed queued request after ${waitTime}ms wait`,
       'delta-buffer'
@@ -184,23 +267,29 @@ export async function acquireThreadSwitchLock(): Promise<void> {
     threadSwitchLock = new Promise<void>((resolve) => {
       pendingLockResolve = resolve
     })
+    recordLockWait(0, false)
     log.debug('[acquireThreadSwitchLock] Lock acquired immediately', 'delta-buffer')
     return
   }
 
   // Slow path: add to queue and wait
   return new Promise<void>((resolve, reject) => {
+    // P0 Fix: Generate unique ID for reliable lookup
+    const requestId = nextLockRequestId()
+
     const timeoutId = setTimeout(() => {
-      // Remove from queue on timeout
-      const index = lockWaitQueue.findIndex(req => req.resolve === resolve)
-      if (index >= 0) {
-        lockWaitQueue.splice(index, 1)
+      // P0 Fix: Remove from queue using unique ID instead of function reference
+      const index = lockWaitQueue.findIndex(req => req.id === requestId)
+      if (index < 0) {
+        return
       }
+      lockWaitQueue.splice(index, 1)
 
       const error = new Error(
         `Thread switch lock timeout after ${THREAD_SWITCH_LOCK_TIMEOUT_MS}ms ` +
         `(${lockWaitQueue.length} requests still in queue)`
       )
+      recordLockTimeout()
       log.error(
         `[acquireThreadSwitchLock] ${error.message}`,
         'delta-buffer'
@@ -208,7 +297,18 @@ export async function acquireThreadSwitchLock(): Promise<void> {
       reject(error)
     }, THREAD_SWITCH_LOCK_TIMEOUT_MS)
 
+    if (lockWaitQueue.length >= MAX_LOCK_QUEUE_SIZE) {
+      const error = new Error(
+        `Lock queue overflow: ${lockWaitQueue.length} requests waiting. System may be under high load.`
+      )
+      log.error(`[acquireThreadSwitchLock] ${error.message}`, 'delta-buffer')
+      clearTimeout(timeoutId)
+      reject(error)
+      return
+    }
+
     const request: LockRequest = {
+      id: requestId,  // P0 Fix: Include unique ID
       resolve,
       reject,
       requestedAt: Date.now(),
@@ -217,7 +317,7 @@ export async function acquireThreadSwitchLock(): Promise<void> {
 
     lockWaitQueue.push(request)
     log.debug(
-      `[acquireThreadSwitchLock] Added to queue (position: ${lockWaitQueue.length})`,
+      `[acquireThreadSwitchLock] Added to queue (id: ${requestId}, position: ${lockWaitQueue.length})`,
       'delta-buffer'
     )
   })
@@ -249,6 +349,25 @@ export function releaseThreadSwitchLock(): void {
 }
 
 /**
+ * Clear all pending thread switch lock requests.
+ * Used during global cleanup to avoid retaining queued promises.
+ */
+export function clearThreadSwitchLockQueue(): void {
+  const error = new Error('Thread switch lock cleared during cleanup')
+  for (const request of lockWaitQueue) {
+    clearTimeout(request.timeoutId)
+    request.reject(error)
+  }
+  lockWaitQueue.length = 0
+
+  if (pendingLockResolve) {
+    pendingLockResolve()
+    pendingLockResolve = null
+  }
+  threadSwitchLock = null
+}
+
+/**
  * Check if thread switch is currently locked.
  */
 export function isThreadSwitchLocked(): boolean {
@@ -270,7 +389,16 @@ export function isOperationValid(threadId: string, opSeq: number): boolean {
 // ==================== Delta Buffers ====================
 // Per-thread delta buffers - using LRU cache to prevent unbounded growth
 
-export const deltaBuffers = new LRUCache<string, DeltaBuffer>(MAX_LRU_CACHE_SIZE)
+export const deltaBuffers = new LRUCache<string, DeltaBuffer>(
+  MAX_LRU_CACHE_SIZE,
+  (threadId, buffer) => {
+    clearDeltaBufferEntry(threadId, buffer)
+    clearTurnTimeout(threadId)
+    clearOperationSequence(threadId)
+    clearFlushMetrics(threadId)
+    log.debug(`[LRU eviction] Cleared delta buffer for thread: ${threadId}`, 'delta-buffer')
+  }
+)
 
 // P1 Fix: Per-thread flush timers with automatic cleanup on eviction
 export const flushTimers = new LRUCache<string, ReturnType<typeof setTimeout>>(
@@ -296,7 +424,39 @@ export const closingThreads: Set<string> = new Set()
 
 // P1 Fix: Lock mechanism to protect closingThreads Set from concurrent access
 // Prevents race conditions when multiple operations try to modify closingThreads simultaneously
-const closingThreadsLock = new Map<string, Promise<void>>()
+interface ClosingThreadLockEntry {
+  token: number
+  promise: Promise<void>
+  resolve: () => void
+  createdAt: number
+  timeoutId: ReturnType<typeof setTimeout>
+}
+
+const closingThreadsLock = new Map<string, ClosingThreadLockEntry>()
+let closingThreadLockToken = 0
+const MAX_CLOSING_THREAD_LOCK_TOKEN = Number.MAX_SAFE_INTEGER - 1
+
+/**
+ * P2 Fix: Maximum wait time for closing thread lock (5 seconds)
+ */
+const MAX_CLOSING_LOCK_WAIT_MS = 5000
+const MAX_CLOSING_THREAD_AGE_MS = 5000
+
+async function waitForClosingLock(lockPromise: Promise<void>, timeoutMs: number): Promise<boolean> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      lockPromise.then(() => false).catch(() => false),
+      new Promise<boolean>((resolve) => {
+        timeoutId = setTimeout(() => resolve(true), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+  }
+}
 
 /**
  * Mark a thread as closing with lock protection
@@ -306,26 +466,76 @@ const closingThreadsLock = new Map<string, Promise<void>>()
  * @returns Cleanup function to remove thread from closing set and release lock
  */
 export async function markThreadAsClosing(threadId: string): Promise<() => void> {
+  // P2 Fix: Add timeout protection for lock wait loop
+  const startWait = Date.now()
+
   // Wait for any existing operation on this thread to complete
   while (closingThreadsLock.has(threadId)) {
-    await closingThreadsLock.get(threadId)
+    const lockEntry = closingThreadsLock.get(threadId)
+    if (!lockEntry) break
+
+    const remainingMs = MAX_CLOSING_LOCK_WAIT_MS - (Date.now() - startWait)
+    if (remainingMs <= 0) {
+      log.warn(
+        `[markThreadAsClosing] Timeout waiting for lock on ${threadId} after ${MAX_CLOSING_LOCK_WAIT_MS}ms, proceeding anyway`,
+        'delta-buffer'
+      )
+      break
+    }
+
+    const timedOut = await waitForClosingLock(lockEntry.promise, remainingMs)
+    if (timedOut) {
+      log.warn(
+        `[markThreadAsClosing] Timeout waiting for lock on ${threadId} after ${MAX_CLOSING_LOCK_WAIT_MS}ms, proceeding anyway`,
+        'delta-buffer'
+      )
+      cleanupStaleClosingThreads()
+      break
+    }
   }
 
   // Create lock promise for this operation
-  let resolveLock: () => void
+  if (closingThreadLockToken >= MAX_CLOSING_THREAD_LOCK_TOKEN) {
+    log.warn('[markThreadAsClosing] Closing lock token reset to avoid overflow', 'delta-buffer')
+    closingThreadLockToken = 0
+  }
+  const token = ++closingThreadLockToken
+  let resolveLock: () => void = () => {}
   const lockPromise = new Promise<void>((resolve) => {
     resolveLock = resolve
   })
-  closingThreadsLock.set(threadId, lockPromise)
+  const timeoutId = setTimeout(() => {
+    const current = closingThreadsLock.get(threadId)
+    if (current?.token !== token) return
+    log.warn(
+      `[markThreadAsClosing] Auto-releasing stale closing lock for ${threadId}`,
+      'delta-buffer'
+    )
+    closingThreads.delete(threadId)
+    closingThreadsLock.delete(threadId)
+    current.resolve()
+  }, MAX_CLOSING_THREAD_AGE_MS)
+
+  closingThreadsLock.set(threadId, {
+    token,
+    promise: lockPromise,
+    resolve: resolveLock,
+    createdAt: Date.now(),
+    timeoutId,
+  })
 
   // Add to closing set
   closingThreads.add(threadId)
 
   // Return cleanup function
   return () => {
-    closingThreads.delete(threadId)
-    closingThreadsLock.delete(threadId)
-    resolveLock!()
+    const currentLock = closingThreadsLock.get(threadId)
+    if (currentLock?.token === token) {
+      clearTimeout(currentLock.timeoutId)
+      closingThreads.delete(threadId)
+      closingThreadsLock.delete(threadId)
+    }
+    resolveLock()
   }
 }
 
@@ -345,7 +555,7 @@ export function isThreadClosing(threadId: string): boolean {
  */
 export async function clearAllClosingThreads(): Promise<void> {
   // Wait for all locks to be released
-  const lockPromises = Array.from(closingThreadsLock.values())
+  const lockPromises = Array.from(closingThreadsLock.values()).map((entry) => entry.promise)
   if (lockPromises.length > 0) {
     await Promise.all(lockPromises)
   }
@@ -353,6 +563,27 @@ export async function clearAllClosingThreads(): Promise<void> {
   // Clear the set
   closingThreads.clear()
   closingThreadsLock.clear()
+}
+
+export function cleanupStaleClosingThreads(maxAgeMs: number = MAX_CLOSING_THREAD_AGE_MS): number {
+  const now = Date.now()
+  let cleaned = 0
+  for (const [threadId, entry] of closingThreadsLock.entries()) {
+    if (now - entry.createdAt <= maxAgeMs) continue
+    if (deltaBuffers.has(threadId) || flushTimers.has(threadId) || turnTimeoutTimers.has(threadId)) {
+      continue
+    }
+    log.warn(
+      `[cleanupStaleClosingThreads] Removing stale closing entry for thread ${threadId} after ${now - entry.createdAt}ms`,
+      'delta-buffer'
+    )
+    closingThreads.delete(threadId)
+    clearTimeout(entry.timeoutId)
+    closingThreadsLock.delete(threadId)
+    entry.resolve()
+    cleaned++
+  }
+  return cleaned
 }
 
 // ==================== Batch Flush Queue ====================
@@ -366,6 +597,9 @@ interface PendingFlush {
 }
 
 const pendingFlushQueue: Map<string, PendingFlush> = new Map()
+const pendingFlushVersions: Map<string, number> = new Map()
+const MAX_PENDING_FLUSH_VERSIONS = MAX_LRU_CACHE_SIZE
+const MAX_PENDING_FLUSH_VERSION = Number.MAX_SAFE_INTEGER - 1
 let idleCallbackId: number | null = null
 
 // ==================== Cleanup Idempotency Protection ====================
@@ -376,6 +610,19 @@ let idleCallbackId: number | null = null
  * Cleanup keys are automatically removed after a short delay.
  */
 const recentCleanups = new Set<string>()
+const MAX_RECENT_CLEANUPS = 1000
+
+function trimRecentCleanups(): void {
+  if (recentCleanups.size < MAX_RECENT_CLEANUPS) return
+  const overflow = recentCleanups.size - MAX_RECENT_CLEANUPS + 1
+  let removed = 0
+  for (const key of recentCleanups) {
+    recentCleanups.delete(key)
+    removed += 1
+    if (removed >= overflow) break
+  }
+  log.warn(`[delta-buffer] Trimmed ${removed} recent cleanup entries`, 'delta-buffer')
+}
 
 /**
  * Check if requestIdleCallback is available (browser environment).
@@ -402,6 +649,20 @@ function processPendingFlushes(): void {
 
   for (const flush of flushes) {
     try {
+      // P0 Fix: Check if thread is still valid before flushing (stale closure protection)
+      if (closingThreads.has(flush.threadId)) {
+        log.debug(`[processPendingFlushes] Skipping flush for closing thread: ${flush.threadId}`, 'delta-buffer')
+        continue
+      }
+      const latestVersion = pendingFlushVersions.get(flush.threadId)
+      if (latestVersion !== undefined && latestVersion !== flush.version) {
+        log.debug(
+          `[processPendingFlushes] Skipping stale flush (pending: ${flush.version}, latest: ${latestVersion}) for thread: ${flush.threadId}`,
+          'delta-buffer'
+        )
+        continue
+      }
+      pendingFlushVersions.delete(flush.threadId)
       flush.flushFn()
     } catch (error) {
       log.error(`[delta-buffer] Error during batch flush for thread ${flush.threadId}: ${error instanceof Error ? error.message : String(error)}`, 'delta-buffer')
@@ -459,6 +720,30 @@ export function createEmptyDeltaBuffer(threadId: string): DeltaBuffer {
   }
 }
 
+function clearDeltaBufferEntry(threadId: string, buffer: DeltaBuffer): void {
+  buffer.turnId = null
+  // P0 Fix: Pass threadId to get correct sequence
+  buffer.operationSeq = getCurrentOperationSequence(threadId)
+  buffer.agentMessages.clear()
+  buffer.commandOutputs.clear()
+  buffer.fileChangeOutputs.clear()
+  buffer.reasoningSummaries.clear()
+  buffer.reasoningContents.clear()
+  buffer.mcpProgress.clear()
+  buffer._cachedSize = 0 // Reset cached size
+
+  // Clear any pending flush for this thread
+  pendingFlushQueue.delete(threadId)
+  pendingFlushVersions.delete(threadId)
+
+  const timer = flushTimers.get(threadId)
+  if (timer) {
+    clearTimeout(timer)
+    flushTimers.delete(threadId)
+    log.debug(`[clearDeltaBuffer] Cleared flush timer for thread: ${threadId}`, 'delta-buffer')
+  }
+}
+
 export function getDeltaBuffer(threadId: string): DeltaBuffer | null {
   // Check if thread is being closed - don't create/access buffers
   if (closingThreads.has(threadId)) {
@@ -471,6 +756,10 @@ export function getDeltaBuffer(threadId: string): DeltaBuffer | null {
     // P0 Fix: Pass threadId to create buffer with correct sequence
     buffer = createEmptyDeltaBuffer(threadId)
     deltaBuffers.set(threadId, buffer)
+    if (closingThreads.has(threadId)) {
+      deltaBuffers.delete(threadId)
+      return null
+    }
   }
   return buffer
 }
@@ -478,26 +767,7 @@ export function getDeltaBuffer(threadId: string): DeltaBuffer | null {
 export function clearDeltaBuffer(threadId: string): void {
   const buffer = deltaBuffers.get(threadId)
   if (buffer) {
-    buffer.turnId = null
-    // P0 Fix: Pass threadId to get correct sequence
-    buffer.operationSeq = getCurrentOperationSequence(threadId)
-    buffer.agentMessages.clear()
-    buffer.commandOutputs.clear()
-    buffer.fileChangeOutputs.clear()
-    buffer.reasoningSummaries.clear()
-    buffer.reasoningContents.clear()
-    buffer.mcpProgress.clear()
-    buffer._cachedSize = 0 // Reset cached size
-  }
-
-  // Clear any pending flush for this thread
-  pendingFlushQueue.delete(threadId)
-
-  const timer = flushTimers.get(threadId)
-  if (timer) {
-    clearTimeout(timer)
-    flushTimers.delete(threadId)
-    log.debug(`[clearDeltaBuffer] Cleared flush timer for thread: ${threadId}`, 'delta-buffer')
+    clearDeltaBufferEntry(threadId, buffer)
   }
 }
 
@@ -651,6 +921,7 @@ interface FlushMetrics {
 }
 
 const flushMetricsMap = new Map<string, FlushMetrics>()
+const MAX_FLUSH_METRICS_ENTRIES = MAX_LRU_CACHE_SIZE
 
 /**
  * Get or create flush metrics for a thread.
@@ -664,6 +935,12 @@ function getFlushMetrics(threadId: string): FlushMetrics {
       lastFlushTime: 0,
     }
     flushMetricsMap.set(threadId, metrics)
+    if (flushMetricsMap.size > MAX_FLUSH_METRICS_ENTRIES) {
+      const oldestKey = flushMetricsMap.keys().next().value as string | undefined
+      if (oldestKey) {
+        flushMetricsMap.delete(oldestKey)
+      }
+    }
   }
   return metrics
 }
@@ -674,6 +951,14 @@ function getFlushMetrics(threadId: string): FlushMetrics {
  */
 export function clearFlushMetrics(threadId: string): void {
   flushMetricsMap.delete(threadId)
+}
+
+/**
+ * Clear all flush metrics.
+ * Used during global cleanup to prevent memory leaks.
+ */
+export function clearAllFlushMetrics(): void {
+  flushMetricsMap.clear()
 }
 
 /**
@@ -784,29 +1069,57 @@ export function scheduleFlush(threadId: string, flushFn: () => void, immediate =
   if (!existingTimer) {
     // P2: Get existing entry to increment version
     const existing = pendingFlushQueue.get(threadId)
-    
+
     // P2: Prevent duplicate scheduling within short time window (10ms)
     if (existing && existing.scheduledAt > performance.now() - 10) {
       log.debug(`[scheduleFlush] Skipping duplicate flush for ${threadId}`, 'delta-buffer')
       return
     }
-    
+
+    // P1 Fix: Calculate version before storing to capture for timer closure
+    const baseVersion = existing?.version ?? 0
+    const scheduledVersion = baseVersion >= MAX_PENDING_FLUSH_VERSION ? 1 : baseVersion + 1
+
     // Add to pending flush queue for batch processing
     pendingFlushQueue.set(threadId, {
       threadId,
       flushFn,
       scheduledAt: performance.now(),
-      version: (existing?.version ?? 0) + 1,  // P2: Increment version
+      version: scheduledVersion,
     })
+    pendingFlushVersions.set(threadId, scheduledVersion)
+    if (pendingFlushVersions.size > MAX_PENDING_FLUSH_VERSIONS) {
+      const oldestKey = pendingFlushVersions.keys().next().value as string | undefined
+      if (oldestKey) {
+        pendingFlushVersions.delete(oldestKey)
+      }
+    }
 
     // Schedule the timer
     const timer = setTimeout(() => {
       flushTimers.delete(threadId)
 
+      // P0 Fix: Check if thread is still valid before flushing (stale closure protection)
+      if (closingThreads.has(threadId)) {
+        log.debug(`[scheduleFlush:timer] Skipping flush for closing thread: ${threadId}`, 'delta-buffer')
+        pendingFlushQueue.delete(threadId)
+        return
+      }
+
       // Check if still in pending queue (not already processed by idle callback)
       const pending = pendingFlushQueue.get(threadId)
       if (pending) {
+        // P1 Fix: Check version to ensure we're processing the correct flush request
+        // If version doesn't match, a newer flush was scheduled and this timer is stale
+        if (pending.version !== scheduledVersion) {
+          log.debug(
+            `[scheduleFlush:timer] Skipping stale flush (scheduled: ${scheduledVersion}, current: ${pending.version}) for thread: ${threadId}`,
+            'delta-buffer'
+          )
+          return
+        }
         pendingFlushQueue.delete(threadId)
+        pendingFlushVersions.delete(threadId)
         pending.flushFn()
       }
     }, FLUSH_INTERVAL_MS)
@@ -840,12 +1153,14 @@ export function performFullTurnCleanup(threadId: string): void {
   }
 
   // Mark as recently cleaned up
+  trimRecentCleanups()
   recentCleanups.add(cleanupKey)
 
   // Execute cleanup operations
   clearDeltaBuffer(threadId)      // Clears buffer + flush timer + pending flush
   clearTurnTimeout(threadId)      // Clears turn timeout timer separately
   clearOperationSequence(threadId) // P0 Fix: Clear operation sequence to prevent memory leak
+  clearFlushMetrics(threadId)     // P1 Fix: Clear flush metrics to prevent memory leak
 
   log.debug(
     `[performFullTurnCleanup] Completed cleanup for thread ${threadId}`,
@@ -886,6 +1201,7 @@ export function clearAllTimers(threadId: string): void {
   if (wasPending) {
     log.debug(`[clearAllTimers] Removed thread from pending flush queue: ${threadId}`, 'delta-buffer')
   }
+  pendingFlushVersions.delete(threadId)
 }
 
 /**
@@ -910,6 +1226,7 @@ export function clearAllTimersForAllThreads(): void {
   // Clear all pending flushes
   const pendingCount = pendingFlushQueue.size
   pendingFlushQueue.clear()
+  pendingFlushVersions.clear()
 
   // Clear idle callback if active
   if (idleCallbackId !== null) {

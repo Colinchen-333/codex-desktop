@@ -188,12 +188,5 @@ export function useAsyncCallback<Args extends unknown[]>(
 } {
   const { execute, isLoading } = useAsyncOperation(asyncFn, options)
 
-  const wrappedExecute = useCallback(
-    async (...args: Args): Promise<void> => {
-      await execute(...args)
-    },
-    [execute]
-  )
-
-  return { execute: wrappedExecute, isLoading }
+  return { execute, isLoading }
 }

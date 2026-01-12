@@ -4,7 +4,7 @@
  * Provides keyboard navigation through command history using up/down arrows.
  * Only triggers when the cursor is at the beginning of the input or the input is empty.
  */
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useCommandHistoryStore } from '../stores/commandHistory'
 
 export interface UseCommandHistoryOptions {
@@ -39,6 +39,7 @@ export function useCommandHistory({
 
   // Track if we're currently navigating to prevent resetting cursor
   const isNavigatingRef = useRef(false)
+  const rafIdRef = useRef<number | null>(null)
 
   const handleHistoryKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -78,11 +79,15 @@ export function useCommandHistory({
           e.preventDefault()
           setInputValue(previous)
           // Move cursor to end after state update
-          requestAnimationFrame(() => {
+          if (rafIdRef.current !== null) {
+            cancelAnimationFrame(rafIdRef.current)
+          }
+          rafIdRef.current = requestAnimationFrame(() => {
             if (textarea) {
               textarea.selectionStart = textarea.selectionEnd = previous.length
             }
             isNavigatingRef.current = false
+            rafIdRef.current = null
           })
         } else {
           isNavigatingRef.current = false
@@ -93,11 +98,15 @@ export function useCommandHistory({
           e.preventDefault()
           setInputValue(next)
           // Move cursor to end after state update
-          requestAnimationFrame(() => {
+          if (rafIdRef.current !== null) {
+            cancelAnimationFrame(rafIdRef.current)
+          }
+          rafIdRef.current = requestAnimationFrame(() => {
             if (textarea) {
               textarea.selectionStart = textarea.selectionEnd = next.length
             }
             isNavigatingRef.current = false
+            rafIdRef.current = null
           })
         } else {
           isNavigatingRef.current = false
@@ -124,6 +133,14 @@ export function useCommandHistory({
   const clearHistory = useCallback(() => {
     clear()
   }, [clear])
+
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+      }
+    }
+  }, [])
 
   return {
     handleHistoryKeyDown,

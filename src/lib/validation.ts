@@ -49,10 +49,9 @@ export function isValidReasoningSummary(value: unknown): value is ReasoningSumma
  * @param value The value from localStorage
  * @param fallback The default value if validation fails
  */
-export function parseTheme(value: string | null, fallback: Theme = 'system'): Theme {
-  if (value === null) return fallback
-  if (isValidTheme(value)) return value
-  return fallback
+export function parseTheme(value: unknown, fallback: Theme = 'system'): Theme {
+  if (typeof value !== 'string') return fallback
+  return isValidTheme(value) ? value : fallback
 }
 
 /**

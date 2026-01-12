@@ -29,7 +29,17 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
     set({ isLoading: true, error: null })
     try {
       const projects = await projectApi.list()
-      set({ projects, isLoading: false })
+      set((state) => {
+        const selectedProjectId = state.selectedProjectId
+        const hasSelected = selectedProjectId
+          ? projects.some((project) => project.id === selectedProjectId)
+          : false
+        return {
+          projects,
+          selectedProjectId: hasSelected ? selectedProjectId : null,
+          isLoading: false,
+        }
+      })
     } catch (error) {
       set({ error: parseError(error), isLoading: false })
     }
@@ -51,27 +61,33 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
   },
 
   removeProject: async (id: string) => {
+    // P0 Fix: Set isLoading to prevent duplicate operations
+    set({ isLoading: true, error: null })
     try {
       await projectApi.remove(id)
       set((state) => ({
         projects: state.projects.filter((p) => p.id !== id),
         selectedProjectId:
           state.selectedProjectId === id ? null : state.selectedProjectId,
+        isLoading: false,
       }))
     } catch (error) {
-      set({ error: parseError(error) })
+      set({ error: parseError(error), isLoading: false })
       throw error
     }
   },
 
   updateProject: async (id: string, displayName: string) => {
+    // P0 Fix: Set isLoading to prevent duplicate operations
+    set({ isLoading: true, error: null })
     try {
       const updated = await projectApi.update(id, displayName)
       set((state) => ({
         projects: state.projects.map((p) => (p.id === id ? updated : p)),
+        isLoading: false,
       }))
     } catch (error) {
-      set({ error: parseError(error) })
+      set({ error: parseError(error), isLoading: false })
       throw error
     }
   },

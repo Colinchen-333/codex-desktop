@@ -546,9 +546,10 @@ export const serverApi = {
    * @param cwds 工作目录列表
    * @param forceReload 是否强制刷新（清除缓存）
    */
-  listSkills: (cwds: string[], forceReload = false) => {
-    // 使用 cwds 作为缓存键的一部分，确保不同目录使用不同缓存
-    const cacheKey = `${CACHE_KEYS.SKILLS}:${cwds.sort().join(',')}`
+  listSkills: (cwds: string[], forceReload = false, projectId?: string) => {
+    // 使用 cwds 和 projectId 作为缓存键的一部分，确保不同项目使用不同缓存
+    const scope = projectId ?? 'global'
+    const cacheKey = `${CACHE_KEYS.SKILLS}:${scope}:${[...cwds].sort().join(',')}`
     if (forceReload) {
       clearCache(cacheKey)
     }

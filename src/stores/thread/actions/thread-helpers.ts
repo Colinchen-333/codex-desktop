@@ -27,6 +27,8 @@ import {
  */
 export interface ThreadOperationOptions {
   name: string
+  /** Context ID for operation sequencing (projectId for new threads, threadId for existing) */
+  operationContextId: string
   checkCapacity?: boolean
   captureInitialState?: boolean
 }
@@ -62,7 +64,7 @@ export async function withThreadOperation<T>(
   _getThreadStore: () => ThreadState,
   operation: (opSeq: number) => Promise<T>
 ): Promise<T | undefined> {
-  const { name, checkCapacity = false, captureInitialState = false } = options
+  const { name, operationContextId, checkCapacity = false, captureInitialState = false } = options
 
   // Capture initial state for rollback if requested
   const initialState: InitialStateSnapshot | null = captureInitialState
@@ -87,9 +89,9 @@ export async function withThreadOperation<T>(
       }
     }
 
-    // Get operation sequence number for validation
-    const opSeq = getNextOperationSequence()
-    log.debug(`[${name}] Started with opSeq: ${opSeq}`, 'thread-helpers')
+    // Get operation sequence number for validation (using operationContextId)
+    const opSeq = getNextOperationSequence(operationContextId)
+    log.debug(`[${name}] Started with opSeq: ${opSeq} for context: ${operationContextId}`, 'thread-helpers')
 
     // Set loading state
     set((state) => {
@@ -102,9 +104,9 @@ export async function withThreadOperation<T>(
     const result = await operation(opSeq)
 
     // Validate operation sequence after async operation
-    if (!isOperationValid(opSeq)) {
+    if (!isOperationValid(operationContextId, opSeq)) {
       log.warn(
-        `[${name}] Operation became stale (opSeq: ${opSeq}, current: ${getCurrentOperationSequence()}), discarding result`,
+        `[${name}] Operation became stale (opSeq: ${opSeq}, current: ${getCurrentOperationSequence(operationContextId)}), discarding result`,
         'thread-helpers'
       )
 
@@ -171,8 +173,8 @@ export function validateOperation(
   threadId: string,
   operationName: string
 ): boolean {
-  // Check operation sequence
-  if (!isOperationValid(opSeq)) {
+  // Check operation sequence (using threadId as context)
+  if (!isOperationValid(threadId, opSeq)) {
     log.warn(
       `[${operationName}] Stale operation detected for thread ${threadId}`,
       'thread-helpers'

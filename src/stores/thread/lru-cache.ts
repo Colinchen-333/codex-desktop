@@ -91,9 +91,7 @@ export class LRUCache<K extends string, V> {
     if (!node) return false
 
     // P1 Fix: Call eviction callback if provided
-    if (this.onEvict) {
-      this.onEvict(key, node.value)
-    }
+    this.safeEvict(key, node.value)
 
     // Remove from linked list
     if (node.prev) {
@@ -113,8 +111,12 @@ export class LRUCache<K extends string, V> {
     return this.cache.delete(key)
   }
 
-  /** Clear all entries */
+  /** Clear all entries, calling eviction callbacks for each */
   clear(): void {
+    // P0 Fix: Call eviction callback for each entry before clearing
+    for (const [key, node] of this.cache.entries()) {
+      this.safeEvict(key, node.value)
+    }
     this.cache.clear()
     this.head = null
     this.tail = null
@@ -133,6 +135,18 @@ export class LRUCache<K extends string, V> {
   /** Get all entries as [key, value] pairs */
   entries(): [K, V][] {
     return Array.from(this.cache.entries()).map(([key, node]) => [key, node.value])
+  }
+
+  private safeEvict(key: K, value: V): void {
+    if (!this.onEvict) return
+    try {
+      this.onEvict(key, value)
+    } catch (error) {
+      log.warn(
+        `[LRUCache] Eviction callback failed for ${String(key)}: ${error instanceof Error ? error.message : String(error)}`,
+        'lru-cache'
+      )
+    }
   }
 
   /** Move key to front of LRU list */
@@ -210,8 +224,8 @@ export class LRUCache<K extends string, V> {
     for (const key of keysToEvict) {
       const node = this.cache.get(key)
       // P1 Fix: Call eviction callback before deleting
-      if (node && this.onEvict) {
-        this.onEvict(key, node.value)
+      if (node) {
+        this.safeEvict(key, node.value)
       }
       this.cache.delete(key)
     }

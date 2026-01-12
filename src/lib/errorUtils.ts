@@ -138,27 +138,72 @@ export function handleAsyncError(
  * Parse an error from Tauri invoke calls into a user-friendly message
  */
 export function parseError(error: unknown): string {
+  const MAX_ERROR_MESSAGE_LENGTH = 2000
+
+  const truncateMessage = (message: string): string => {
+    if (message.length <= MAX_ERROR_MESSAGE_LENGTH) return message
+    return `${message.slice(0, MAX_ERROR_MESSAGE_LENGTH)}... [truncated]`
+  }
+
+  const safeStringify = (value: unknown): string => {
+    const seen = new WeakSet<object>()
+    const MAX_DEPTH = 4
+    const MAX_KEYS = 50
+    const MAX_ARRAY_ITEMS = 50
+
+    const format = (val: unknown, depth: number): string => {
+      if (val === null || val === undefined) return String(val)
+      if (typeof val === 'string') return JSON.stringify(val)
+      if (typeof val === 'number' || typeof val === 'boolean' || typeof val === 'bigint') {
+        return String(val)
+      }
+      if (typeof val === 'function') return '"[Function]"'
+      if (typeof val !== 'object') return JSON.stringify(String(val))
+
+      if (seen.has(val)) return '"[Circular]"'
+      if (depth >= MAX_DEPTH) return '"[MaxDepth]"'
+      seen.add(val)
+
+      if (Array.isArray(val)) {
+        const items = val.slice(0, MAX_ARRAY_ITEMS).map((item) => format(item, depth + 1))
+        const extra = val.length > MAX_ARRAY_ITEMS ? `, "[+${val.length - MAX_ARRAY_ITEMS} more]"` : ''
+        return `[${items.join(', ')}${extra}]`
+      }
+
+      const keys = Object.keys(val as Record<string, unknown>)
+      const selectedKeys = keys.slice(0, MAX_KEYS)
+      const entries = selectedKeys.map((key) => {
+        const item = (val as Record<string, unknown>)[key]
+        return `${JSON.stringify(key)}: ${format(item, depth + 1)}`
+      })
+      const extra = keys.length > MAX_KEYS ? `, "__more__": "[+${keys.length - MAX_KEYS} more]"` : ''
+      return `{${entries.join(', ')}${extra}}`
+    }
+
+    return format(value, 0)
+  }
+
   // Handle Error instances
   if (isError(error)) {
-    return error.message
+    return truncateMessage(error.message)
   }
 
   // Handle Tauri error objects
   if (isTauriError(error)) {
-    return error.message
+    return truncateMessage(error.message)
   }
 
   // Handle generic objects with message property
   if (isRecord(error) && typeof error.message === 'string') {
-    return error.message
+    return truncateMessage(error.message)
   }
 
   // Fallback to JSON stringify for unknown object structure
   if (isRecord(error)) {
-    return JSON.stringify(error, null, 2)
+    return truncateMessage(safeStringify(error))
   }
 
-  return String(error)
+  return truncateMessage(String(error))
 }
 
 /**

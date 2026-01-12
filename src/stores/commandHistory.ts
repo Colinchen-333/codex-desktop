@@ -10,7 +10,7 @@ import { persist } from 'zustand/middleware'
 export interface CommandHistoryState {
   /** Command history array (newest at end) */
   history: string[]
-  /** Current cursor position (-1 = not navigating, 0 = newest, length-1 = oldest) */
+  /** Current cursor position (-1 = not navigating, 0 = oldest, length-1 = newest) */
   cursor: number
   /** Maximum number of commands to store */
   maxHistory: number
@@ -103,7 +103,7 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
         }
 
         // At the end, restore saved input
-        set({ cursor: -1 })
+        set({ cursor: -1, savedInput: '' })
         return savedInput
       },
 

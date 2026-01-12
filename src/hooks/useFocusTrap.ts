@@ -95,6 +95,8 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>({
 }: UseFocusTrapOptions): RefObject<T | null> {
   const containerRef = useRef<T>(null)
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null)
+  // P1 Fix: Track previous isActive state to detect transitions
+  const wasActiveRef = useRef(false)
 
   /**
    * Get all focusable elements within the container
@@ -221,10 +223,15 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>({
 
   // Store previously focused element and set up initial focus
   useEffect(() => {
+    // P1 Fix: Only store previouslyFocusedElement when transitioning from inactive to active
+    // This prevents nested dialogs from overwriting the outer dialog's stored focus
+    const wasActive = wasActiveRef.current
+    wasActiveRef.current = isActive
+
     if (!isActive) return
 
-    // Store the currently focused element to restore later
-    if (restoreFocus) {
+    // Only store focus on activation transition (false -> true)
+    if (!wasActive) {
       previouslyFocusedElementRef.current = document.activeElement as HTMLElement
     }
 

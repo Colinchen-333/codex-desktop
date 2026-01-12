@@ -2,7 +2,7 @@
  * Input-related hooks for ChatInputArea
  * Extracted from ChatInputArea.tsx to reduce component size
  */
-import { useEffect, useCallback, useState } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
 import { useAppStore, type AppState } from '../../stores/app'
 import { MAX_TEXTAREA_HEIGHT, MAX_IMAGE_SIZE } from './types'
 import { validateFilePath } from './utils'
@@ -148,18 +148,28 @@ export function useTextareaResize(
  */
 export function useFocusInput(inputRef: React.RefObject<HTMLTextAreaElement | null>) {
   const shouldFocusInput = useAppStore((state: AppState) => state.shouldFocusInput)
+  const focusRequestIdRef = useRef(0)
+  const rafIdRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (shouldFocusInput) {
+      focusRequestIdRef.current += 1
+      const requestId = focusRequestIdRef.current
+
       // P0 Enhancement: Use requestAnimationFrame to avoid render conflicts
       // This ensures focus happens after the browser has completed rendering
-      const frameId = requestAnimationFrame(() => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+      }
+      rafIdRef.current = requestAnimationFrame(() => {
+        if (focusRequestIdRef.current !== requestId) return
         if (inputRef.current) {
           log.debug('[useFocusInput] Focusing input after requestAnimationFrame', 'useInputHooks')
           inputRef.current.focus()
         } else {
           log.warn('[useFocusInput] Input ref is null, cannot focus', 'useInputHooks')
         }
+        rafIdRef.current = null
       })
 
       // Clear the flag immediately to prevent re-triggering
@@ -167,7 +177,10 @@ export function useFocusInput(inputRef: React.RefObject<HTMLTextAreaElement | nu
 
       // Cleanup: cancel animation frame if component unmounts
       return () => {
-        cancelAnimationFrame(frameId)
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current)
+          rafIdRef.current = null
+        }
       }
     }
   }, [shouldFocusInput, inputRef])
@@ -200,6 +213,16 @@ export function useFileMentionHandler({
   inputRef,
 }: FileMentionHandlerProps) {
   const { showToast } = useToast()
+  const selectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (selectionTimeoutRef.current) {
+        clearTimeout(selectionTimeoutRef.current)
+        selectionTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   const handleFileMentionSelect = useCallback(
     async (file: FileEntry) => {
@@ -231,10 +254,18 @@ export function useFileMentionHandler({
           const bytes = await readFile(fullPath)
           const blob = new Blob([bytes], { type: `image/${ext.slice(1)}` })
           const reader = new FileReader()
+          // P1 Fix: Add comprehensive error handling for FileReader
+          reader.onerror = () => {
+            log.error(`FileReader error for ${file.name}: ${reader.error}`, 'FileMentionHandler')
+            showToast(`Failed to read image: ${file.name}`, 'error')
+          }
           reader.onload = () => {
             if (typeof reader.result === 'string') {
               setAttachedImages((prev) => [...prev, reader.result as string])
               showToast(`Image attached: ${file.name}`, 'success')
+            } else {
+              log.warn(`FileReader returned non-string result for ${file.name}`, 'FileMentionHandler')
+              showToast(`Failed to process image: ${file.name}`, 'error')
             }
           }
           reader.readAsDataURL(blob)
@@ -260,12 +291,16 @@ export function useFileMentionHandler({
           const newValue = `${before}@${quotedPath} ${after}`
           setInputValue(newValue)
 
-          setTimeout(() => {
+          if (selectionTimeoutRef.current) {
+            clearTimeout(selectionTimeoutRef.current)
+          }
+          selectionTimeoutRef.current = setTimeout(() => {
             if (inputRef.current) {
               const newPos = mentionStartPos + quotedPath.length + 2
               inputRef.current.setSelectionRange(newPos, newPos)
               inputRef.current.focus()
             }
+            selectionTimeoutRef.current = null
           }, 0)
         }
       }

@@ -32,8 +32,9 @@ export function FileMentionPopup({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const requestIdRef = useRef(0)
   const projectPathRef = useRef(projectPath)
-  const prefersReducedMotion = useReducedMotion()
   const { toast } = useToast()
+  const toastRef = useRef(toast)
+  const prefersReducedMotion = useReducedMotion()
 
   // Error recovery states
   const [error, setError] = useState<string | null>(null)
@@ -49,17 +50,23 @@ export function FileMentionPopup({
   })
 
   // Fetch files with debouncing and error handling
+  useEffect(() => {
+    projectPathRef.current = projectPath
+    toastRef.current = toast
+  }, [projectPath, toast])
+
   const fetchFiles = useCallback(async (searchQuery: string) => {
-    if (!projectPath) return
+    const currentProjectPath = projectPathRef.current
+    if (!currentProjectPath) return
 
     requestIdRef.current += 1
     const requestId = requestIdRef.current
-    const pathAtRequest = projectPath
+    const pathAtRequest = currentProjectPath
 
     setIsLoading(true)
     try {
       const result = await projectApi.listFiles(
-        projectPath,
+        currentProjectPath,
         searchQuery || undefined,
         50
       )
@@ -75,18 +82,20 @@ export function FileMentionPopup({
       const errorMessage = err instanceof Error ? err.message : 'Failed to load files'
       setError(errorMessage)
       setFiles([])
-      toast.error('Files Error', {
+      toastRef.current.error('Files Error', {
         message: errorMessage,
         duration: 5000,
       })
     } finally {
+      if (requestId !== requestIdRef.current || projectPathRef.current !== pathAtRequest) {
+        return
+      }
       setIsLoading(false)
       setIsRetrying(false)
     }
-  }, [projectPath, toast])
+  }, [])
 
   useEffect(() => {
-    projectPathRef.current = projectPath
     requestIdRef.current += 1
     setFiles([])
     setError(null)

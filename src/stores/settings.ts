@@ -66,40 +66,45 @@ export const useSettingsStore = create<SettingsState>()(
       name: 'codex-desktop-settings',
       version: 3, // Increment when settings format changes
       migrate: (persistedState, version) => {
-        const state = persistedState as { settings: Settings }
+        if (!persistedState || typeof persistedState !== 'object' || !('settings' in persistedState)) {
+          return { settings: defaultSettings }
+        }
+
+        const state = persistedState as { settings?: Partial<Settings> }
+        const settings: Settings = { ...defaultSettings, ...(state.settings ?? {}) }
 
         // Migrate from version 0/1 to version 2
         if (version < 2) {
           // Reset invalid sandbox mode
-          if (!VALID_SANDBOX_MODES.includes(state.settings.sandboxMode)) {
-            state.settings.sandboxMode = defaultSettings.sandboxMode
+          if (!VALID_SANDBOX_MODES.includes(settings.sandboxMode)) {
+            settings.sandboxMode = defaultSettings.sandboxMode
           }
           // Reset invalid approval policy
-          if (!VALID_APPROVAL_POLICIES.includes(state.settings.approvalPolicy)) {
-            state.settings.approvalPolicy = defaultSettings.approvalPolicy
+          if (!VALID_APPROVAL_POLICIES.includes(settings.approvalPolicy)) {
+            settings.approvalPolicy = defaultSettings.approvalPolicy
           }
           // Reset invalid model (let API choose default)
-          if (state.settings.model && !state.settings.model.includes('gpt') && !state.settings.model.includes('o1') && !state.settings.model.includes('o3')) {
-            state.settings.model = ''
+          if (settings.model && !settings.model.includes('gpt') && !settings.model.includes('o1') && !settings.model.includes('o3')) {
+            settings.model = ''
           }
         }
 
         if (version < 3) {
-          state.settings.sandboxMode =
-            (normalizeSandboxMode(state.settings.sandboxMode) as Settings['sandboxMode']) ||
+          settings.sandboxMode =
+            (normalizeSandboxMode(settings.sandboxMode) as Settings['sandboxMode']) ||
             defaultSettings.sandboxMode
-          state.settings.approvalPolicy =
-            (normalizeApprovalPolicy(state.settings.approvalPolicy) as Settings['approvalPolicy']) ||
+          settings.approvalPolicy =
+            (normalizeApprovalPolicy(settings.approvalPolicy) as Settings['approvalPolicy']) ||
             defaultSettings.approvalPolicy
-          state.settings.reasoningEffort =
-            (normalizeReasoningEffort(state.settings.reasoningEffort) as Settings['reasoningEffort']) ||
+          settings.reasoningEffort =
+            (normalizeReasoningEffort(settings.reasoningEffort) as Settings['reasoningEffort']) ||
             defaultSettings.reasoningEffort
-          state.settings.reasoningSummary =
-            (normalizeReasoningSummary(state.settings.reasoningSummary) as Settings['reasoningSummary']) ||
+          settings.reasoningSummary =
+            (normalizeReasoningSummary(settings.reasoningSummary) as Settings['reasoningSummary']) ||
             defaultSettings.reasoningSummary
         }
 
-        return state
+        return { settings }
       },
     }
   )

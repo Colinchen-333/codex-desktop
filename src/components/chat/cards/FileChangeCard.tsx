@@ -10,7 +10,7 @@
 import { memo, useState, useRef, useCallback } from 'react'
 import { FileCode } from 'lucide-react'
 import { cn } from '../../../lib/utils'
-import { useThreadStore } from '../../../stores/thread'
+import { useThreadStore, selectFocusedThread, type ThreadState } from '../../../stores/thread'
 import { useProjectsStore } from '../../../stores/projects'
 import { useToast } from '../../ui/Toast'
 import { DiffView, parseDiff, type FileDiff } from '../../ui/DiffView'
@@ -39,7 +39,12 @@ interface ApplyChangesOptimisticState {
 export const FileChangeCard = memo(
   function FileChangeCard({ item }: MessageItemProps) {
   const content = item.content as FileChangeContentType
-  const { respondToApproval, activeThread, createSnapshot, revertToSnapshot } = useThreadStore()
+  // Use selector to avoid infinite re-render loops from getter-based state access
+  const focusedThread = useThreadStore(selectFocusedThread)
+  const activeThread = focusedThread?.thread ?? null
+  const respondToApproval = useThreadStore((state: ThreadState) => state.respondToApproval)
+  const createSnapshot = useThreadStore((state: ThreadState) => state.createSnapshot)
+  const revertToSnapshot = useThreadStore((state: ThreadState) => state.revertToSnapshot)
   const projects = useProjectsStore((state) => state.projects)
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId)
   const { showToast } = useToast()
