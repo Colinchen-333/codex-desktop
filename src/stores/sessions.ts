@@ -242,6 +242,8 @@ export const useSessionsStore = create<SessionsState>((set, get) => {
           state.selectedSessionId === sessionId ? null : state.selectedSessionId,
       }))
     } catch (error) {
+      // Avoid leaking per-session sequence tracking on failure paths
+      statusUpdateSeq.delete(sessionId)
       set({ error: parseError(error) })
       throw error
     }

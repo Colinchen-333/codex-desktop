@@ -180,7 +180,11 @@ export function parseError(error: unknown): string {
       return `{${entries.join(', ')}${extra}}`
     }
 
-    return format(value, 0)
+    try {
+      return format(value, 0)
+    } catch (error) {
+      return `"${error instanceof Error ? error.message : 'Unserializable error'}"`
+    }
   }
 
   // Handle Error instances

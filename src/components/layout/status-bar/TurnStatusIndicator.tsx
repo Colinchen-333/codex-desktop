@@ -64,7 +64,7 @@ export const TurnStatusIndicator = memo(function TurnStatusIndicator() {
       }
     }, 50)
     return () => clearInterval(interval)
-  }, [turnStatus])
+  }, [turnStatus, turnTiming.startedAt])
 
   // Reset elapsed when turn completes
   useEffect(() => {

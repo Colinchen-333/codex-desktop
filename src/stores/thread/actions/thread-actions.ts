@@ -15,6 +15,7 @@ import {
   normalizeSandboxMode,
 } from '../../../lib/normalize'
 import type { ThreadState, AnyThreadItem, SingleThreadState } from '../types'
+import { useUndoRedoStore } from '../../undoRedo'
 import { CLOSING_THREAD_CLEANUP_DELAY_MS } from '../constants'
 import {
   getNextOperationSequence,
@@ -369,6 +370,7 @@ export function createCloseThread(
     // Perform comprehensive immediate cleanup of all thread resources
     // This includes timers, buffers, and all associated state
     performImmediateThreadCleanup(threadId)
+    useUndoRedoStore.getState().clearHistory(threadId)
 
     // Remove thread from state
     const updatedThreads = { ...threads }
@@ -436,6 +438,7 @@ export function createCloseAllThreads(
     // Clean up all thread-specific resources using comprehensive cleanup
     threadIds.forEach((threadId) => {
       performImmediateThreadCleanup(threadId)
+      useUndoRedoStore.getState().clearHistory(threadId)
     })
 
     // Clear all threads

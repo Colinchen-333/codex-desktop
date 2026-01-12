@@ -71,6 +71,11 @@ const initialSessionState: SessionSwitchState = {
   timeoutId: null,
 }
 
+function pruneQueuedSessions(queue: QueuedSessionSwitch[]): QueuedSessionSwitch[] {
+  const now = Date.now()
+  return queue.filter((entry) => now - entry.timestamp <= RESUME_TIMEOUT_MS)
+}
+
 /**
  * Session switch reducer - handles all state transitions
  */
@@ -90,9 +95,10 @@ function sessionSwitchReducer(
       // If already transitioning/resuming, queue the request (with deduplication)
       if (state.status !== 'idle') {
         const filteredQueue = state.queue.filter((q) => q.sessionId !== sessionId)
+        const prunedQueue = pruneQueuedSessions(filteredQueue)
         return {
           ...state,
-          queue: [...filteredQueue, { sessionId, timestamp: Date.now() }],
+          queue: [...prunedQueue, { sessionId, timestamp: Date.now() }],
         }
       }
 
@@ -146,11 +152,12 @@ function sessionSwitchReducer(
 
     case 'PROCESS_QUEUE': {
       // Process next queued session switch
-      if (state.queue.length === 0 || state.status !== 'idle') {
+      const prunedQueue = pruneQueuedSessions(state.queue)
+      if (prunedQueue.length === 0 || state.status !== 'idle') {
         return state
       }
 
-      const [next, ...rest] = state.queue
+      const [next, ...rest] = prunedQueue
       return {
         ...state,
         status: 'transitioning',
@@ -198,6 +205,7 @@ export function MainArea() {
 
   // Ref to hold current state for async operations (avoids stale closure)
   const sessionStateRef = useRef(sessionState)
+  const isMountedRef = useRef(true)
 
   // Sync ref with state in effect to avoid render-time ref update
   useEffect(() => {
@@ -218,7 +226,9 @@ export function MainArea() {
 
   // Cleanup on unmount
   useEffect(() => {
+    isMountedRef.current = true
     return () => {
+      isMountedRef.current = false
       // Clear timeout if any
       if (sessionStateRef.current.timeoutId) {
         clearTimeout(sessionStateRef.current.timeoutId)
@@ -259,7 +269,9 @@ export function MainArea() {
       // Start resume with timeout protection
       const timeoutId = setTimeout(() => {
         log.warn('[MainArea] Resume operation timed out after 30s', 'MainArea')
-        dispatch({ type: 'RESUME_TIMEOUT' })
+        if (isMountedRef.current) {
+          dispatch({ type: 'RESUME_TIMEOUT' })
+        }
       }, RESUME_TIMEOUT_MS)
 
       dispatch({ type: 'START_RESUME', timeoutId })
@@ -269,7 +281,9 @@ export function MainArea() {
 
         // Clear timeout on success
         clearTimeout(timeoutId)
-        dispatch({ type: 'RESUME_COMPLETE', sessionId: targetSessionId })
+        if (isMountedRef.current) {
+          dispatch({ type: 'RESUME_COMPLETE', sessionId: targetSessionId })
+        }
       } catch (error) {
         clearTimeout(timeoutId)
         logError(error, {
@@ -277,7 +291,9 @@ export function MainArea() {
           source: 'layout',
           details: 'Failed to resume session'
         })
-        dispatch({ type: 'RESUME_FAILED' })
+        if (isMountedRef.current) {
+          dispatch({ type: 'RESUME_FAILED' })
+        }
       }
     }
 

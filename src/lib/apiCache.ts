@@ -24,9 +24,9 @@ const requestSeq = new Map<string, number>()
 const inFlightTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 
 /**
- * P1 Fix: Error TTL (15 seconds) - shorter than success responses
+ * P1 Fix: Error TTL (5 seconds) - shorter than success responses
  */
-const ERROR_TTL_MS = 15000
+const ERROR_TTL_MS = 5000
 const MAX_CACHE_ENTRIES = 200
 const MAX_IN_FLIGHT_MS = 5 * 60 * 1000
 

@@ -237,6 +237,12 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>({
 
     // Auto-focus initial element after a small delay to ensure DOM is ready
     if (autoFocus) {
+      if (typeof requestAnimationFrame === 'function') {
+        const rafId = requestAnimationFrame(() => {
+          focusInitialElement()
+        })
+        return () => cancelAnimationFrame(rafId)
+      }
       const timeoutId = setTimeout(() => {
         focusInitialElement()
       }, 0)
@@ -262,6 +268,13 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>({
 
     if (restoreFocus && previouslyFocusedElementRef.current) {
       // Small delay to ensure the dialog is fully closed
+      if (typeof requestAnimationFrame === 'function') {
+        const rafId = requestAnimationFrame(() => {
+          previouslyFocusedElementRef.current?.focus()
+          previouslyFocusedElementRef.current = null
+        })
+        return () => cancelAnimationFrame(rafId)
+      }
       const timeoutId = setTimeout(() => {
         previouslyFocusedElementRef.current?.focus()
         previouslyFocusedElementRef.current = null

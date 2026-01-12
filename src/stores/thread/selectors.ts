@@ -121,11 +121,21 @@ export function selectItemOrder(state: ThreadState): string[] {
  * Select items as an ordered array.
  * This is more convenient than working with the Record and order array separately.
  */
+let cachedOrderedItems: AnyThreadItem[] = []
+let cachedItemsRef: Record<string, AnyThreadItem> | null = null
+let cachedItemOrderRef: string[] | null = null
+
 export function selectOrderedItems(state: ThreadState): AnyThreadItem[] {
   const focusedThread = selectFocusedThread(state)
   if (!focusedThread) return []
   const { items, itemOrder } = focusedThread
-  return itemOrder.map((id) => items[id]).filter((item): item is AnyThreadItem => item !== undefined)
+  if (cachedItemsRef === items && cachedItemOrderRef === itemOrder) {
+    return cachedOrderedItems
+  }
+  cachedItemsRef = items
+  cachedItemOrderRef = itemOrder
+  cachedOrderedItems = itemOrder.map((id) => items[id]).filter((item): item is AnyThreadItem => item !== undefined)
+  return cachedOrderedItems
 }
 
 /**
