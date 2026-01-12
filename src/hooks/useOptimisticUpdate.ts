@@ -176,6 +176,10 @@ class RollbackStackManager {
 // 全局回滚栈实例
 const globalRollbackStack = new RollbackStackManager()
 
+export function clearGlobalRollbackStack(): void {
+  globalRollbackStack.clear()
+}
+
 /**
  * 生成唯一 ID
  */

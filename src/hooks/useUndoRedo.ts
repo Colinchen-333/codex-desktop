@@ -77,7 +77,7 @@ export function useUndoRedo() {
     performUndo(operation)
 
     toast.success('Undo successful', { message: `Undone: ${operation.description}` })
-  }, [canUndo, undoOperation, toast])
+  }, [canUndo, undoOperation, performUndo, toast])
 
   /**
    * Redo the last undone operation
@@ -95,7 +95,7 @@ export function useUndoRedo() {
     performRedo(operation)
 
     toast.success('Redo successful', { message: `Redone: ${operation.description}` })
-  }, [canRedo, redoOperation, toast])
+  }, [canRedo, redoOperation, performRedo, toast])
 
   /**
    * Perform undo based on operation type

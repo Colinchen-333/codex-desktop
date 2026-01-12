@@ -13,6 +13,7 @@ import { KeyboardShortcuts } from './components/KeyboardShortcuts'
 import { useProjectsStore } from './stores/projects'
 import { useSessionsStore } from './stores/sessions'
 import { useThreadStore, cleanupThreadResources } from './stores/thread/index'
+import { clearGlobalRollbackStack } from './hooks/useOptimisticUpdate'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
 import { log } from './lib/logger'
 import { logError } from './lib/errorUtils'
@@ -128,6 +129,7 @@ function App() {
       listenersSetupRef.current = false
       // Cleanup thread resources (timers, buffers) to prevent memory leaks
       cleanupThreadResources()
+      clearGlobalRollbackStack()
     }
   }, []) // Empty deps - only run once
 
