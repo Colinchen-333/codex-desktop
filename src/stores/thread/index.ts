@@ -327,4 +327,5 @@ export {
   selectCanAddSession,
   selectIsLoading,
   selectGlobalError,
+  selectSnapshots,
 } from './selectors'

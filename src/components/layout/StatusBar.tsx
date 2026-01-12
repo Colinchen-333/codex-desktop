@@ -64,8 +64,8 @@ export function StatusBar() {
       window.removeEventListener('keydown', existing)
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    ;(window as unknown as Record<string, EventListener | undefined>)[globalKey] = handleKeyDown
+    window.addEventListener('keydown', handleKeyDown as EventListener)
+    ;(window as unknown as Record<string, EventListener | undefined>)[globalKey] = handleKeyDown as EventListener
 
     const cleanup = () => {
       window.removeEventListener('keydown', handleKeyDown)

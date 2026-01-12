@@ -27,12 +27,12 @@ const CANCEL_RETRY_BASE_DELAY_MS = 200
 async function cancelApprovalWithRetry(
   threadId: string,
   itemId: string,
-  requestId?: string
+  requestId?: number
 ): Promise<void> {
   let attempt = 0
   while (true) {
     try {
-      await threadApi.respondToApproval(threadId, itemId, 'cancel', requestId)
+      await threadApi.respondToApproval(threadId, itemId, 'cancel', requestId ?? 0)
       return
     } catch (error) {
       if (attempt >= MAX_CANCEL_RETRIES) {

@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { cn } from '../../lib/utils'
-import { useThreadStore, selectFocusedThread, type ThreadState } from '../../stores/thread'
+import { useThreadStore, selectFocusedThread, selectSnapshots } from '../../stores/thread'
 import { useProjectsStore } from '../../stores/projects'
 import { useToast } from '../ui/Toast'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -49,7 +49,7 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
   // Use selectors to avoid infinite re-render loops from getter-based state access
   const focusedThread = useThreadStore(selectFocusedThread)
   const activeThread = focusedThread?.thread ?? null
-  const snapshots = focusedThread?.snapshots ?? []
+  const snapshots = useThreadStore(selectSnapshots)
   // fetchSnapshots, revertToSnapshot are called via getState() to avoid dependency issues
   const { projects, selectedProjectId } = useProjectsStore()
   const { showToast } = useToast()

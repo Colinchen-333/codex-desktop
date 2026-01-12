@@ -10,7 +10,7 @@
  */
 import { useRef, useState, useCallback } from 'react'
 import type { ListImperativeAPI } from 'react-window'
-import { useThreadStore } from '../../stores/thread'
+// useThreadStore imported for potential future use - currently using props
 import { useProjectsStore, type ProjectsState } from '../../stores/projects'
 import { serverApi, type SkillInput, type ReviewTarget } from '../../lib/api'
 import { ReviewSelectorDialog } from '../LazyComponents'
@@ -165,7 +165,7 @@ export function ChatView() {
       let skills: SkillInput[] | undefined
       if (skillMentions.length > 0 && project) {
         try {
-          const response = await serverApi.listSkills([project.path], false, selectedProjectId)
+          const response = await serverApi.listSkills([project.path], false, selectedProjectId ?? undefined)
           const allSkills = response.data.flatMap((entry) => entry.skills)
           skills = skillMentions
             .map((name) => {

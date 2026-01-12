@@ -17,6 +17,7 @@ export interface GitInfoIndicatorProps {
 export const GitInfoIndicator = memo(function GitInfoIndicator({
   projectPath,
 }: GitInfoIndicatorProps) {
+  const { toast } = useToast()
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -26,7 +27,6 @@ export const GitInfoIndicator = memo(function GitInfoIndicator({
   const gitInfoRef = useRef<GitInfo | null>(null)
   const errorRef = useRef<string | null>(null)
   const gitErrorShownRef = useRef(false)
-  const { toast } = useToast()
 
   useEffect(() => {
     projectPathRef.current = projectPath

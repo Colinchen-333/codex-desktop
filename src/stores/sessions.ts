@@ -120,7 +120,7 @@ function cloneSessionsSnapshot(sessions: SessionMetadata[]): SessionMetadata[] {
   }
   return sessions.map((session) => ({
     ...session,
-    tags: session.tags ? [...session.tags] : session.tags,
+    // tags is string | null, no need to spread
   }))
 }
 

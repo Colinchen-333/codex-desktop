@@ -6,7 +6,7 @@
  * - RAF-based scroll handling
  * - Performance metrics logging
  */
-import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react'
+import React, { useRef, useEffect, useCallback, useState } from 'react'
 import type { ListImperativeAPI } from 'react-window'
 import { type AnyThreadItem } from '../../stores/thread'
 import { LRUCache } from '../../stores/thread/lru-cache'
@@ -455,7 +455,7 @@ export function useAutoScroll(
   virtualListRef: React.MutableRefObject<ListImperativeAPI | null>,
   messagesEndRef: React.RefObject<HTMLDivElement | null>,
   itemOrder: string[],
-  items: Record<string, AnyThreadItem>,
+  _items: Record<string, AnyThreadItem>,
   turnStatus: string
 ) {
   const scrollRAFRef = useRef<number | null>(null)

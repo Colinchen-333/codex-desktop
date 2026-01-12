@@ -67,6 +67,7 @@ fn validate_arg_safe(arg: &str) -> Result<()> {
 /// Validate git branch name
 /// Only allows safe characters: alphanumeric, underscore, hyphen, dot, and forward slash
 /// This prevents command injection through malicious branch names
+#[allow(dead_code)]
 fn validate_branch_name(branch: &str) -> Result<()> {
     if branch.is_empty() {
         return Err(crate::Error::Other(
@@ -116,6 +117,7 @@ fn validate_branch_name(branch: &str) -> Result<()> {
 }
 
 /// Validate git commit SHA (hexadecimal string only)
+#[allow(dead_code)]
 fn validate_commit_sha(sha: &str) -> Result<()> {
     // Only allow hexadecimal characters (0-9, a-f, A-F)
     if !sha.chars().all(|c| c.is_ascii_hexdigit()) {

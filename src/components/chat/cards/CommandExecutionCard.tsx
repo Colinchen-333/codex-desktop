@@ -45,7 +45,8 @@ export const CommandExecutionCard = memo(
   const [feedbackText, setFeedbackText] = useState('')
   const [explanation, setExplanation] = useState('')
   const [isExplaining, setIsExplaining] = useState(false)
-  const [isApproving, setIsApproving] = useState(false)
+  // Note: isApproving state is set but not read; isApprovingRef handles sync check
+  const [, setIsApproving] = useState(false)
   // Synchronous lock to prevent double-click race condition (state updates are async)
   const isApprovingRef = useRef(false)
   // P0 Fix: Add synchronous lock for explain to prevent double-click race condition

@@ -62,42 +62,6 @@ export function useUndoRedo() {
   )
 
   /**
-   * Undo the last operation
-   */
-  const undo = useCallback(() => {
-    if (!canUndo()) {
-      toast.info('Nothing to undo', { message: 'There are no operations to undo.' })
-      return
-    }
-
-    const operation = undoOperation()
-    if (!operation) return
-
-    // Perform the undo based on operation type
-    performUndo(operation)
-
-    toast.success('Undo successful', { message: `Undone: ${operation.description}` })
-  }, [canUndo, undoOperation, performUndo, toast])
-
-  /**
-   * Redo the last undone operation
-   */
-  const redo = useCallback(() => {
-    if (!canRedo()) {
-      toast.info('Nothing to redo', { message: 'There are no operations to redo.' })
-      return
-    }
-
-    const operation = redoOperation()
-    if (!operation) return
-
-    // Perform the redo based on operation type
-    performRedo(operation)
-
-    toast.success('Redo successful', { message: `Redone: ${operation.description}` })
-  }, [canRedo, redoOperation, performRedo, toast])
-
-  /**
    * Perform undo based on operation type
    */
   const performUndo = useCallback((operation: UndoableOperation | null) => {
@@ -201,6 +165,42 @@ export function useUndoRedo() {
       }
     }
   }, [toast])
+
+  /**
+   * Undo the last operation
+   */
+  const undo = useCallback(() => {
+    if (!canUndo()) {
+      toast.info('Nothing to undo', { message: 'There are no operations to undo.' })
+      return
+    }
+
+    const operation = undoOperation()
+    if (!operation) return
+
+    // Perform the undo based on operation type
+    performUndo(operation)
+
+    toast.success('Undo successful', { message: `Undone: ${operation.description}` })
+  }, [canUndo, undoOperation, performUndo, toast])
+
+  /**
+   * Redo the last undone operation
+   */
+  const redo = useCallback(() => {
+    if (!canRedo()) {
+      toast.info('Nothing to redo', { message: 'There are no operations to redo.' })
+      return
+    }
+
+    const operation = redoOperation()
+    if (!operation) return
+
+    // Perform the redo based on operation type
+    performRedo(operation)
+
+    toast.success('Redo successful', { message: `Redone: ${operation.description}` })
+  }, [canRedo, redoOperation, performRedo, toast])
 
   return {
     undo,
