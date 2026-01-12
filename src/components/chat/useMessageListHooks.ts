@@ -196,6 +196,8 @@ export function useItemSizeCache(
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
       observedElements.clear()
+      cacheKeyIndex.current.clear()
+      cacheKeyOwner.current.clear()
     }
   }, [])
 

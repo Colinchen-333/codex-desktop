@@ -17,7 +17,7 @@ export const TURN_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes - generous timeout for
 export const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes - generous timeout for user decisions
 export const APPROVAL_CLEANUP_INTERVAL_MS = 60 * 1000 // Check every minute
 export const TIMER_CLEANUP_INTERVAL_MS = 60 * 1000 // Clean up stale timers every minute
-export const CLOSING_THREAD_CLEANUP_DELAY_MS = 100 // Delay before removing from closing set
+export const CLOSING_THREAD_CLEANUP_DELAY_MS = 0 // Delay before removing from closing set
 export const THREAD_SWITCH_LOCK_TIMEOUT_MS = 30 * 1000 // 30 seconds - thread switch lock timeout to prevent deadlocks
 
 // ==================== LRU Cache Configuration ====================

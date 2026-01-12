@@ -95,6 +95,14 @@ export function usePopupNavigation<T>({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- Reset index when popup becomes visible
       setSelectedIndexSafe(0)
     }
+  }, [isVisible, setSelectedIndexSafe])
+
+  useEffect(() => {
+    if (!isVisible) return
+    const maxIndex = itemsRef.current.length - 1
+    if (selectedIndexRef.current > maxIndex) {
+      setSelectedIndexSafe(Math.max(0, maxIndex))
+    }
   }, [isVisible, items, setSelectedIndexSafe])
 
   // 处理向下导航

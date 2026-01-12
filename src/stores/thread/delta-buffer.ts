@@ -463,6 +463,9 @@ export async function markThreadAsClosing(threadId: string): Promise<() => void>
         `[markThreadAsClosing] Timeout waiting for lock on ${threadId} after ${MAX_CLOSING_LOCK_WAIT_MS}ms, proceeding anyway`,
         'delta-buffer'
       )
+      if (closingThreadsLock.has(threadId)) {
+        throw new Error(`Timeout waiting for closing lock on ${threadId}`)
+      }
       break
     }
 
@@ -473,6 +476,9 @@ export async function markThreadAsClosing(threadId: string): Promise<() => void>
         'delta-buffer'
       )
       cleanupStaleClosingThreads()
+      if (closingThreadsLock.has(threadId)) {
+        throw new Error(`Timeout waiting for closing lock on ${threadId}`)
+      }
       break
     }
   }
@@ -645,15 +651,7 @@ function processPendingFlushes(): void {
       const latestVersion = pendingFlushVersions.get(flush.threadId)
       if (latestVersion !== undefined && latestVersion !== flush.version) {
         log.debug(
-          `[processPendingFlushes] Skipping stale flush (pending: ${flush.version}, latest: ${latestVersion}) for thread: ${flush.threadId}`,
-          'delta-buffer'
-        )
-        continue
-      }
-      const currentVersion = pendingFlushVersions.get(flush.threadId)
-      if (currentVersion !== undefined && currentVersion !== flush.version) {
-        log.debug(
-          `[processPendingFlushes] Skipping stale flush after reschedule (pending: ${flush.version}, latest: ${currentVersion}) for thread: ${flush.threadId}`,
+          `[processPendingFlushes] Skipping stale flush after reschedule (pending: ${flush.version}, latest: ${latestVersion}) for thread: ${flush.threadId}`,
           'delta-buffer'
         )
         continue
@@ -752,10 +750,13 @@ export function getDeltaBuffer(threadId: string): DeltaBuffer | null {
     // P0 Fix: Pass threadId to create buffer with correct sequence
     buffer = createEmptyDeltaBuffer(threadId)
     deltaBuffers.set(threadId, buffer)
-    if (closingThreads.has(threadId)) {
+    if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
       deltaBuffers.delete(threadId)
       return null
     }
+  } else if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
+    deltaBuffers.delete(threadId)
+    return null
   }
   return buffer
 }
@@ -1048,6 +1049,7 @@ export function scheduleFlush(threadId: string, flushFn: () => void, immediate =
 
     // Clear from pending queue if present
     pendingFlushQueue.delete(threadId)
+    pendingFlushVersions.delete(threadId)
 
     flushFn()
     logPerformance('scheduleFlush:overflow', startTime)
@@ -1106,6 +1108,7 @@ export function scheduleFlush(threadId: string, flushFn: () => void, immediate =
       if (closingThreads.has(threadId)) {
         log.debug(`[scheduleFlush:timer] Skipping flush for closing thread: ${threadId}`, 'delta-buffer')
         pendingFlushQueue.delete(threadId)
+        pendingFlushVersions.delete(threadId)
         return
       }
 

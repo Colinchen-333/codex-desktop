@@ -94,7 +94,7 @@ export function createHandleTurnStarted(
         // P1 Fix: Use event bus instead of dynamic import to avoid circular dependencies
         try {
           // Check thread still exists and not being closed
-          if (getThreadStore().threads[threadId] && !closingThreads.has(threadId)) {
+          if (state.threads[threadId] && !closingThreads.has(threadId)) {
             eventBus.emit('session:status-update', { sessionId: threadId, status: 'failed' })
           }
         } catch (err) {

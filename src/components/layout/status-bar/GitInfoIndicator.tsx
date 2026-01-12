@@ -22,13 +22,20 @@ export const GitInfoIndicator = memo(function GitInfoIndicator({
   const [error, setError] = useState<string | null>(null)
   const requestIdRef = useRef(0)
   const projectPathRef = useRef(projectPath)
+  const toastRef = useRef(toast)
   const gitInfoRef = useRef<GitInfo | null>(null)
   const errorRef = useRef<string | null>(null)
   const gitErrorShownRef = useRef(false)
   const { toast } = useToast()
 
+  useEffect(() => {
+    projectPathRef.current = projectPath
+    toastRef.current = toast
+  }, [projectPath, toast])
+
   const fetchGitInfo = useCallback(async () => {
-    if (!projectPath) return
+    const currentProjectPath = projectPathRef.current
+    if (!currentProjectPath) return
 
     // Skip fetch if page is hidden to save resources
     if (document.visibilityState === 'hidden') return
@@ -41,10 +48,10 @@ export const GitInfoIndicator = memo(function GitInfoIndicator({
 
     requestIdRef.current += 1
     const requestId = requestIdRef.current
-    const pathAtRequest = projectPath
+    const pathAtRequest = currentProjectPath
 
     try {
-      const info = await projectApi.getGitInfo(projectPath)
+      const info = await projectApi.getGitInfo(currentProjectPath)
       if (requestId !== requestIdRef.current || projectPathRef.current !== pathAtRequest) {
         return
       }
@@ -69,14 +76,14 @@ export const GitInfoIndicator = memo(function GitInfoIndicator({
       // Show toast notification for errors (only once per error cycle)
       if (!gitErrorShownRef.current) {
         gitErrorShownRef.current = true
-        toast.error('Git Information Error', {
+        toastRef.current.error('Git Information Error', {
           message: 'Could not fetch repository status. The project path may not be a Git repository.',
           groupId: 'git-error',
           duration: 5000,
         })
       }
     }
-  }, [projectPath, toast])
+  }, [])
 
   useEffect(() => {
     gitInfoRef.current = gitInfo
@@ -95,7 +102,6 @@ export const GitInfoIndicator = memo(function GitInfoIndicator({
       return
     }
 
-    projectPathRef.current = projectPath
     requestIdRef.current += 1
 
     let pollInterval: ReturnType<typeof setInterval> | null = null

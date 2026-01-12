@@ -20,7 +20,7 @@ import type {
 import type { ThreadState } from '../types'
 import { APPROVAL_TIMEOUT_MS } from '../constants'
 
-let cleanupInProgress = false
+let cleanupPromise: Promise<void> | null = null
 const MAX_CANCEL_RETRIES = 2
 const CANCEL_RETRY_BASE_DELAY_MS = 200
 
@@ -168,14 +168,14 @@ export function createCleanupStaleApprovals(
   ) => void
 ) {
   return async () => {
-    if (cleanupInProgress) {
-      log.debug('[cleanupStaleApprovals] Cleanup already in progress, skipping', 'approval-handlers')
+    if (cleanupPromise) {
+      log.debug('[cleanupStaleApprovals] Cleanup already in progress, waiting', 'approval-handlers')
+      await cleanupPromise
       return
     }
 
-    cleanupInProgress = true
     const now = Date.now()
-    try {
+    cleanupPromise = (async () => {
       const state = getThreadStore()
       const { threads } = state
       const cancelRequests: Array<{
@@ -263,8 +263,12 @@ export function createCleanupStaleApprovals(
         // Immer handles state updates automatically - no explicit return needed
         // When we mutate the draft directly, Immer produces the new state
       })
+    })()
+
+    try {
+      await cleanupPromise
     } finally {
-      cleanupInProgress = false
+      cleanupPromise = null
     }
   }
 }

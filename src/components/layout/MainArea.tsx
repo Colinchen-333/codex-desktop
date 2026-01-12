@@ -310,7 +310,7 @@ export function MainArea() {
       }, 0)
       return () => clearTimeout(timerId)
     }
-  }, [sessionState.status, sessionState.queue.length])
+  }, [sessionState.status, sessionState.queue])
 
   // Handle session selection changes
   useEffect(() => {

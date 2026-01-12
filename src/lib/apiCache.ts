@@ -45,6 +45,18 @@ function deleteCacheEntry(key: string): void {
   }
 }
 
+function toError(value: unknown): Error {
+  if (value instanceof Error) return value
+  if (typeof value === 'string') {
+    return new Error(value)
+  }
+  try {
+    return new Error(JSON.stringify(value))
+  } catch (error) {
+    return new Error(`Cached error: ${String(error)}`)
+  }
+}
+
 function pruneCache(now: number): void {
   for (const [key, entry] of cache) {
     if (entry.expiry <= now && !inFlight.has(key)) {
@@ -93,7 +105,7 @@ export async function withCache<T>(
       if (!cacheErrors) {
         deleteCacheEntry(key)
       } else {
-        throw cached.data
+        throw toError(cached.data)
       }
     } else {
       return cached.data

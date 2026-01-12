@@ -58,8 +58,22 @@ export function StatusBar() {
       }
     }
 
+    const globalKey = '__codex_statusbar_keydown__'
+    const existing = (window as unknown as Record<string, EventListener | undefined>)[globalKey]
+    if (existing) {
+      window.removeEventListener('keydown', existing)
+    }
+
     window.addEventListener('keydown', handleKeyDown)
-    const cleanup = () => window.removeEventListener('keydown', handleKeyDown)
+    ;(window as unknown as Record<string, EventListener | undefined>)[globalKey] = handleKeyDown
+
+    const cleanup = () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      const current = (window as unknown as Record<string, EventListener | undefined>)[globalKey]
+      if (current === handleKeyDown) {
+        delete (window as unknown as Record<string, EventListener | undefined>)[globalKey]
+      }
+    }
     if (import.meta.hot) {
       import.meta.hot.dispose(cleanup)
     }

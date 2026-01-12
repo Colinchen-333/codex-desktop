@@ -158,7 +158,7 @@ class RollbackStackManager {
     if (index === -1) return []
 
     // 回滚从栈顶到指定位置的所有操作
-    const entriesToRollback = this.stack.splice(index)
+    const entriesToRollback = this.stack.splice(index + 1)
     return entriesToRollback.reverse()
   }
 

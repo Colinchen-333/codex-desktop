@@ -222,6 +222,7 @@ export const AccountTab = memo(function AccountTab({
   }, [])
 
   const handleBrowserLogin = useCallback(async () => {
+    if (!isMountedRef.current) return
     clearPolling()
     setIsLoggingIn(true)
     try {

@@ -124,14 +124,20 @@ export function selectItemOrder(state: ThreadState): string[] {
 let cachedOrderedItems: AnyThreadItem[] = []
 let cachedItemsRef: Record<string, AnyThreadItem> | null = null
 let cachedItemOrderRef: string[] | null = null
+let cachedThreadId: string | null = null
 
 export function selectOrderedItems(state: ThreadState): AnyThreadItem[] {
   const focusedThread = selectFocusedThread(state)
   if (!focusedThread) return []
   const { items, itemOrder } = focusedThread
-  if (cachedItemsRef === items && cachedItemOrderRef === itemOrder) {
+  if (
+    cachedThreadId === focusedThread.thread.id &&
+    cachedItemsRef === items &&
+    cachedItemOrderRef === itemOrder
+  ) {
     return cachedOrderedItems
   }
+  cachedThreadId = focusedThread.thread.id
   cachedItemsRef = items
   cachedItemOrderRef = itemOrder
   cachedOrderedItems = itemOrder.map((id) => items[id]).filter((item): item is AnyThreadItem => item !== undefined)

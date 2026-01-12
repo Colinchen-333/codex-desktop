@@ -282,7 +282,7 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>({
 
       return () => clearTimeout(timeoutId)
     }
-  }, [isActive, restoreFocus])
+  }, [isActive, restoreFocus, previouslyFocusedElementRef])
 
   return containerRef
 }

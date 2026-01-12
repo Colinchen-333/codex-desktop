@@ -247,14 +247,14 @@ export function createHandleAgentMessageDelta(get: () => ThreadState) {
   return (event: AgentMessageDeltaEvent) => {
     const threadId = event.threadId
 
+    const { threads } = get()
+    if (!threads[threadId]) return
+
     // Check if thread is being closed - early exit before any processing
     if (closingThreads.has(threadId)) {
       log.debug(`[handleAgentMessageDelta] Ignoring event for closing thread: ${threadId}`, 'message-handlers')
       return
     }
-
-    const { threads } = get()
-    if (!threads[threadId]) return
 
     const buffer = getDeltaBuffer(threadId)
     // Skip if thread is closing (buffer will be null)
