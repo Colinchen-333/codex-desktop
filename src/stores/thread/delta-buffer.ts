@@ -343,7 +343,16 @@ export function isOperationValid(threadId: string, opSeq: number): boolean {
 // ==================== Delta Buffers ====================
 // Per-thread delta buffers - using LRU cache to prevent unbounded growth
 
-export const deltaBuffers = new LRUCache<string, DeltaBuffer>(MAX_LRU_CACHE_SIZE)
+export const deltaBuffers = new LRUCache<string, DeltaBuffer>(
+  MAX_LRU_CACHE_SIZE,
+  (threadId, buffer) => {
+    clearDeltaBufferEntry(threadId, buffer)
+    clearTurnTimeout(threadId)
+    clearOperationSequence(threadId)
+    clearFlushMetrics(threadId)
+    log.debug(`[LRU eviction] Cleared delta buffer for thread: ${threadId}`, 'delta-buffer')
+  }
+)
 
 // P1 Fix: Per-thread flush timers with automatic cleanup on eviction
 export const flushTimers = new LRUCache<string, ReturnType<typeof setTimeout>>(
@@ -374,10 +383,12 @@ interface ClosingThreadLockEntry {
   promise: Promise<void>
   resolve: () => void
   createdAt: number
+  timeoutId: ReturnType<typeof setTimeout>
 }
 
 const closingThreadsLock = new Map<string, ClosingThreadLockEntry>()
 let closingThreadLockToken = 0
+const MAX_CLOSING_THREAD_LOCK_TOKEN = Number.MAX_SAFE_INTEGER - 1
 
 /**
  * P2 Fix: Maximum wait time for closing thread lock (5 seconds)
@@ -432,21 +443,39 @@ export async function markThreadAsClosing(threadId: string): Promise<() => void>
         `[markThreadAsClosing] Timeout waiting for lock on ${threadId} after ${MAX_CLOSING_LOCK_WAIT_MS}ms, proceeding anyway`,
         'delta-buffer'
       )
+      cleanupStaleClosingThreads()
       break
     }
   }
 
   // Create lock promise for this operation
+  if (closingThreadLockToken >= MAX_CLOSING_THREAD_LOCK_TOKEN) {
+    log.warn('[markThreadAsClosing] Closing lock token reset to avoid overflow', 'delta-buffer')
+    closingThreadLockToken = 0
+  }
   const token = ++closingThreadLockToken
   let resolveLock: () => void = () => {}
   const lockPromise = new Promise<void>((resolve) => {
     resolveLock = resolve
   })
+  const timeoutId = setTimeout(() => {
+    const current = closingThreadsLock.get(threadId)
+    if (current?.token !== token) return
+    log.warn(
+      `[markThreadAsClosing] Auto-releasing stale closing lock for ${threadId}`,
+      'delta-buffer'
+    )
+    closingThreads.delete(threadId)
+    closingThreadsLock.delete(threadId)
+    current.resolve()
+  }, MAX_CLOSING_THREAD_AGE_MS)
+
   closingThreadsLock.set(threadId, {
     token,
     promise: lockPromise,
     resolve: resolveLock,
     createdAt: Date.now(),
+    timeoutId,
   })
 
   // Add to closing set
@@ -456,6 +485,7 @@ export async function markThreadAsClosing(threadId: string): Promise<() => void>
   return () => {
     const currentLock = closingThreadsLock.get(threadId)
     if (currentLock?.token === token) {
+      clearTimeout(currentLock.timeoutId)
       closingThreads.delete(threadId)
       closingThreadsLock.delete(threadId)
     }
@@ -502,6 +532,7 @@ export function cleanupStaleClosingThreads(maxAgeMs: number = MAX_CLOSING_THREAD
       'delta-buffer'
     )
     closingThreads.delete(threadId)
+    clearTimeout(entry.timeoutId)
     closingThreadsLock.delete(threadId)
     entry.resolve()
     cleaned++
@@ -521,6 +552,7 @@ interface PendingFlush {
 
 const pendingFlushQueue: Map<string, PendingFlush> = new Map()
 const pendingFlushVersions: Map<string, number> = new Map()
+const MAX_PENDING_FLUSH_VERSIONS = MAX_LRU_CACHE_SIZE
 const MAX_PENDING_FLUSH_VERSION = Number.MAX_SAFE_INTEGER - 1
 let idleCallbackId: number | null = null
 
@@ -642,6 +674,30 @@ export function createEmptyDeltaBuffer(threadId: string): DeltaBuffer {
   }
 }
 
+function clearDeltaBufferEntry(threadId: string, buffer: DeltaBuffer): void {
+  buffer.turnId = null
+  // P0 Fix: Pass threadId to get correct sequence
+  buffer.operationSeq = getCurrentOperationSequence(threadId)
+  buffer.agentMessages.clear()
+  buffer.commandOutputs.clear()
+  buffer.fileChangeOutputs.clear()
+  buffer.reasoningSummaries.clear()
+  buffer.reasoningContents.clear()
+  buffer.mcpProgress.clear()
+  buffer._cachedSize = 0 // Reset cached size
+
+  // Clear any pending flush for this thread
+  pendingFlushQueue.delete(threadId)
+  pendingFlushVersions.delete(threadId)
+
+  const timer = flushTimers.get(threadId)
+  if (timer) {
+    clearTimeout(timer)
+    flushTimers.delete(threadId)
+    log.debug(`[clearDeltaBuffer] Cleared flush timer for thread: ${threadId}`, 'delta-buffer')
+  }
+}
+
 export function getDeltaBuffer(threadId: string): DeltaBuffer | null {
   // Check if thread is being closed - don't create/access buffers
   if (closingThreads.has(threadId)) {
@@ -661,27 +717,7 @@ export function getDeltaBuffer(threadId: string): DeltaBuffer | null {
 export function clearDeltaBuffer(threadId: string): void {
   const buffer = deltaBuffers.get(threadId)
   if (buffer) {
-    buffer.turnId = null
-    // P0 Fix: Pass threadId to get correct sequence
-    buffer.operationSeq = getCurrentOperationSequence(threadId)
-    buffer.agentMessages.clear()
-    buffer.commandOutputs.clear()
-    buffer.fileChangeOutputs.clear()
-    buffer.reasoningSummaries.clear()
-    buffer.reasoningContents.clear()
-    buffer.mcpProgress.clear()
-    buffer._cachedSize = 0 // Reset cached size
-  }
-
-  // Clear any pending flush for this thread
-  pendingFlushQueue.delete(threadId)
-  pendingFlushVersions.delete(threadId)
-
-  const timer = flushTimers.get(threadId)
-  if (timer) {
-    clearTimeout(timer)
-    flushTimers.delete(threadId)
-    log.debug(`[clearDeltaBuffer] Cleared flush timer for thread: ${threadId}`, 'delta-buffer')
+    clearDeltaBufferEntry(threadId, buffer)
   }
 }
 
@@ -835,6 +871,7 @@ interface FlushMetrics {
 }
 
 const flushMetricsMap = new Map<string, FlushMetrics>()
+const MAX_FLUSH_METRICS_ENTRIES = MAX_LRU_CACHE_SIZE
 
 /**
  * Get or create flush metrics for a thread.
@@ -848,6 +885,12 @@ function getFlushMetrics(threadId: string): FlushMetrics {
       lastFlushTime: 0,
     }
     flushMetricsMap.set(threadId, metrics)
+    if (flushMetricsMap.size > MAX_FLUSH_METRICS_ENTRIES) {
+      const oldestKey = flushMetricsMap.keys().next().value as string | undefined
+      if (oldestKey) {
+        flushMetricsMap.delete(oldestKey)
+      }
+    }
   }
   return metrics
 }
@@ -995,6 +1038,12 @@ export function scheduleFlush(threadId: string, flushFn: () => void, immediate =
       version: scheduledVersion,
     })
     pendingFlushVersions.set(threadId, scheduledVersion)
+    if (pendingFlushVersions.size > MAX_PENDING_FLUSH_VERSIONS) {
+      const oldestKey = pendingFlushVersions.keys().next().value as string | undefined
+      if (oldestKey) {
+        pendingFlushVersions.delete(oldestKey)
+      }
+    }
 
     // Schedule the timer
     const timer = setTimeout(() => {
