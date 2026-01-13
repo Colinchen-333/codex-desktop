@@ -138,7 +138,7 @@ function withLazyLoading<P extends DialogProps>(
 /**
  * SettingsDialog with loading skeleton
  */
-interface SettingsDialogLazyProps extends DialogProps {}
+type SettingsDialogLazyProps = DialogProps
 
 export const SettingsDialog = withLazyLoading<SettingsDialogLazyProps>(
   LazySettingsDialog as ComponentType<SettingsDialogLazyProps>,
@@ -173,7 +173,7 @@ export const ReviewSelectorDialog = withLazyLoading<ReviewSelectorDialogProps>(
 /**
  * SnapshotListDialog with loading skeleton
  */
-interface SnapshotListDialogLazyProps extends DialogProps {}
+type SnapshotListDialogLazyProps = DialogProps
 
 export const SnapshotListDialog = withLazyLoading<SnapshotListDialogLazyProps>(
   LazySnapshotListDialog as ComponentType<SnapshotListDialogLazyProps>,
@@ -183,7 +183,7 @@ export const SnapshotListDialog = withLazyLoading<SnapshotListDialogLazyProps>(
 /**
  * KeyboardShortcutsDialog with loading skeleton
  */
-interface KeyboardShortcutsDialogLazyProps extends DialogProps {}
+type KeyboardShortcutsDialogLazyProps = DialogProps
 
 export const KeyboardShortcutsDialog = withLazyLoading<KeyboardShortcutsDialogLazyProps>(
   LazyKeyboardShortcutsDialog as ComponentType<KeyboardShortcutsDialogLazyProps>,
@@ -193,7 +193,7 @@ export const KeyboardShortcutsDialog = withLazyLoading<KeyboardShortcutsDialogLa
 /**
  * HelpDialog with loading skeleton
  */
-interface HelpDialogLazyProps extends DialogProps {}
+type HelpDialogLazyProps = DialogProps
 
 export const HelpDialog = withLazyLoading<HelpDialogLazyProps>(
   LazyHelpDialog as ComponentType<HelpDialogLazyProps>,
@@ -203,7 +203,7 @@ export const HelpDialog = withLazyLoading<HelpDialogLazyProps>(
 /**
  * AboutDialog with loading skeleton
  */
-interface AboutDialogLazyProps extends DialogProps {}
+type AboutDialogLazyProps = DialogProps
 
 export const AboutDialog = withLazyLoading<AboutDialogLazyProps>(
   LazyAboutDialog as ComponentType<AboutDialogLazyProps>,

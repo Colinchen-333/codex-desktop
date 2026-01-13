@@ -74,6 +74,7 @@ export function useInputPopups(
   const [mentionStartPos, setMentionStartPos] = useState(-1)
   const { restoreFocus } = useFocusRestoration(inputRef)
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Intentional: sync popup state with input value */
   useEffect(() => {
     // Part 1: Slash command popup control
     if (inputValue.startsWith('/') && !inputValue.includes(' ')) {
@@ -104,6 +105,7 @@ export function useInputPopups(
     setFileMentionQuery('')
     setMentionStartPos(-1)
   }, [inputValue, inputRef])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   return {
     showSlashCommands,

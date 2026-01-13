@@ -2,7 +2,7 @@
  * GlobalErrorHandler - Listens to store error notifications and displays them as toasts
  * This bridges the gap between stores (which can't use React hooks) and the toast system
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { subscribeToErrors, type ErrorNotification } from '../../lib/errorUtils'
 import { useToast } from './useToast'
 
@@ -12,7 +12,11 @@ export function GlobalErrorHandler() {
   // P1 Fix: Use ref to store the latest showToast function
   // This prevents re-subscription when showToast changes identity
   const showToastRef = useRef(showToast)
-  showToastRef.current = showToast
+
+  // Sync ref in layout effect to avoid render-time ref access
+  useLayoutEffect(() => {
+    showToastRef.current = showToast
+  })
 
   useEffect(() => {
     // Subscribe to error notifications from stores

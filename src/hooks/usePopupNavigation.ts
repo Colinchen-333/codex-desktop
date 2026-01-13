@@ -16,7 +16,7 @@
  * })
  */
 
-import { useEffect, useState, useCallback, useRef, type SetStateAction } from 'react'
+import { useEffect, useLayoutEffect, useState, useCallback, useRef, type SetStateAction } from 'react'
 
 /**
  * 弹窗导航配置选项
@@ -73,12 +73,14 @@ export function usePopupNavigation<T>({
   const selectedIndexRef = useRef(selectedIndex)
   const loopRef = useRef(loop)
 
-  // Keep refs in sync with latest values
-  itemsRef.current = items
-  onSelectRef.current = onSelect
-  onCloseRef.current = onClose
-  selectedIndexRef.current = selectedIndex
-  loopRef.current = loop
+  // Keep refs in sync with latest values using useLayoutEffect to avoid render-time ref access
+  useLayoutEffect(() => {
+    itemsRef.current = items
+    onSelectRef.current = onSelect
+    onCloseRef.current = onClose
+    selectedIndexRef.current = selectedIndex
+    loopRef.current = loop
+  })
 
   const setSelectedIndexSafe = useCallback((value: SetStateAction<number>) => {
     setSelectedIndex((prev) => {
@@ -92,7 +94,6 @@ export function usePopupNavigation<T>({
   // 确保用户始终从第一项开始浏览
   useEffect(() => {
     if (isVisible) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Reset index when popup becomes visible
       setSelectedIndexSafe(0)
     }
   }, [isVisible, setSelectedIndexSafe])

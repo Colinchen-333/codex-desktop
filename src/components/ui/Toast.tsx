@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react'
 import { cn } from '../../lib/utils'
 import {
   ToastContext,
@@ -183,7 +183,11 @@ const TOAST_ICON_COLORS: Record<Toast['type'], string> = {
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   // P1 Fix: Use ref to store latest onDismiss to avoid timer resets on callback changes
   const onDismissRef = useRef(onDismiss)
-  onDismissRef.current = onDismiss
+
+  // Sync ref in layout effect to avoid render-time ref access
+  useLayoutEffect(() => {
+    onDismissRef.current = onDismiss
+  })
 
   useEffect(() => {
     const duration = toast.duration ?? 5000

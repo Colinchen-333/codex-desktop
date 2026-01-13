@@ -15,12 +15,27 @@ interface OnboardingFlowProps {
 
 const LOGIN_TIMEOUT_MS = 60000
 
+// Key for persisting onboarding progress
+const ONBOARDING_STEP_KEY = 'codex-desktop-onboarding-step'
+
 export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
-  const [step, setStep] = useState<OnboardingStep>('welcome')
+  // Resume from saved step if available
+  const [step, setStep] = useState<OnboardingStep>(() => {
+    const saved = localStorage.getItem(ONBOARDING_STEP_KEY)
+    if (saved && ['welcome', 'login', 'project', 'ready'].includes(saved)) {
+      return saved as OnboardingStep
+    }
+    return 'welcome'
+  })
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { projects, addProject } = useProjectsStore()
+
+  // Persist step changes
+  useEffect(() => {
+    localStorage.setItem(ONBOARDING_STEP_KEY, step)
+  }, [step])
 
   // Check login status
   useEffect(() => {
@@ -66,7 +81,9 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   }
 
   const handleComplete = () => {
+    // Mark onboarding as complete and clear saved progress
     localStorage.setItem('codex-desktop-onboarded', 'true')
+    localStorage.removeItem(ONBOARDING_STEP_KEY)
     onComplete()
   }
 
@@ -128,10 +145,9 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
       <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/5 text-primary">
         <Rocket size={40} />
       </div>
-      <h1 className="mb-4 text-3xl font-bold tracking-tight">Welcome to Codex</h1>
+      <h1 className="mb-4 text-3xl font-bold tracking-tight">Welcome to Codex Desktop</h1>
       <p className="mb-10 text-muted-foreground text-lg leading-relaxed px-4">
-        The ultimate workbench for AI-powered coding.
-        Let's get you set up in seconds.
+        The official GUI for Codex CLI. Manage your AI coding agents visually.
       </p>
       <button
         className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-6 py-4 font-semibold text-primary-foreground hover:bg-primary/90 transition-all active:scale-[0.98]"
@@ -353,9 +369,17 @@ function LoginStep({
         </div>
       )}
       {loginTimedOut && !isLoggingIn && (
-        <p className="mt-4 text-xs text-amber-600 dark:text-amber-400">
-          Login check timed out. Please try again.
-        </p>
+        <div className="mt-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+          <p className="text-xs text-amber-600 dark:text-amber-400 mb-2">
+            Login check timed out. The browser window should still be open.
+          </p>
+          <button
+            className="text-xs font-medium text-amber-600 dark:text-amber-400 hover:underline"
+            onClick={handleLogin}
+          >
+            Try checking again →
+          </button>
+        </div>
       )}
       <p className="mt-6 text-xs text-muted-foreground/60">
         Or use terminal: <code className="rounded bg-secondary/80 px-2 py-0.5 font-mono">codex login</code>
@@ -433,18 +457,19 @@ function ReadyStep({ onComplete }: { onComplete: () => void }) {
       <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-green-500/10 text-green-600">
         <CheckCircle size={40} />
       </div>
-      <h2 className="mb-4 text-2xl font-bold">Ready to Code!</h2>
+      <h2 className="mb-4 text-2xl font-bold">Ready to Go!</h2>
       <p className="mb-10 text-muted-foreground text-lg">
-        You're all set to experience the future of coding.
+        Your visual workbench for Codex CLI is ready.
       </p>
 
       <div className="mb-10 rounded-2xl bg-secondary/30 p-6 text-left border border-border/50">
-        <h3 className="mb-4 font-bold text-sm uppercase tracking-wider text-muted-foreground/80">Pro Tips:</h3>
+        <h3 className="mb-4 font-bold text-sm uppercase tracking-wider text-muted-foreground/80">Quick Tips:</h3>
         <ul className="space-y-3">
           {[
-            'Select a project to start a session',
-            'Review all file changes before applying',
-            'Use snapshots to revert changes anytime'
+            'Select a project to start a new agent session',
+            'Review and approve file changes before applying',
+            'Run multiple agent sessions simultaneously',
+            'Use ⌘+Z to undo changes with snapshots'
           ].map((tip, i) => (
             <li key={i} className="flex items-center gap-3 text-sm font-medium">
               <div className="h-1.5 w-1.5 rounded-full bg-primary" />

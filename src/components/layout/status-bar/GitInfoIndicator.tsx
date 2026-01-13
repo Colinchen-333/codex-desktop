@@ -93,6 +93,7 @@ export const GitInfoIndicator = memo(function GitInfoIndicator({
     errorRef.current = error
   }, [error])
 
+  /* eslint-disable react-hooks/set-state-in-effect -- Intentional: reset state when project path changes */
   useEffect(() => {
     if (!projectPath) {
       setGitInfo(null)
@@ -147,6 +148,7 @@ export const GitInfoIndicator = memo(function GitInfoIndicator({
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [projectPath, fetchGitInfo])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Don't render anything if no project
   if (!projectPath) return null

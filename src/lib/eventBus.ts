@@ -48,8 +48,11 @@ export interface EventMap {
 
 type EventHandler<T> = (data: T) => void
 
+// Type alias for internal storage - uses unknown for type safety
+type AnyEventHandler = EventHandler<EventMap[keyof EventMap]>
+
 class EventBus {
-  private listeners = new Map<keyof EventMap, Set<EventHandler<any>>>()
+  private listeners = new Map<keyof EventMap, Set<AnyEventHandler>>()
 
   /**
    * Subscribe to an event
@@ -61,7 +64,7 @@ class EventBus {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set())
     }
-    this.listeners.get(event)!.add(handler as EventHandler<any>)
+    this.listeners.get(event)!.add(handler as AnyEventHandler)
 
     // Return unsubscribe function
     return () => this.off(event, handler)
@@ -94,7 +97,7 @@ class EventBus {
   off<K extends keyof EventMap>(event: K, handler: EventHandler<EventMap[K]>): void {
     const handlers = this.listeners.get(event)
     if (handlers) {
-      handlers.delete(handler as EventHandler<any>)
+      handlers.delete(handler as AnyEventHandler)
       // Clean up empty listener sets
       if (handlers.size === 0) {
         this.listeners.delete(event)
@@ -157,7 +160,14 @@ export const eventBus = new EventBus()
 
 // ==================== Development Helpers ====================
 
+// Extend window interface for development debugging
+declare global {
+  interface Window {
+    __eventBus?: EventBus
+  }
+}
+
 if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
   // Expose event bus for debugging in development
-  ;(window as any).__eventBus = eventBus
+  window.__eventBus = eventBus
 }

@@ -67,12 +67,14 @@ export const TurnStatusIndicator = memo(function TurnStatusIndicator() {
   }, [turnStatus, turnTiming.startedAt])
 
   // Reset elapsed when turn completes
+  /* eslint-disable react-hooks/set-state-in-effect -- Intentional: reset state when turn status changes */
   useEffect(() => {
     if (turnStatus !== 'running') {
       setElapsedMs(0)
       setTokenRate(0)
     }
   }, [turnStatus])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Don't render if not running
   if (turnStatus !== 'running') {

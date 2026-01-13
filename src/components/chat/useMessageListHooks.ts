@@ -106,16 +106,23 @@ export function useItemSizeCache(
   const cacheKeyOwner = useRef<Map<string, string>>(new Map())
 
   // Main height cache with measured vs estimated distinction
-  const heightCache = useRef<LRUCache<string, HeightCacheEntry>>(
-    new LRUCache(MAX_LRU_CACHE_SIZE, (cacheKey) => {
-      const ownerId = cacheKeyOwner.current.get(cacheKey)
-      if (ownerId) {
-        removeCacheKeyFromIndex(cacheKeyIndex.current, cacheKeyOwner.current, ownerId, cacheKey)
-      } else {
-        cacheKeyOwner.current.delete(cacheKey)
-      }
-    })
-  )
+  // P1 Fix: Initialize without callback to avoid ref access during render
+  const heightCache = useRef<LRUCache<string, HeightCacheEntry> | null>(null)
+
+  // Lazy init function to avoid ref access during render
+  const getHeightCache = useCallback(() => {
+    if (!heightCache.current) {
+      heightCache.current = new LRUCache(MAX_LRU_CACHE_SIZE, (cacheKey) => {
+        const ownerId = cacheKeyOwner.current.get(cacheKey)
+        if (ownerId) {
+          removeCacheKeyFromIndex(cacheKeyIndex.current, cacheKeyOwner.current, ownerId, cacheKey)
+        } else {
+          cacheKeyOwner.current.delete(cacheKey)
+        }
+      })
+    }
+    return heightCache.current
+  }, [])
 
   // Track items for change detection
   const prevItemsRef = useRef<Record<string, AnyThreadItem>>(items)
@@ -158,7 +165,7 @@ export function useItemSizeCache(
           if (!item) continue
 
           const cacheKey = createCacheKey(id, item)
-          const existing = heightCache.current.get(cacheKey)
+          const existing = getHeightCache().get(cacheKey)
           const estimated = estimateItemHeight(item)
 
           // Record measurement for metrics
@@ -170,7 +177,7 @@ export function useItemSizeCache(
             ? measuredHeight // Already measured, use new measurement directly
             : Math.round(measuredHeight * MEASURED_HEIGHT_WEIGHT + estimated * (1 - MEASURED_HEIGHT_WEIGHT))
 
-          heightCache.current.set(cacheKey, {
+          getHeightCache().set(cacheKey, {
             height: blendedHeight,
             measured: true,
             timestamp: Date.now(),
@@ -210,7 +217,7 @@ export function useItemSizeCache(
     // Clear cache for removed items
     for (const id of prevIds) {
       if (!currentIds.has(id)) {
-        clearCacheForItemOptimized(heightCache.current, cacheKeyIndex.current, id)
+        clearCacheForItemOptimized(getHeightCache(), cacheKeyIndex.current, id)
         // Stop observing removed elements
         const element = observedElementsRef.current.get(id)
         if (element) {
@@ -227,13 +234,13 @@ export function useItemSizeCache(
 
       if (prevItem && currentItem) {
         if (hasItemChanged(prevItem, currentItem)) {
-          clearCacheForItemOptimized(heightCache.current, cacheKeyIndex.current, id)
+          clearCacheForItemOptimized(getHeightCache(), cacheKeyIndex.current, id)
         }
       }
     }
 
     prevItemsRef.current = items
-  }, [items])
+  }, [items, getHeightCache])
 
   // Pre-warm cache for visible items
   const warmupCache = useCallback(
@@ -247,9 +254,9 @@ export function useItemSizeCache(
         if (!item) continue
 
         const cacheKey = createCacheKey(id, item)
-        if (!heightCache.current.has(cacheKey)) {
+        if (!getHeightCache().has(cacheKey)) {
           const height = estimateItemHeight(item)
-          heightCache.current.set(cacheKey, {
+          getHeightCache().set(cacheKey, {
             height,
             measured: false,
             timestamp: Date.now(),
@@ -284,13 +291,13 @@ export function useItemSizeCache(
       if (!item) return DEFAULT_ITEM_HEIGHT
 
       const cacheKey = createCacheKey(id, item)
-      const cached = heightCache.current.get(cacheKey)
+      const cached = getHeightCache().get(cacheKey)
 
       if (cached) {
         // P2: Check if cache entry has expired
         const age = Date.now() - cached.timestamp
         if (age > CACHE_ENTRY_MAX_AGE_MS) {
-          heightCache.current.delete(cacheKey)
+          getHeightCache().delete(cacheKey)
           log.debug(
             `[useMessageListHooks] Cache entry expired for ${id} (age: ${Math.round(age / 1000)}s)`,
             'useMessageListHooks'
@@ -307,7 +314,7 @@ export function useItemSizeCache(
 
       // Re-estimate height (cached entry was either missing or expired)
       const height = estimateItemHeight(item)
-      heightCache.current.set(cacheKey, {
+      getHeightCache().set(cacheKey, {
         height,
         measured: false,
         timestamp: Date.now(),
@@ -328,7 +335,7 @@ export function useItemSizeCache(
 
   // Get cache statistics
   const getCacheStats = useCallback(() => {
-    return heightCache.current.getStats()
+    return getHeightCache().getStats()
   }, [])
 
   return {
@@ -472,6 +479,7 @@ export function useAutoScroll(
       lastThreadIdRef.current = threadId
       lastScrolledIndexRef.current = -1
       lastScrollTimeRef.current = 0
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Intentional: reset state when thread changes
       setAutoScroll(true) // Re-enable auto-scroll when switching threads
     }
   }, [threadId])

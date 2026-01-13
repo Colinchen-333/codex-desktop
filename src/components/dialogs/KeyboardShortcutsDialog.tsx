@@ -53,8 +53,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
 ]
 
 export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDialogProps) {
-  if (!isOpen) return null
-
+  // Hooks must be called before any early returns to satisfy Rules of Hooks
   const [query, setQuery] = useState('')
   const normalizedQuery = query.trim().toLowerCase()
   const filteredGroups = useMemo(() => {
@@ -68,6 +67,8 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
       return { ...group, shortcuts }
     }).filter(Boolean) as ShortcutGroup[]
   }, [normalizedQuery])
+
+  if (!isOpen) return null
 
   return (
     <div

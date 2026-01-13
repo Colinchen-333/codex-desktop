@@ -87,11 +87,11 @@ export function FileMentionPopup({
         duration: 5000,
       })
     } finally {
-      if (requestId !== requestIdRef.current || projectPathRef.current !== pathAtRequest) {
-        return
+      // Only update loading state if this request is still current
+      if (requestId === requestIdRef.current && projectPathRef.current === pathAtRequest) {
+        setIsLoading(false)
+        setIsRetrying(false)
       }
-      setIsLoading(false)
-      setIsRetrying(false)
     }
   }, [])
 
