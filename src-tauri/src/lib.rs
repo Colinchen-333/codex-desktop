@@ -5,6 +5,7 @@
 //! and command execution with safety controls.
 
 pub mod app_server;
+pub mod codex_import;
 pub mod commands;
 pub mod database;
 pub mod snapshots;
@@ -143,6 +144,13 @@ pub fn run() {
             commands::allowlist::get_allowlist,
             commands::allowlist::add_to_allowlist,
             commands::allowlist::remove_from_allowlist,
+            // Codex CLI import commands
+            commands::codex_import::get_codex_config,
+            commands::codex_import::list_codex_sessions,
+            commands::codex_import::get_codex_session,
+            commands::codex_import::search_codex_sessions,
+            commands::codex_import::delete_codex_session,
+            commands::codex_import::get_codex_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

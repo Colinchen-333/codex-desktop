@@ -603,6 +603,116 @@ export const allowlistApi = {
     invoke<void>('remove_from_allowlist', { projectId, commandPattern }),
 }
 
+// ==================== Codex CLI Import Types ====================
+
+export interface CodexProject {
+  trustLevel?: string
+  model?: string
+  instructions?: string
+}
+
+export interface CodexConfig {
+  model?: string
+  modelReasoningEffort?: string
+  projects: Record<string, CodexProject>
+  mcpServers: Record<string, unknown>
+}
+
+export interface CodexSessionSummary {
+  id: string
+  filePath: string
+  timestamp: string
+  cwd: string
+  projectName: string
+  cliVersion: string
+  gitBranch?: string
+  gitCommit?: string
+  firstMessage?: string
+  messageCount: number
+  fileSize: number
+}
+
+export interface CodexSessionMeta {
+  id: string
+  timestamp: string
+  cwd: string
+  originator: string
+  cliVersion: string
+  instructions: string
+  source: string
+  modelProvider: string
+  git?: {
+    commitHash?: string
+    branch?: string
+  }
+}
+
+export interface CodexSessionMessage {
+  timestamp: string
+  messageType: string
+  role?: string
+  content: unknown
+}
+
+export interface CodexSession {
+  id: string
+  filePath: string
+  timestamp: string
+  cwd: string
+  projectName: string
+  cliVersion: string
+  gitBranch?: string
+  gitCommit?: string
+  firstMessage?: string
+  messageCount: number
+  fileSize: number
+  meta: CodexSessionMeta
+  messages: CodexSessionMessage[]
+}
+
+// ==================== Codex CLI Import API ====================
+
+export const codexImportApi = {
+  /**
+   * Get Codex CLI directory path (~/.codex)
+   */
+  getCodexDir: () => invoke<string>('get_codex_dir'),
+
+  /**
+   * Read Codex CLI configuration from ~/.codex/config.toml
+   */
+  getConfig: () => invoke<CodexConfig>('get_codex_config'),
+
+  /**
+   * List all Codex CLI sessions from ~/.codex/sessions/
+   * Returns sessions sorted by timestamp (most recent first)
+   */
+  listSessions: () =>
+    withCache(
+      'codex_cli_sessions',
+      () => invoke<CodexSessionSummary[]>('list_codex_sessions'),
+      60000 // 1 minute cache
+    ),
+
+  /**
+   * Get full session details including all messages
+   */
+  getSession: (sessionId: string) =>
+    invoke<CodexSession>('get_codex_session', { sessionId }),
+
+  /**
+   * Search Codex CLI sessions by keyword
+   */
+  searchSessions: (query: string, limit?: number) =>
+    invoke<CodexSessionSummary[]>('search_codex_sessions', { query, limit }),
+
+  /**
+   * Delete a Codex CLI session file
+   */
+  deleteSession: (sessionId: string) =>
+    invoke<void>('delete_codex_session', { sessionId }),
+}
+
 // ==================== Cache Utilities (P2.2) ====================
 // 重新导出缓存工具，供其他模块使用
 export { clearCache, clearAllCache, getCacheStats, CACHE_KEYS, CACHE_TTL } from './apiCache'

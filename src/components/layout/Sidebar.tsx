@@ -10,8 +10,9 @@
  * - useSidebarDialogs: Dialog state management hook
  */
 
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
+import { Download } from 'lucide-react'
 import { log } from '../../lib/logger'
 import { useProjectsStore } from '../../stores/projects'
 import { useSessionsStore } from '../../stores/sessions'
@@ -20,10 +21,13 @@ import { useThreadStore } from '../../stores/thread'
 import { useSettingsStore, mergeProjectSettings, getEffectiveWorkingDirectory } from '../../stores/settings'
 import { useToast } from '../ui/Toast'
 import { SidebarTabs, SessionSearch, ProjectList, SessionList, SidebarDialogs, useSidebarDialogs } from './sidebar/index'
+import { ImportCodexSessionDialog } from '../LazyComponents'
+import type { CodexSessionSummary } from '../../lib/api'
 
 export function Sidebar() {
   const { sidebarTab: activeTab, setSidebarTab: setActiveTab } = useAppStore()
   const { projects, selectedProjectId, addProject, selectProject } = useProjectsStore()
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
   const {
     sessions,
     selectedSessionId,
@@ -99,6 +103,60 @@ export function Sidebar() {
     }
   }
 
+  const handleImportSession = useCallback(async (session: CodexSessionSummary) => {
+    // Find or create project for the imported session's cwd
+    let projectId = projects.find((p) => p.path === session.cwd)?.id
+
+    if (!projectId) {
+      // Auto-add the project if it doesn't exist
+      try {
+        const newProject = await addProject(session.cwd)
+        projectId = newProject.id
+        showToast(`Project "${session.projectName}" added`, 'success')
+      } catch (error) {
+        log.error(`Failed to add project for imported session: ${error}`, 'Sidebar')
+        showToast('Failed to add project for imported session', 'error')
+        return
+      }
+    }
+
+    // Select the project and switch to sessions tab
+    selectProject(projectId)
+    setActiveTab('sessions')
+
+    // Start a new thread that resumes from the imported session
+    const project = projects.find((p) => p.id === projectId) ?? { path: session.cwd, settingsJson: null }
+    const effective = mergeProjectSettings(settings, project.settingsJson)
+    const cwd = getEffectiveWorkingDirectory(project.path, project.settingsJson)
+
+    try {
+      // Resume the CLI session by starting a thread with the session ID
+      selectSession(null)
+      await startThread(projectId, cwd, effective.model, effective.sandboxMode, effective.approvalPolicy)
+
+      // Get the new thread and try to resume the CLI session
+      const resumeThread = useThreadStore.getState().resumeThread
+      const newThread = useThreadStore.getState().activeThread
+      if (newThread) {
+        try {
+          // Try to resume the imported session
+          await resumeThread(session.id)
+          selectSession(session.id)
+          showToast('Session imported and resumed', 'success')
+        } catch {
+          // If resume fails, just use the new session
+          selectSession(newThread.id)
+          showToast('Session imported (started new)', 'info')
+        }
+      }
+
+      await fetchSessions(projectId)
+    } catch (error) {
+      log.error(`Failed to import session: ${error}`, 'Sidebar')
+      showToast('Failed to import session', 'error')
+    }
+  }, [projects, addProject, selectProject, setActiveTab, settings, startThread, fetchSessions, selectSession, showToast])
+
   return (
     <div className="flex h-full w-64 flex-col bg-background p-3">
       <SidebarTabs activeTab={activeTab} onTabChange={setActiveTab} />
@@ -130,14 +188,25 @@ export function Sidebar() {
           />
         )}
       </div>
-      <div className="mt-2 pt-2">
-        <button
-          className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 active:bg-primary/80 disabled:opacity-50 shadow-sm transition-colors"
-          onClick={activeTab === 'projects' ? handleAddProject : handleNewSession}
-          disabled={activeTab === 'sessions' && !selectedProjectId}
-        >
-          {activeTab === 'projects' ? 'Add Project' : 'New Session'}
-        </button>
+      <div className="mt-2 pt-2 space-y-2">
+        <div className="flex gap-2">
+          <button
+            className="flex-1 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 active:bg-primary/80 disabled:opacity-50 shadow-sm transition-colors"
+            onClick={activeTab === 'projects' ? handleAddProject : handleNewSession}
+            disabled={activeTab === 'sessions' && !selectedProjectId}
+          >
+            {activeTab === 'projects' ? 'Add Project' : 'New Session'}
+          </button>
+          {activeTab === 'sessions' && (
+            <button
+              className="rounded-lg bg-secondary px-3 py-2.5 text-secondary-foreground hover:bg-secondary/80 active:bg-secondary/70 shadow-sm transition-colors"
+              onClick={() => setImportDialogOpen(true)}
+              title="Import from Codex CLI"
+            >
+              <Download size={16} />
+            </button>
+          )}
+        </div>
       </div>
       <SidebarDialogs
         renameDialogOpen={dialogs.renameDialogOpen}
@@ -157,6 +226,11 @@ export function Sidebar() {
         deleteSessionConfirm={dialogs.deleteSessionConfirm}
         onConfirmDeleteSession={dialogs.confirmDeleteSession}
         onCancelDeleteSession={dialogs.cancelDeleteSession}
+      />
+      <ImportCodexSessionDialog
+        isOpen={importDialogOpen}
+        onClose={() => setImportDialogOpen(false)}
+        onImport={handleImportSession}
       />
     </div>
   )

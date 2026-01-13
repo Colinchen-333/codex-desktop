@@ -73,6 +73,14 @@ export const LazyAboutDialog = lazy(
   () => import('./dialogs/AboutDialog').then((m) => ({ default: m.AboutDialog }))
 )
 
+/**
+ * ImportCodexSessionDialog - Import sessions from Codex CLI
+ * Estimated size: ~6KB
+ */
+export const LazyImportCodexSessionDialog = lazy(
+  () => import('./dialogs/ImportCodexSessionDialog').then((m) => ({ default: m.ImportCodexSessionDialog }))
+)
+
 // ============================================================================
 // Wrapper Components with Suspense and Error Boundaries
 // ============================================================================
@@ -208,6 +216,18 @@ type AboutDialogLazyProps = DialogProps
 export const AboutDialog = withLazyLoading<AboutDialogLazyProps>(
   LazyAboutDialog as ComponentType<AboutDialogLazyProps>,
   <DialogSkeleton title="About Codex Desktop" />
+)
+
+/**
+ * ImportCodexSessionDialog with loading skeleton
+ */
+interface ImportCodexSessionDialogProps extends DialogProps {
+  onImport: (session: import('../lib/api').CodexSessionSummary) => void
+}
+
+export const ImportCodexSessionDialog = withLazyLoading<ImportCodexSessionDialogProps>(
+  LazyImportCodexSessionDialog as ComponentType<ImportCodexSessionDialogProps>,
+  <ListDialogSkeleton title="Import Codex CLI Session" />
 )
 
 // ============================================================================
