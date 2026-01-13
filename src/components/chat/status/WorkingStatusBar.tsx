@@ -134,7 +134,7 @@ export const WorkingStatusBar = memo(function WorkingStatusBar() {
           <span
             className={`text-[10px] transition-colors ${escapePending ? 'text-orange-500 font-medium' : 'text-muted-foreground/70'}`}
           >
-            {escapePending ? 'esc again to interrupt' : 'esc esc to interrupt'}
+            {escapePending ? 'press Esc again to stop this response' : 'Esc Esc to interrupt'}
           </span>
         </div>
       </div>

@@ -94,7 +94,7 @@ const SettingsSidebar = memo(function SettingsSidebar({
   onTabChange: (tab: SettingsTabId) => void
 }) {
   return (
-    <div className="w-60 bg-secondary/30 p-6 border-r border-border/50 flex flex-col gap-1">
+    <div className="w-52 lg:w-56 bg-secondary/30 p-5 border-r border-border/50 flex flex-col gap-1">
       <div className="mb-6 px-2 py-2">
         <h2 className="text-xl font-bold tracking-tight">Settings</h2>
       </div>

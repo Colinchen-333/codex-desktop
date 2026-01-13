@@ -21,7 +21,10 @@ export function useFocusRestoration(inputRef: React.RefObject<HTMLTextAreaElemen
     const maxAttempts = 3
     
     const attemptFocus = () => {
-      if (!inputRef.current) return
+      if (!inputRef.current) {
+        log.warn('[useFocusRestoration] Input ref missing, cannot restore focus', 'useInputHooks')
+        return
+      }
       
       // If already focused, success
       if (document.activeElement === inputRef.current) {
@@ -299,6 +302,8 @@ export function useFileMentionHandler({
               const newPos = mentionStartPos + quotedPath.length + 2
               inputRef.current.setSelectionRange(newPos, newPos)
               inputRef.current.focus()
+            } else {
+              log.warn('[handleFileMentionSelect] Input ref missing, cannot restore cursor', 'useInputHooks')
             }
             selectionTimeoutRef.current = null
           }, 0)
@@ -311,6 +316,8 @@ export function useFileMentionHandler({
         if (inputRef.current) {
           log.debug('[handleFileMentionSelect] Restoring focus after file selection', 'useInputHooks')
           inputRef.current.focus()
+        } else {
+          log.warn('[handleFileMentionSelect] Input ref missing after file selection', 'useInputHooks')
         }
       })
     },

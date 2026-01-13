@@ -3,11 +3,13 @@
  */
 import { Coins } from 'lucide-react'
 import { useThreadStore, selectFocusedThread } from '../../../stores/thread'
+import { useAppStore } from '../../../stores/app'
 
 export function InputStatusHint() {
   // Use proper selector to avoid re-render loops from getter-based state access
   const focusedThread = useThreadStore(selectFocusedThread)
   const tokenUsage = focusedThread?.tokenUsage ?? { totalTokens: 0, modelContextWindow: null }
+  const setKeyboardShortcutsOpen = useAppStore((state) => state.setKeyboardShortcutsOpen)
   // Ensure contextWindow is never 0 to prevent NaN/Infinity from division
   const contextWindow = Math.max(tokenUsage.modelContextWindow || 200000, 1)
   const usedPercent = Math.min(tokenUsage.totalTokens / contextWindow, 1)
@@ -25,7 +27,13 @@ export function InputStatusHint() {
         </span>
       )}
       <span>•</span>
-      <span>? for shortcuts</span>
+      <button
+        type="button"
+        onClick={() => setKeyboardShortcutsOpen(true)}
+        className="text-[10px] text-muted-foreground/70 hover:text-foreground transition-colors"
+      >
+        ? for shortcuts
+      </button>
     </div>
   )
 }

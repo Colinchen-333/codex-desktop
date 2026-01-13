@@ -5,12 +5,15 @@ import { cn } from '../../lib/utils'
 import { serverApi, type AccountInfo } from '../../lib/api'
 import { useProjectsStore } from '../../stores/projects'
 import { logError } from '../../lib/errorUtils'
+import { ProgressBar } from '../ui/loading/ProgressBar'
 
 type OnboardingStep = 'welcome' | 'login' | 'project' | 'ready'
 
 interface OnboardingFlowProps {
   onComplete: () => void
 }
+
+const LOGIN_TIMEOUT_MS = 60000
 
 export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const [step, setStep] = useState<OnboardingStep>('welcome')
@@ -152,8 +155,12 @@ function LoginStep({
   onRefresh: () => Promise<void>
 }) {
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const [loginElapsedMs, setLoginElapsedMs] = useState(0)
+  const [loginTimedOut, setLoginTimedOut] = useState(false)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const loginStartRef = useRef<number | null>(null)
   // P0 Fix: Track mounted state to prevent state updates after unmount
   const isMountedRef = useRef(true)
 
@@ -170,10 +177,41 @@ function LoginStep({
         clearTimeout(pollTimeoutRef.current)
         pollTimeoutRef.current = null
       }
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current)
+        progressIntervalRef.current = null
+      }
     }
   }, [])
 
+  useEffect(() => {
+    if (!isLoggingIn) {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current)
+        progressIntervalRef.current = null
+      }
+      setLoginElapsedMs(0)
+      return
+    }
+
+    progressIntervalRef.current = setInterval(() => {
+      if (loginStartRef.current) {
+        setLoginElapsedMs(Date.now() - loginStartRef.current)
+      }
+    }, 500)
+
+    return () => {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current)
+        progressIntervalRef.current = null
+      }
+    }
+  }, [isLoggingIn])
+
   const handleLogin = async () => {
+    setLoginTimedOut(false)
+    loginStartRef.current = Date.now()
+    setLoginElapsedMs(0)
     setIsLoggingIn(true)
     try {
       const response = await serverApi.startLogin('chatgpt')
@@ -203,16 +241,16 @@ function LoginStep({
               clearInterval(pollIntervalRef.current)
               pollIntervalRef.current = null
             }
-            if (pollTimeoutRef.current) {
-              clearTimeout(pollTimeoutRef.current)
-              pollTimeoutRef.current = null
-            }
-            await onRefresh()
-            if (isMountedRef.current) {
-              setIsLoggingIn(false)
-            }
+          if (pollTimeoutRef.current) {
+            clearTimeout(pollTimeoutRef.current)
+            pollTimeoutRef.current = null
           }
-        } catch {
+          await onRefresh()
+          if (isMountedRef.current) {
+            setIsLoggingIn(false)
+          }
+        }
+      } catch {
           // P0 Fix: Silently ignore errors during polling to prevent crashes
           // The timeout will handle eventual cleanup
         }
@@ -225,9 +263,10 @@ function LoginStep({
         }
         // P0 Fix: Check mounted before state update
         if (isMountedRef.current) {
+          setLoginTimedOut(true)
           setIsLoggingIn(false)
         }
-      }, 60000)
+      }, LOGIN_TIMEOUT_MS)
     } catch (error) {
       logError(error, {
         context: 'OnboardingFlow',
@@ -240,6 +279,9 @@ function LoginStep({
       }
     }
   }
+
+  const progressPercent = Math.min(100, Math.round((loginElapsedMs / LOGIN_TIMEOUT_MS) * 100))
+  const remainingSeconds = Math.max(0, Math.ceil((LOGIN_TIMEOUT_MS - loginElapsedMs) / 1000))
 
   if (accountInfo?.account) {
     return (
@@ -300,6 +342,21 @@ function LoginStep({
           Skip for Now
         </button>
       </div>
+      {isLoggingIn && (
+        <div className="mt-4">
+          <ProgressBar
+            value={progressPercent}
+            size="sm"
+            variant="primary"
+            label={`Checking for login... ${remainingSeconds}s remaining`}
+          />
+        </div>
+      )}
+      {loginTimedOut && !isLoggingIn && (
+        <p className="mt-4 text-xs text-amber-600 dark:text-amber-400">
+          Login check timed out. Please try again.
+        </p>
+      )}
       <p className="mt-6 text-xs text-muted-foreground/60">
         Or use terminal: <code className="rounded bg-secondary/80 px-2 py-0.5 font-mono">codex login</code>
       </p>

@@ -1,3 +1,5 @@
+import { useMemo, useState } from 'react'
+
 interface KeyboardShortcutsDialogProps {
   isOpen: boolean
   onClose: () => void
@@ -18,8 +20,8 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['⌘', ','], description: 'Open settings' },
       { keys: ['⌘', 'K'], description: 'Focus message input' },
       { keys: ['⌘', 'N'], description: 'New session' },
-      { keys: ['Esc'], description: 'Stop generation / Close dialogs' },
-      { keys: ['?'], description: 'Show this help' },
+      { keys: ['Esc'], description: 'Stop generation (double-tap) / Close dialogs' },
+      { keys: ['?'], description: 'Show keyboard shortcuts' },
     ],
   },
   {
@@ -27,17 +29,17 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     shortcuts: [
       { keys: ['⌘', '1'], description: 'Switch to Projects tab' },
       { keys: ['⌘', '2'], description: 'Switch to Sessions tab' },
-      { keys: ['↑', '↓'], description: 'Navigate through history' },
+      { keys: ['↑', '↓'], description: 'Navigate message history (input)' },
     ],
   },
   {
     title: 'Chat Input',
     shortcuts: [
-      { keys: ['Enter'], description: 'Send message' },
-      { keys: ['Shift', 'Enter'], description: 'New line' },
-      { keys: ['/'], description: 'Show slash commands' },
-      { keys: ['@'], description: 'Mention file' },
-      { keys: ['⌘', 'V'], description: 'Paste image' },
+      { keys: ['Enter'], description: 'Send message (input)' },
+      { keys: ['Shift', 'Enter'], description: 'New line (input)' },
+      { keys: ['/'], description: 'Show slash commands (input)' },
+      { keys: ['@'], description: 'Mention file (input)' },
+      { keys: ['⌘', 'V'], description: 'Paste image (input)' },
     ],
   },
   {
@@ -52,6 +54,20 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
 
 export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDialogProps) {
   if (!isOpen) return null
+
+  const [query, setQuery] = useState('')
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredGroups = useMemo(() => {
+    if (!normalizedQuery) return SHORTCUT_GROUPS
+    return SHORTCUT_GROUPS.map((group) => {
+      const shortcuts = group.shortcuts.filter((shortcut) => {
+        const haystack = `${shortcut.description} ${shortcut.keys.join(' ')}`.toLowerCase()
+        return haystack.includes(normalizedQuery)
+      })
+      if (shortcuts.length === 0) return null
+      return { ...group, shortcuts }
+    }).filter(Boolean) as ShortcutGroup[]
+  }, [normalizedQuery])
 
   return (
     <div
@@ -75,7 +91,27 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {SHORTCUT_GROUPS.map((group) => (
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="shortcut-search">
+              Search shortcuts
+            </label>
+            <input
+              id="shortcut-search"
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Type to filter by key or action"
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </div>
+
+          {filteredGroups.length === 0 && (
+            <div className="text-sm text-muted-foreground">
+              No shortcuts match your search.
+            </div>
+          )}
+
+          {filteredGroups.map((group) => (
             <div key={group.title}>
               <h3 className="text-sm font-medium text-muted-foreground mb-3 uppercase tracking-wider">
                 {group.title}

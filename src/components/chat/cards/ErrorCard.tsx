@@ -7,9 +7,31 @@ import { AlertCircle } from 'lucide-react'
 import { formatTimestamp } from '../utils'
 import type { MessageItemProps, ErrorContentType } from '../types'
 
+const HTTP_STATUS_LABELS: Record<number, string> = {
+  400: 'Bad request',
+  401: 'Unauthorized',
+  403: 'Access denied',
+  404: 'Not found',
+  408: 'Request timed out',
+  409: 'Conflict',
+  413: 'Request too large',
+  429: 'Too many requests',
+  500: 'Server error',
+  502: 'Bad gateway',
+  503: 'Service unavailable',
+  504: 'Gateway timeout',
+}
+
+const formatHttpStatus = (statusCode?: number) => {
+  if (!statusCode) return null
+  const label = HTTP_STATUS_LABELS[statusCode] ?? 'Request failed'
+  return `${label} (${statusCode})`
+}
+
 export const ErrorCard = memo(
   function ErrorCard({ item }: MessageItemProps) {
     const content = item.content as ErrorContentType
+    const statusText = formatHttpStatus(content.httpStatusCode)
 
     return (
       <div className="flex justify-start pr-12 animate-in slide-in-from-bottom-2 duration-150">
@@ -26,9 +48,9 @@ export const ErrorCard = memo(
                   {content.errorType}
                 </span>
               )}
-              {content.httpStatusCode && (
+              {statusText && (
                 <span className="text-[10px] text-muted-foreground">
-                  HTTP {content.httpStatusCode}
+                  {statusText}
                 </span>
               )}
             </div>

@@ -222,7 +222,7 @@ const SessionTab = memo(function SessionTab({
       )}
 
       {/* Status icon */}
-      <span className={cn('flex-shrink-0', isLoading && 'opacity-0')}>
+      <span className={cn('flex-shrink-0', isLoading && 'opacity-40')}>
         {isRunning ? (
           <Loader2 size={12} className="animate-spin text-blue-500" />
         ) : hasPendingApprovals ? (
@@ -236,10 +236,10 @@ const SessionTab = memo(function SessionTab({
       </span>
 
       {/* Label */}
-      <span className={cn('truncate flex-1', isLoading && 'opacity-0')}>{displayLabel}</span>
+      <span className={cn('truncate flex-1', isLoading && 'opacity-40')}>{displayLabel}</span>
 
       {/* Task progress indicator (compact) */}
-      <span className={cn(isLoading && 'opacity-0')}>
+      <span className={cn(isLoading && 'opacity-40')}>
         <TaskProgressCompact
           tasksJson={sessionTasksJson}
           status={sessionStatus}

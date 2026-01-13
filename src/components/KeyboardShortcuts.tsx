@@ -173,8 +173,14 @@ export function KeyboardShortcuts() {
       // Escape - Double-press to interrupt AI (like CLI)
       {
         key: 'Escape',
-        description: 'Interrupt AI / Close dialogs',
+        description: 'Stop generation (double-press) / Close dialogs',
         handler: handleEscape,
+      },
+      // Help - Show keyboard shortcuts
+      {
+        key: '?',
+        description: 'Show keyboard shortcuts',
+        handler: () => useAppStore.getState().setKeyboardShortcutsOpen(true),
       },
       // Navigate to next session (Cmd/Ctrl + ])
       {

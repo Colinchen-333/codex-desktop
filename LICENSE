@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Colin Chen / Lumirain Studio
+Copyright (c) 2025-present Colin Chen / Lumirain Studio
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,104 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+
+MIT 许可证（中文翻译，仅供参考，以英文原文为准）
+
+版权所有 (c) 2025-至今 Colin Chen / 光雨工作室
+
+特此免费授予任何获得本软件及相关文档文件（"软件"）副本的人不受限制地
+处理本软件的权利，包括但不限于使用、复制、修改、合并、发布、分发、再
+许可和/或销售本软件副本的权利，并允许向其提供本软件的人员这样做，但
+须符合以下条件：
+
+上述版权声明和本许可声明应包含在本软件的所有副本或重要部分中。
+
+本软件按"原样"提供，不提供任何形式的明示或暗示保证，包括但不限于对
+适销性、特定用途适用性和非侵权性的保证。在任何情况下，作者或版权持
+有人均不对任何索赔、损害或其他责任负责，无论是在合同诉讼、侵权行为
+或其他方面，由本软件或本软件的使用或其他交易引起或与之相关。
+
+================================================================================
+
+Third-Party Licenses / 第三方许可证
+===================================
+
+This software incorporates components from the following open-source projects:
+本软件包含以下开源项目的组件：
+
+React (https://react.dev/)
+  License / 许可证: MIT
+  Copyright (c) Meta Platforms, Inc. and affiliates
+
+Tauri (https://tauri.app/)
+  License / 许可证: MIT OR Apache-2.0
+  Copyright (c) 2019-2024 Tauri Programme within The Commons Conservancy
+
+Vite (https://vite.dev/)
+  License / 许可证: MIT
+  Copyright (c) 2019-present Evan You and Vite contributors
+
+Zustand (https://zustand.docs.pmnd.rs/)
+  License / 许可证: MIT
+  Copyright (c) 2019 Paul Henschel
+
+Tailwind CSS (https://tailwindcss.com/)
+  License / 许可证: MIT
+  Copyright (c) Tailwind Labs, Inc.
+
+Lucide (https://lucide.dev/)
+  License / 许可证: ISC
+  Copyright (c) 2020 Lucide Contributors
+
+React Window (https://github.com/bvaughn/react-window)
+  License / 许可证: MIT
+  Copyright (c) 2018 Brian Vaughn
+
+Immer (https://immerjs.github.io/immer/)
+  License / 许可证: MIT
+  Copyright (c) 2017 Michel Weststrate
+
+React Markdown (https://github.com/remarkjs/react-markdown)
+  License / 许可证: MIT
+  Copyright (c) 2015 Espen Hovlandsdal
+
+React Syntax Highlighter (https://github.com/react-syntax-highlighter/react-syntax-highlighter)
+  License / 许可证: MIT
+  Copyright (c) 2016 Conor Hastings
+
+Playwright (https://playwright.dev/)
+  License / 许可证: Apache-2.0
+  Copyright (c) Microsoft Corporation
+
+Vitest (https://vitest.dev/)
+  License / 许可证: MIT
+  Copyright (c) 2021-present Anthony Fu and Vitest contributors
+
+--------------------------------------------------------------------------------
+
+For complete license texts of third-party dependencies, please refer to the
+respective project repositories or the node_modules directory after installation.
+
+如需查看第三方依赖的完整许可证文本，请参阅各项目仓库或安装后的
+node_modules 目录。
+
+================================================================================
+
+NOTICE / 声明
+=============
+
+This project is not affiliated with, endorsed by, or sponsored by any of the
+third-party projects listed above. All trademarks and registered trademarks
+are the property of their respective owners.
+
+本项目与上述任何第三方项目均无关联、未获背书或赞助。所有商标和注册商
+标均为其各自所有者的财产。
+
+The Chinese translation of the MIT License is provided for reference only.
+In case of any discrepancy between the English and Chinese versions, the
+English version shall prevail.
+
+MIT 许可证的中文翻译仅供参考。如英文版本与中文版本之间存在任何差异，
+以英文版本为准。

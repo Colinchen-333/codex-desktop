@@ -8,10 +8,11 @@
  * - ChatImageUpload: Drag & drop and paste image handling
  * - useChatCommands: Command context builder hook
  */
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import type { ListImperativeAPI } from 'react-window'
 // useThreadStore imported for potential future use - currently using props
 import { useProjectsStore, type ProjectsState } from '../../stores/projects'
+import { useAppStore, type AppState } from '../../stores/app'
 import { serverApi, type SkillInput, type ReviewTarget } from '../../lib/api'
 import { ReviewSelectorDialog } from '../LazyComponents'
 import { log } from '../../lib/logger'
@@ -62,6 +63,19 @@ export function ChatView() {
     setInputValue,
     setShowReviewSelector,
   })
+
+  const escapePending = useAppStore((state: AppState) => state.escapePending)
+  const escapeToastShownRef = useRef(false)
+
+  useEffect(() => {
+    if (escapePending && !escapeToastShownRef.current) {
+      showToast('Press Esc again to stop the current response', 'info')
+      escapeToastShownRef.current = true
+    }
+    if (!escapePending) {
+      escapeToastShownRef.current = false
+    }
+  }, [escapePending, showToast])
 
   // Handle send message
   const handleSend = useCallback(async () => {
