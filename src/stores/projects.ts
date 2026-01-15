@@ -103,11 +103,20 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
         gitInfo: { ...state.gitInfo, [projectId]: info },
       }))
     } catch (error) {
-      logError(error, {
-        context: 'fetchGitInfo',
-        source: 'projects',
-        details: 'Failed to fetch git info'
-      })
+      // Check if this is a path validation error (expected during mode switches)
+      const errorMessage = parseError(error)
+      const isPathError = errorMessage.toLowerCase().includes('invalid path') ||
+                          errorMessage.toLowerCase().includes('non-existent') ||
+                          errorMessage.toLowerCase().includes('path does not exist')
+
+      // Only log non-path errors to avoid unnecessary toasts
+      if (!isPathError) {
+        logError(error, {
+          context: 'fetchGitInfo',
+          source: 'projects',
+          details: 'Failed to fetch git info'
+        })
+      }
     }
   },
 }))

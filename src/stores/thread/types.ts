@@ -317,13 +317,14 @@ export interface ThreadState {
   error: string | null
 
   // Actions
+  // P1 Fix: startThread now returns the created threadId for reliable access
   startThread: (
     projectId: string,
     cwd: string,
     model?: string,
     sandboxMode?: string,
     approvalPolicy?: string
-  ) => Promise<void>
+  ) => Promise<string>
   resumeThread: (threadId: string) => Promise<void>
   sendMessage: (
     text: string,

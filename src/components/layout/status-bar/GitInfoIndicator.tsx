@@ -63,18 +63,30 @@ export const GitInfoIndicator = memo(function GitInfoIndicator({
       if (requestId !== requestIdRef.current || projectPathRef.current !== pathAtRequest) {
         return
       }
-      logError(err, {
-        context: 'GitInfoIndicator',
-        source: 'status-bar',
-        details: 'Failed to fetch git info'
-      })
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch Git information'
+
+      // Check if this is a path validation error (path doesn't exist)
+      // These are expected when switching modes or when project paths change
+      const isPathError = errorMessage.toLowerCase().includes('invalid path') ||
+                          errorMessage.toLowerCase().includes('non-existent') ||
+                          errorMessage.toLowerCase().includes('path does not exist')
+
+      // Only log non-path errors to avoid cluttering logs during mode switches
+      if (!isPathError) {
+        logError(err, {
+          context: 'GitInfoIndicator',
+          source: 'status-bar',
+          details: 'Failed to fetch git info'
+        })
+      }
+
       setGitInfo(null)
       setIsLoading(false)
-      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch Git information'
       setError(errorMessage)
 
       // Show toast notification for errors (only once per error cycle)
-      if (!gitErrorShownRef.current) {
+      // Skip toast for path validation errors - these are expected during mode switches
+      if (!gitErrorShownRef.current && !isPathError) {
         gitErrorShownRef.current = true
         toastRef.current.error('Git Information Error', {
           message: 'Could not fetch repository status. The project path may not be a Git repository.',

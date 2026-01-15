@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { Sidebar } from './components/layout/Sidebar'
 import { MainArea } from './components/layout/MainArea'
 import { StatusBar } from './components/layout/StatusBar'
+import { MultiAgentView } from './components/multi-agent/MultiAgentView'
 import { OnboardingFlow } from './components/onboarding/OnboardingFlow'
 import { useNeedsOnboarding } from './components/onboarding/useNeedsOnboarding'
 import { ToastProvider } from './components/ui/Toast'
@@ -12,6 +13,7 @@ import { GlobalErrorHandler } from './components/ui/GlobalErrorHandler'
 import { KeyboardShortcuts } from './components/KeyboardShortcuts'
 import { useProjectsStore } from './stores/projects'
 import { useSessionsStore } from './stores/sessions'
+import { useAppStore } from './stores/app'
 import { useThreadStore, cleanupThreadResources } from './stores/thread/index'
 import { clearGlobalRollbackStack } from './hooks/useOptimisticUpdate'
 import { setupEventListeners, cleanupEventListeners } from './lib/events'
@@ -20,6 +22,7 @@ import { logError } from './lib/errorUtils'
 
 function App() {
   const fetchProjects = useProjectsStore((state) => state.fetchProjects)
+  const appMode = useAppStore((state) => state.appMode)
   const needsOnboarding = useNeedsOnboarding()
   const [showOnboarding, setShowOnboarding] = useState(false)
 
@@ -147,6 +150,37 @@ function App() {
     )
   }
 
+  // Multi-Agent Mode Layout
+  if (appMode === 'multi-agent') {
+    return (
+      <ErrorBoundary>
+        <ToastProvider>
+          <GlobalErrorHandler />
+          <KeyboardShortcuts />
+          <div className="flex h-screen w-screen overflow-hidden bg-background p-3">
+            {/* Multi-Agent Full Screen */}
+            <div className="flex flex-1 flex-col overflow-hidden rounded-2xl bg-card shadow-sm border border-border/50 relative">
+              <AsyncErrorBoundary
+                onError={(error) => {
+                  logError(error, {
+                    context: 'App',
+                    source: 'AsyncErrorBoundary',
+                    details: 'Async error in multi-agent view'
+                  })
+                }}
+              >
+                <MultiAgentView />
+              </AsyncErrorBoundary>
+              <StatusBar />
+            </div>
+          </div>
+          <ConnectionStatus />
+        </ToastProvider>
+      </ErrorBoundary>
+    )
+  }
+
+  // Normal Mode Layout
   return (
     <ErrorBoundary>
       <ToastProvider>

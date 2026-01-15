@@ -1,8 +1,13 @@
 import { create } from 'zustand'
 
 type SidebarTab = 'projects' | 'sessions'
+type AppMode = 'normal' | 'multi-agent'
 
 export interface AppState {
+  // App mode
+  appMode: AppMode
+  setAppMode: (mode: AppMode) => void
+
   // Dialog states
   settingsOpen: boolean
   setSettingsOpen: (open: boolean) => void
@@ -32,6 +37,10 @@ export interface AppState {
 }
 
 export const useAppStore = create<AppState>((set) => ({
+  // App mode
+  appMode: 'normal',
+  setAppMode: (mode) => set({ appMode: mode }),
+
   // Dialog states
   settingsOpen: false,
   setSettingsOpen: (open) => set({ settingsOpen: open }),

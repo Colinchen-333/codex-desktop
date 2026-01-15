@@ -31,6 +31,7 @@ import {
 export function StatusBar() {
   const { selectedProjectId, projects } = useProjectsStore()
   const selectedProject = projects.find((p) => p.id === selectedProjectId)
+  const appMode = useAppStore((state) => state.appMode)
   const {
     settingsOpen,
     setSettingsOpen,
@@ -86,7 +87,10 @@ export function StatusBar() {
         {/* Left side - Status indicators */}
         <div className="flex items-center gap-5">
           <ServerStatusIndicator />
-          <GitInfoIndicator projectPath={selectedProject?.path} />
+          {/* Only show GitInfoIndicator in normal mode with a valid project path */}
+          {appMode === 'normal' && selectedProject?.path && (
+            <GitInfoIndicator projectPath={selectedProject.path} />
+          )}
           <TurnStatusIndicator />
           <ConnectedTokenUsageIndicator />
         </div>

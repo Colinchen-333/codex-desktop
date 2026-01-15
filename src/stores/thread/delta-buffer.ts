@@ -535,6 +535,45 @@ export function isThreadClosing(threadId: string): boolean {
 }
 
 /**
+ * P1 Fix: Safely perform an atomic check-and-modify operation on closingThreads.
+ * This prevents race conditions between checking if a thread is in closingThreads
+ * and modifying the set.
+ *
+ * @param threadId - Thread ID to check
+ * @param operation - 'delete' to remove from set, 'add' to add to set
+ * @returns True if the operation was performed (thread was in/not in set as expected)
+ */
+export function safeClosingThreadsOperation(
+  threadId: string,
+  operation: 'delete' | 'add'
+): boolean {
+  // Use the lock mechanism to ensure atomic operation
+  const lockEntry = closingThreadsLock.get(threadId)
+
+  if (operation === 'delete') {
+    // Only delete if present in the set
+    if (closingThreads.has(threadId)) {
+      closingThreads.delete(threadId)
+      // Also clean up lock entry if present (with matching token check)
+      if (lockEntry) {
+        clearTimeout(lockEntry.timeoutId)
+        closingThreadsLock.delete(threadId)
+        lockEntry.resolve()
+      }
+      return true
+    }
+    return false
+  } else {
+    // Only add if not already present
+    if (!closingThreads.has(threadId)) {
+      closingThreads.add(threadId)
+      return true
+    }
+    return false
+  }
+}
+
+/**
  * Clear all closing thread markers (for cleanup scenarios)
  * This is safe because it waits for all locks to be released
  */
@@ -738,27 +777,69 @@ function clearDeltaBufferEntry(threadId: string, buffer: DeltaBuffer): void {
   }
 }
 
+/**
+ * P0 Fix: Atomic flag to serialize getDeltaBuffer operations per thread.
+ * This prevents TOCTOU race conditions where a thread could be marked as closing
+ * between the check and buffer creation/access.
+ */
+const bufferOperationInProgress = new Map<string, boolean>()
+
 export function getDeltaBuffer(threadId: string): DeltaBuffer | null {
-  // Check if thread is being closed - don't create/access buffers
-  if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
-    return null
+  // P0 Fix: Prevent re-entrant calls for the same thread
+  // This serializes buffer operations per thread to avoid TOCTOU issues
+  if (bufferOperationInProgress.get(threadId)) {
+    // Another operation is in progress for this thread
+    // Return existing buffer if available, null otherwise
+    return deltaBuffers.get(threadId) ?? null
   }
 
-  let buffer = deltaBuffers.get(threadId)
+  try {
+    bufferOperationInProgress.set(threadId, true)
 
-  if (!buffer) {
-    // P0 Fix: Pass threadId to create buffer with correct sequence
-    buffer = createEmptyDeltaBuffer(threadId)
-    deltaBuffers.set(threadId, buffer)
+    // P0 Fix: First check - if thread is being closed, don't create/access buffers
     if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
-      deltaBuffers.delete(threadId)
       return null
     }
-  } else if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
-    deltaBuffers.delete(threadId)
-    return null
+
+    let buffer = deltaBuffers.get(threadId)
+
+    if (!buffer) {
+      // P0 Fix: Second check before creating new buffer
+      // Ensures atomic check-then-create operation
+      if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
+        return null
+      }
+
+      // P0 Fix: Pass threadId to create buffer with correct sequence
+      buffer = createEmptyDeltaBuffer(threadId)
+
+      // P0 Fix: Third check before storing
+      // Verify thread wasn't closed while we were creating the buffer
+      if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
+        // Don't store the buffer, thread is being closed
+        return null
+      }
+
+      deltaBuffers.set(threadId, buffer)
+
+      // P0 Fix: Final verification after storing
+      // In case closing happened between set and this check
+      if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
+        deltaBuffers.delete(threadId)
+        return null
+      }
+    } else {
+      // Buffer exists - verify thread isn't closing
+      if (closingThreads.has(threadId) || closingThreadsLock.has(threadId)) {
+        deltaBuffers.delete(threadId)
+        return null
+      }
+    }
+
+    return buffer
+  } finally {
+    bufferOperationInProgress.delete(threadId)
   }
-  return buffer
 }
 
 export function clearDeltaBuffer(threadId: string): void {
