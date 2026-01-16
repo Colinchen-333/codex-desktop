@@ -449,6 +449,10 @@ async function waitForClosingLock(lockPromise: Promise<void>, timeoutMs: number)
  * @returns Cleanup function to remove thread from closing set and release lock
  */
 export async function markThreadAsClosing(threadId: string): Promise<() => void> {
+  // P2 Fix: Add to closing set IMMEDIATELY (synchronously) to prevent any new operations
+  // This ensures the thread is marked as closing before any async operations
+  closingThreads.add(threadId)
+
   // P2 Fix: Add timeout protection for lock wait loop
   const startWait = Date.now()
 
@@ -464,6 +468,8 @@ export async function markThreadAsClosing(threadId: string): Promise<() => void>
         'delta-buffer'
       )
       if (closingThreadsLock.has(threadId)) {
+        // Remove from closing set if we fail to acquire lock
+        closingThreads.delete(threadId)
         throw new Error(`Timeout waiting for closing lock on ${threadId}`)
       }
       break
@@ -477,6 +483,8 @@ export async function markThreadAsClosing(threadId: string): Promise<() => void>
       )
       cleanupStaleClosingThreads()
       if (closingThreadsLock.has(threadId)) {
+        // Remove from closing set if we fail to acquire lock
+        closingThreads.delete(threadId)
         throw new Error(`Timeout waiting for closing lock on ${threadId}`)
       }
       break
@@ -508,9 +516,6 @@ export async function markThreadAsClosing(threadId: string): Promise<() => void>
     createdAt: Date.now(),
     timeoutId,
   })
-
-  // Add to closing set
-  closingThreads.add(threadId)
 
   // Return cleanup function
   return () => {

@@ -157,8 +157,8 @@ class RollbackStackManager {
     const index = this.stack.findIndex((entry) => entry.id === id)
     if (index === -1) return []
 
-    // 回滚从栈顶到指定位置的所有操作
-    const entriesToRollback = this.stack.splice(index + 1)
+    // 回滚从栈顶到指定位置的所有操作（包含指定操作本身）
+    const entriesToRollback = this.stack.splice(index)
     return entriesToRollback.reverse()
   }
 
@@ -272,16 +272,20 @@ export function useOptimisticUpdate<T, R>(
   useEffect(() => {
     isMountedRef.current = true
     ensureRollbackStack()
+    // Capture current ref values for cleanup to avoid stale closure
+    const scopeId = scopeIdRef.current
+    const localStack = localRollbackStackRef.current
+    const rollbackStack = rollbackStackRef.current
     return () => {
       isMountedRef.current = false
-      if (localRollbackStackRef.current.length > 0) {
-        for (const entry of localRollbackStackRef.current) {
-          rollbackStackRef.current?.removeById(entry.id)
+      if (localStack.length > 0) {
+        for (const entry of localStack) {
+          rollbackStack?.removeById(entry.id)
         }
         localRollbackStackRef.current = []
       }
       if (hasAcquiredRef.current) {
-        releaseRollbackStack(scopeIdRef.current)
+        releaseRollbackStack(scopeId)
         hasAcquiredRef.current = false
       }
     }

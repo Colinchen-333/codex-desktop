@@ -83,16 +83,16 @@ export function createStartThread(
     approvalPolicy?: string
   ): Promise<string> => {
     // DEBUG
-    console.log('[startThread] Called with:', { projectId, cwd, model, sandboxMode, approvalPolicy })
+    log.debug(`[startThread] Called with: ${JSON.stringify({ projectId, cwd, model, sandboxMode, approvalPolicy })}`, 'thread-actions')
 
     // Acquire thread switch lock to prevent concurrent operations
-    console.log('[startThread] Acquiring lock...')
+    log.debug('[startThread] Acquiring lock...', 'thread-actions')
     await acquireThreadSwitchLock()
-    console.log('[startThread] Lock acquired')
+    log.debug('[startThread] Lock acquired', 'thread-actions')
 
     try {
       const { threads, maxSessions } = get()
-      console.log('[startThread] Current threads:', Object.keys(threads).length, 'max:', maxSessions)
+      log.debug(`[startThread] Current threads: count=${Object.keys(threads).length}, maxSessions=${maxSessions}`, 'thread-actions')
 
       // Check if we can add another session
       if (Object.keys(threads).length >= maxSessions) {
@@ -107,9 +107,7 @@ export function createStartThread(
       const safeSandboxMode = normalizeSandboxMode(sandboxMode)
       const safeApprovalPolicy = normalizeApprovalPolicy(approvalPolicy)
 
-      console.log('[startThread] Calling threadApi.start with:', {
-        projectId, cwd, safeModel, safeSandboxMode, safeApprovalPolicy
-      })
+      log.debug(`[startThread] Calling threadApi.start: ${JSON.stringify({ projectId, cwd, safeModel, safeSandboxMode, safeApprovalPolicy })}`, 'thread-actions')
 
       const response = await threadApi.start(
         projectId,
@@ -119,7 +117,7 @@ export function createStartThread(
         safeApprovalPolicy
       )
 
-      console.log('[startThread] API response:', response)
+      log.debug(`[startThread] API response received: threadId=${response.thread.id}`, 'thread-actions')
 
       // Validate operation sequence after async operation (using projectId as key)
       // P0 Fix: Handle stale operation more gracefully to prevent zombie threads
@@ -455,7 +453,11 @@ export function createCloseThread(
     if (Object.keys(updatedThreads).length === 0) {
       stopApprovalCleanupTimer()
       stopTimerCleanupInterval()
-      void releasePromise.then((release) => release())
+      releasePromise
+        .then((release) => release())
+        .catch((error) => {
+          log.error(`[closeThread] Failed to release closing lock: ${error}`, 'thread-actions')
+        })
       log.debug('[closeThread] All threads closed, cleared closingThreads set', 'thread-actions')
     } else {
       // Start periodic cleanup if there are still threads
@@ -463,12 +465,16 @@ export function createCloseThread(
 
       // Remove from closing set after a short delay to ensure all pending events are handled
       // This allows any in-flight events to be properly rejected
-      void releasePromise.then((release) => {
-        setTimeout(() => {
-          release()
-          log.debug(`[closeThread] Removed thread ${threadId} from closing set`, 'thread-actions')
-        }, CLOSING_THREAD_CLEANUP_DELAY_MS)
-      })
+      releasePromise
+        .then((release) => {
+          setTimeout(() => {
+            release()
+            log.debug(`[closeThread] Removed thread ${threadId} from closing set`, 'thread-actions')
+          }, CLOSING_THREAD_CLEANUP_DELAY_MS)
+        })
+        .catch((error) => {
+          log.error(`[closeThread] Failed to release closing lock: ${error}`, 'thread-actions')
+        })
     }
   }
 }
@@ -514,10 +520,14 @@ export function createCloseAllThreads(
     stopApprovalCleanupTimer()
     stopTimerCleanupInterval()
 
-    void Promise.all(releasePromises).then((releases) => {
-      releases.forEach((release) => release())
-      log.debug('[closeAllThreads] Cleared closingThreads set', 'thread-actions')
-    })
+    Promise.all(releasePromises)
+      .then((releases) => {
+        releases.forEach((release) => release())
+        log.debug('[closeAllThreads] Cleared closingThreads set', 'thread-actions')
+      })
+      .catch((error) => {
+        log.error(`[closeAllThreads] Failed to release closing locks: ${error}`, 'thread-actions')
+      })
   }
 }
 

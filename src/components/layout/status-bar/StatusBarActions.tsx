@@ -28,7 +28,6 @@ export const StatusBarActions = memo(function StatusBarActions({
   onSnapshotsClick,
 }: StatusBarActionsProps) {
   const activeThread = useThreadStore(selectActiveThread)
-  const closeThread = useThreadStore((state) => state.closeThread)
   const appMode = useAppStore((state) => state.appMode)
   const setAppMode = useAppStore((state) => state.setAppMode)
 
@@ -77,7 +76,7 @@ export const StatusBarActions = memo(function StatusBarActions({
       transitionRef.current = false
       setIsTransitioning(false)
     }
-  }, [appMode, setAppMode, closeThread])
+  }, [appMode, setAppMode])
 
   return (
     <div className="flex items-center gap-1">

@@ -8,8 +8,16 @@
  * - Event emission
  */
 
-import type { WorkflowPhase, AgentDescriptor, AgentType } from '../../stores/multi-agent-v2'
+import type {
+  WorkflowPhase,
+  AgentDescriptor,
+  AgentType,
+  WorkflowExecutionContext,
+} from './types'
 import { log } from '../logger'
+
+// Re-export WorkflowExecutionContext for backward compatibility
+export type { WorkflowExecutionContext }
 
 export interface WorkflowEngineEvents {
   onPhaseStarted?: (phase: WorkflowPhase) => void
@@ -17,13 +25,6 @@ export interface WorkflowEngineEvents {
   onPhaseFailed?: (phase: WorkflowPhase, error: Error) => void
   onApprovalRequired?: (phase: WorkflowPhase) => void
   onAllPhasesCompleted?: () => void
-}
-
-export interface WorkflowExecutionContext {
-  workingDirectory: string
-  userTask: string
-  previousPhaseOutput?: string
-  globalConfig?: Record<string, unknown>
 }
 
 export class WorkflowEngine {

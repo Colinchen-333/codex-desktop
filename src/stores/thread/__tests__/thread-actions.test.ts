@@ -714,23 +714,28 @@ describe('closeAllThreads', () => {
     vi.clearAllMocks()
   })
 
-  it('should close all threads', () => {
+  it('should close all threads', async () => {
     const closeAllThreads = createCloseAllThreads(mockSet, mockGet)
 
     closeAllThreads()
 
     expect(Object.keys(mockState.threads).length).toBe(0)
     expect(mockState.focusedThreadId).toBe(null)
-    expect(closingThreads.size).toBe(0)
+    // Wait for async cleanup of closingThreads
+    await vi.waitFor(() => {
+      expect(closingThreads.size).toBe(0)
+    })
   })
 
-  it('should mark all threads as closing initially', () => {
+  it('should mark all threads as closing initially', async () => {
     const closeAllThreads = createCloseAllThreads(mockSet, mockGet)
 
     closeAllThreads()
 
-    // After closeAllThreads, the set should be cleared since all threads are gone
-    expect(closingThreads.size).toBe(0)
+    // After closeAllThreads, the set should be cleared since all threads are gone (async)
+    await vi.waitFor(() => {
+      expect(closingThreads.size).toBe(0)
+    })
   })
 })
 

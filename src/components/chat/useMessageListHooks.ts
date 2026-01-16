@@ -193,6 +193,9 @@ export function useItemSizeCache(
 
     // Capture ref value for cleanup
     const observedElements = observedElementsRef.current
+    // Capture current ref values for cleanup to avoid stale closure
+    const keyIndex = cacheKeyIndex.current
+    const keyOwner = cacheKeyOwner.current
 
     return () => {
       // Cancel any pending RAF callback
@@ -203,10 +206,10 @@ export function useItemSizeCache(
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
       observedElements.clear()
-      cacheKeyIndex.current.clear()
-      cacheKeyOwner.current.clear()
+      keyIndex.clear()
+      keyOwner.clear()
     }
-  }, [])
+  }, [getHeightCache])
 
   // Clear cache for changed/removed items
   useEffect(() => {
@@ -264,7 +267,7 @@ export function useItemSizeCache(
         }
       }
     },
-    [itemOrder, items]
+    [itemOrder, items, getHeightCache]
   )
 
   // Register element for observation
@@ -325,7 +328,7 @@ export function useItemSizeCache(
 
       return height
     },
-    [itemOrder, items]
+    [itemOrder, items, getHeightCache]
   )
 
   // Set height change callback
@@ -336,7 +339,7 @@ export function useItemSizeCache(
   // Get cache statistics
   const getCacheStats = useCallback(() => {
     return getHeightCache().getStats()
-  }, [])
+  }, [getHeightCache])
 
   return {
     getItemSize,

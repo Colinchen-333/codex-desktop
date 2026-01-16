@@ -11,7 +11,7 @@
 import React, { memo, useMemo, useDeferredValue, useCallback, useRef, useEffect } from 'react'
 import { List, useDynamicRowHeight } from 'react-window'
 import type { ListImperativeAPI, DynamicRowHeight } from 'react-window'
-import { useThreadStore, selectFocusedThread } from '../../stores/thread'
+import { useThreadStore, selectFocusedThread, type AnyThreadItem } from '../../stores/thread'
 import { isUserMessageContent, isAgentMessageContent } from '../../lib/typeGuards'
 import { MessageItem } from './messages'
 import { ChatEmptyState } from './ChatEmptyState'
@@ -27,6 +27,10 @@ import {
   useScrollHandler,
   useScrollRestoration,
 } from './useMessageListHooks'
+
+// P2: Use stable empty objects to prevent useMemo dependency changes
+const EMPTY_ITEMS: Record<string, AnyThreadItem> = {}
+const EMPTY_ITEM_ORDER: string[] = []
 
 /**
  * Virtualized list row component with dynamic height support
@@ -98,9 +102,10 @@ export default memo(function ChatMessageList({
   const focusedThread = useThreadStore(selectFocusedThread)
 
   // Extract data from focused thread state
+  // P2: Use stable empty objects to prevent useMemo dependency changes
   const threadId = focusedThread?.thread?.id ?? null
-  const items = focusedThread?.items ?? {}
-  const itemOrder = focusedThread?.itemOrder ?? []
+  const items = focusedThread?.items ?? EMPTY_ITEMS
+  const itemOrder = focusedThread?.itemOrder ?? EMPTY_ITEM_ORDER
   const turnStatus = focusedThread?.turnStatus ?? 'idle'
 
   // Use deferred value for filter to avoid blocking renders

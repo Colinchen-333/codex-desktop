@@ -35,15 +35,17 @@ export function useImageUpload(
 
   useEffect(() => {
     isMountedRef.current = true
+    // Capture current ref value for cleanup to avoid stale closure
+    const readers = readersRef.current
     return () => {
       isMountedRef.current = false
-      readersRef.current.forEach((reader) => {
+      readers.forEach((reader) => {
         reader.onload = null
         reader.onerror = null
         reader.onabort = null
         reader.abort()
       })
-      readersRef.current.clear()
+      readers.clear()
     }
   }, [])
 

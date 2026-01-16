@@ -8,8 +8,12 @@
  * 4. Implement - Execute code changes
  */
 
-import type { Workflow, WorkflowPhase, AgentType } from '../../stores/multi-agent-v2'
-import type { WorkflowExecutionContext } from './workflow-engine'
+import type {
+  Workflow,
+  WorkflowPhase,
+  AgentType,
+  WorkflowExecutionContext,
+} from './types'
 
 /**
  * Create a Plan Mode workflow instance
