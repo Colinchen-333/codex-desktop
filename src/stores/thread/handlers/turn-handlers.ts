@@ -33,6 +33,7 @@ import {
   closingThreads,
   performFullTurnCleanup,
 } from '../delta-buffer'
+import { notifyAgentStore } from '../agent-integration'
 
 // ==================== Thread Started Handler ====================
 
@@ -82,6 +83,10 @@ export function createHandleTurnStarted(
     } catch (err) {
       handleAsyncError(err, 'handleTurnStarted session sync', 'thread')
     }
+
+    // Notify multi-agent store if this is an agent thread
+    const state = getThreadStore()
+    notifyAgentStore(state.agentMapping, threadId, 'turnStarted')
 
     // Set turn timeout for this specific thread
     const turnId = event.turn.id
@@ -193,6 +198,12 @@ export function createHandleTurnCompleted(
       threadState.error = event.turn.error?.message || null
       threadState.pendingApprovals = []
       threadState.turnTiming.completedAt = Date.now()
+    })
+
+    // Notify multi-agent store if this is an agent thread
+    const state = getThreadStore()
+    notifyAgentStore(state.agentMapping, threadId, 'turnCompleted', {
+      status: nextTurnStatus === 'failed' ? 'error' : 'completed',
     })
 
     if (nextTurnStatus === 'completed' || nextTurnStatus === 'interrupted') {

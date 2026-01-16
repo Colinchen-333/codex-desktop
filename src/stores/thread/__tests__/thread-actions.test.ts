@@ -118,6 +118,7 @@ function createMockState(
     snapshots: [],
     isLoading: false,
     globalError: null,
+    agentMapping: {},
     // Backward-compatible getters
     activeThread: threadIds[0] ? threads[threadIds[0]].thread : null,
     items: threadIds[0] ? threads[threadIds[0]].items : {},

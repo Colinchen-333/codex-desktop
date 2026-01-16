@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { Sidebar } from './components/layout/Sidebar'
 import { MainArea } from './components/layout/MainArea'
 import { StatusBar } from './components/layout/StatusBar'
-import { MultiAgentView } from './components/multi-agent/MultiAgentView'
+import { MultiAgentViewContainer } from './components/multi-agent-v2/MultiAgentViewContainer'
 import { OnboardingFlow } from './components/onboarding/OnboardingFlow'
 import { useNeedsOnboarding } from './components/onboarding/useNeedsOnboarding'
 import { ToastProvider } from './components/ui/Toast'
@@ -169,7 +169,7 @@ function App() {
                   })
                 }}
               >
-                <MultiAgentView />
+                <MultiAgentViewContainer />
               </AsyncErrorBoundary>
               <StatusBar />
             </div>

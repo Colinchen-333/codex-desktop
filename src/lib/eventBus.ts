@@ -34,6 +34,13 @@ export interface SessionFirstMessageEvent {
   firstMessage: string
 }
 
+export interface ThreadOrphanedEvent {
+  threadId: string
+  projectId: string
+  reason: string
+  createdAt: number
+}
+
 /**
  * Event map defining all available events and their payload types
  */
@@ -42,6 +49,7 @@ export interface EventMap {
   'session:closed': SessionClosedEvent
   'session:set-first-message': SessionFirstMessageEvent
   'thread:status-change': ThreadStatusChangeEvent
+  'thread:orphaned': ThreadOrphanedEvent
 }
 
 // ==================== Event Bus Implementation ====================

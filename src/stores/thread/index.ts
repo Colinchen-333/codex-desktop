@@ -133,6 +133,9 @@ export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<Threa
       focusedThreadId: null,
       maxSessions: MAX_PARALLEL_SESSIONS,
 
+      // ==================== Agent Mapping ====================
+      agentMapping: {},
+
       // ==================== Global State ====================
       snapshots: [],
       isLoading: false,

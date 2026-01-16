@@ -9,7 +9,7 @@ import { HelpCircle, Info, Settings, Camera, Bot, ArrowLeft, Loader2 } from 'luc
 import { useThreadStore } from '../../../stores/thread'
 import { selectActiveThread } from '../../../stores/thread/selectors'
 import { useAppStore } from '../../../stores/app'
-import { useMultiAgentStore } from '../../../stores/multi-agent'
+import { useMultiAgentStore } from '../../../stores/multi-agent-v2'
 import { preloadSettingsDialog } from '../../../lib/lazyPreload'
 import { log } from '../../../lib/logger'
 
@@ -50,23 +50,24 @@ export const StatusBarActions = memo(function StatusBarActions({
 
     try {
       if (appMode === 'multi-agent') {
-        // 退出多智能体模式时，先关闭编排器线程再重置状态
-        // 这样可以避免快速切换时线程和 orchestratorThreadId 不同步
-        const orchestratorThreadId = useMultiAgentStore.getState().orchestratorThreadId
-        if (orchestratorThreadId) {
+        // 退出多智能体模式时，关闭所有代理线程并重置状态
+        // v2: 不再使用单个编排器线程，而是管理多个代理线程
+        const multiAgentState = useMultiAgentStore.getState()
+        
+        // 取消所有运行中的工作流
+        if (multiAgentState.workflow) {
           try {
-            closeThread(orchestratorThreadId)
+            await multiAgentState.cancelWorkflow()
           } catch (error) {
-            // 记录错误但不阻塞后续操作，确保 UI 响应和状态一致性
             log.error(
-              `Failed to close orchestrator thread ${orchestratorThreadId}: ${error instanceof Error ? error.message : String(error)}`,
+              `Failed to cancel workflow: ${error instanceof Error ? error.message : String(error)}`,
               'StatusBarActions'
             )
           }
         }
-        // P1 Fix: Always reset multi-agent state when exiting multi-agent mode
-        // This is now outside the try block to ensure it always runs
-        useMultiAgentStore.getState().reset()
+        
+        // 重置多智能体状态（会关闭所有代理线程）
+        multiAgentState.reset()
       }
 
       // P1 Fix: Use captured target mode to ensure consistency
