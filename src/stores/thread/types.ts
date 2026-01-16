@@ -328,6 +328,8 @@ export interface ThreadState {
     sandboxMode?: string,
     approvalPolicy?: string
   ) => Promise<string>
+  registerAgentThread: (thread: ThreadInfo, agentId: string, options?: { focus?: boolean }) => void
+  unregisterAgentThread: (threadId: string) => void
   resumeThread: (threadId: string) => Promise<void>
   sendMessage: (
     text: string,

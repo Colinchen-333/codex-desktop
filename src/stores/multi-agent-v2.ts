@@ -9,11 +9,14 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import type { WritableDraft } from 'immer'
-import { getAgentSandboxPolicy } from '../lib/agent-types'
+import { getAgentSandboxPolicy, getAgentSystemPrompt, getAgentToolWhitelist } from '../lib/agent-types'
 import { threadApi } from '../lib/api'
 import { log } from '../lib/logger'
+import { normalizeApprovalPolicy, normalizeSandboxMode } from '../lib/normalize'
 import { WorkflowEngine } from '../lib/workflows/workflow-engine'
-import { generatePhaseAgentTasks } from '../lib/workflows/plan-mode'
+import { extractPhaseSummary, generatePhaseAgentTasks } from '../lib/workflows/plan-mode'
+import { useThreadStore } from './thread'
+import type { SingleThreadState } from './thread/types'
 
 // Import types from shared types file
 import type {
@@ -47,9 +50,11 @@ export type { AgentType }
  * Multi-agent configuration
  */
 export interface MultiAgentConfig {
+  projectId?: string
   cwd: string
   model: string
   approvalPolicy: string
+  timeout: number
   maxConcurrentAgents: number
 }
 
@@ -111,10 +116,117 @@ export interface MultiAgentState {
 // ==================== Default Values ====================
 
 const defaultConfig: MultiAgentConfig = {
+  projectId: undefined,
   cwd: '',
-  model: 'claude-sonnet-4-20250514',
-  approvalPolicy: 'auto',
+  model: '',
+  approvalPolicy: 'on-request',
+  timeout: 300,
   maxConcurrentAgents: 10,
+}
+
+const APPROVAL_POLICY_ORDER: Record<string, number> = {
+  never: 0,
+  'on-failure': 1,
+  untrusted: 2,
+  'on-request': 3,
+}
+
+const MAX_AGENT_OUTPUT_CHARS = 4000
+const START_SLOT_POLL_MS = 500
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function getRequiredApprovalPolicy(sandboxPolicy: string): string | undefined {
+  const approvalPolicyMap: Record<string, string> = {
+    'read-only': 'never',
+    'workspace-write': 'on-failure',
+    'workspace-write-with-approval': 'on-request',
+  }
+  return approvalPolicyMap[sandboxPolicy]
+}
+
+function resolveApprovalPolicy(
+  sandboxPolicy: string,
+  requested?: string,
+  fallback?: string
+): string | undefined {
+  const required = normalizeApprovalPolicy(getRequiredApprovalPolicy(sandboxPolicy))
+  const normalizedRequested = normalizeApprovalPolicy(requested)
+  const normalizedFallback = normalizeApprovalPolicy(fallback)
+  const candidate = normalizedRequested ?? normalizedFallback ?? required
+
+  if (!required || !candidate) return candidate ?? required
+  const candidatePriority = APPROVAL_POLICY_ORDER[candidate] ?? 0
+  const requiredPriority = APPROVAL_POLICY_ORDER[required] ?? 0
+  return candidatePriority >= requiredPriority ? candidate : required
+}
+
+function resolveSandboxPolicy(policy: string): string {
+  const normalized = normalizeSandboxMode(policy)
+  if (normalized) return normalized
+  if (policy === 'workspace-write-with-approval') {
+    return 'workspace-write'
+  }
+  log.warn(`[resolveSandboxPolicy] Unknown sandbox policy "${policy}", defaulting to workspace-write`, 'multi-agent')
+  return 'workspace-write'
+}
+
+function extractLatestAgentMessage(threadState?: SingleThreadState): string | undefined {
+  if (!threadState) return undefined
+
+  for (let index = threadState.itemOrder.length - 1; index >= 0; index -= 1) {
+    const itemId = threadState.itemOrder[index]
+    const item = threadState.items[itemId]
+    if (item?.type === 'agentMessage') {
+      const content = item.content as { text?: string }
+      if (content.text) {
+        return content.text
+      }
+    }
+  }
+
+  return undefined
+}
+
+function truncateOutput(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  return `${text.slice(0, maxChars)}...`
+}
+
+function buildAgentDeveloperInstructions(type: AgentType): string | undefined {
+  const systemPrompt = getAgentSystemPrompt(type)
+  const toolWhitelist = getAgentToolWhitelist(type)
+
+  const sections: string[] = []
+
+  if (systemPrompt) {
+    sections.push(`## 角色指引\n${systemPrompt}`)
+  }
+
+  if (toolWhitelist.length > 0) {
+    sections.push(`## 可用工具\n${toolWhitelist.join(', ')}`)
+  }
+  if (sections.length === 0) return undefined
+
+  return sections.join('\n\n')
+}
+
+function buildAgentTaskMessage(task: string): string {
+  return task
+}
+
+function buildPhaseOutput(phase: WorkflowPhase, agents: AgentDescriptor[]): string {
+  const threads = useThreadStore.getState().threads
+  const outputs = agents.map((agent) => {
+    const threadState = agent.threadId ? threads[agent.threadId] : undefined
+    const latest = extractLatestAgentMessage(threadState) ?? '无输出'
+    return {
+      id: agent.id,
+      output: truncateOutput(latest, MAX_AGENT_OUTPUT_CHARS),
+    }
+  })
+
+  return extractPhaseSummary(phase, outputs)
 }
 
 // ==================== Store Implementation ====================
@@ -134,7 +246,17 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     // ==================== Configuration ====================
     setConfig: (config: Partial<MultiAgentConfig>) => {
       set((state) => {
-        state.config = { ...state.config, ...config }
+        const nextConfig = { ...state.config, ...config }
+        if (config.approvalPolicy) {
+          const normalized = normalizeApprovalPolicy(config.approvalPolicy)
+          if (normalized) {
+            nextConfig.approvalPolicy = normalized
+          }
+        }
+        if (config.timeout !== undefined && config.timeout < 0) {
+          nextConfig.timeout = state.config.timeout
+        }
+        state.config = nextConfig
       })
     },
 
@@ -160,15 +282,6 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         const state = get()
         const agentId = crypto.randomUUID()
 
-        // Check concurrent agent limit
-        const runningAgents = Object.values(state.agents).filter(
-          (a) => a.status === 'running'
-        ).length
-        if (runningAgents >= state.config.maxConcurrentAgents) {
-          log.warn(`[spawnAgent] Max concurrent agents (${state.config.maxConcurrentAgents}) reached`, 'multi-agent')
-          // Don't fail, just queue as pending
-        }
-
         // Create agent descriptor (initially pending)
         const agent: AgentDescriptor = {
           id: agentId,
@@ -193,54 +306,191 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           state.agentOrder.push(agentId)
         })
 
+        const shouldAbortStart = () => {
+          const current = get().agents[agentId]
+          return !current || current.status === 'cancelled' || current.interruptReason === 'cancel'
+        }
+
+        const isPaused = () => {
+          const current = get().agents[agentId]
+          return current?.interruptReason === 'pause'
+        }
+
+        const waitForDependencies = async () => {
+          if (dependencies.length === 0) return true
+
+          set((state) => {
+            const agent = state.agents[agentId]
+            if (agent) {
+              agent.progress.description = '等待依赖完成'
+            }
+          })
+
+          const evaluateDependencies = (currentState: MultiAgentState) => {
+            let hasFailed = false
+            const allCompleted = dependencies.every((depId) => {
+              const dep = currentState.agents[depId]
+              if (!dep) return false
+              if (dep.status === 'error' || dep.status === 'cancelled') {
+                hasFailed = true
+                return false
+              }
+              return dep.status === 'completed'
+            })
+            return { allCompleted, hasFailed }
+          }
+
+          const initialStatus = evaluateDependencies(get())
+          if (initialStatus.hasFailed) {
+            set((state) => {
+              const agent = state.agents[agentId]
+              if (agent) {
+                agent.status = 'error'
+                agent.completedAt = new Date()
+                agent.error = {
+                  message: '依赖代理执行失败或被取消',
+                  code: 'DEPENDENCY_FAILED',
+                  recoverable: false,
+                }
+              }
+            })
+            return false
+          }
+
+          if (initialStatus.allCompleted) return true
+
+          log.info(`[spawnAgent] Agent ${agentId} waiting for dependencies`, 'multi-agent')
+          return new Promise<boolean>((resolve) => {
+            const checkInterval = setInterval(() => {
+              if (shouldAbortStart()) {
+                clearInterval(checkInterval)
+                resolve(false)
+                return
+              }
+
+              if (isPaused()) {
+                return
+              }
+
+              const currentState = get()
+              const { allCompleted, hasFailed } = evaluateDependencies(currentState)
+
+              if (hasFailed) {
+                clearInterval(checkInterval)
+                set((state) => {
+                  const agent = state.agents[agentId]
+                  if (agent) {
+                    agent.status = 'error'
+                    agent.completedAt = new Date()
+                    agent.error = {
+                      message: '依赖代理执行失败或被取消',
+                      code: 'DEPENDENCY_FAILED',
+                      recoverable: false,
+                    }
+                  }
+                })
+                resolve(false)
+                return
+              }
+
+              if (allCompleted) {
+                clearInterval(checkInterval)
+                resolve(true)
+              }
+            }, 2000)
+          })
+        }
+
+        const waitForSlot = async () => {
+          if (state.config.maxConcurrentAgents <= 0) {
+            set((state) => {
+              const agent = state.agents[agentId]
+              if (agent) {
+                agent.status = 'running'
+                agent.startedAt = new Date()
+                agent.progress.description = '正在启动'
+              }
+            })
+            return true
+          }
+
+          let logged = false
+          while (true) {
+            if (shouldAbortStart()) return false
+
+            if (isPaused()) {
+              await sleep(START_SLOT_POLL_MS)
+              continue
+            }
+
+            const currentState = get()
+            const runningAgents = Object.values(currentState.agents).filter(
+              (a) => a.status === 'running'
+            ).length
+
+            if (runningAgents < currentState.config.maxConcurrentAgents) {
+              set((state) => {
+                const agent = state.agents[agentId]
+                if (agent) {
+                  agent.status = 'running'
+                  agent.startedAt = new Date()
+                  agent.progress.description = '正在启动'
+                }
+              })
+              return true
+            }
+
+            if (!logged) {
+              logged = true
+              log.warn(
+                `[spawnAgent] Max concurrent agents (${currentState.config.maxConcurrentAgents}) reached`,
+                'multi-agent'
+              )
+              set((state) => {
+                const agent = state.agents[agentId]
+                if (agent) {
+                  agent.progress.description = '等待空闲代理位'
+                }
+              })
+            }
+
+            await sleep(START_SLOT_POLL_MS)
+          }
+        }
+
         // Start thread asynchronously
         void (async () => {
           try {
-            // Check dependencies before starting
-            if (dependencies.length > 0) {
-              const allDepsCompleted = dependencies.every((depId) => {
-                const dep = state.agents[depId]
-                return dep && dep.status === 'completed'
-              })
+            const depsReady = await waitForDependencies()
+            if (!depsReady) return
 
-              if (!allDepsCompleted) {
-                log.info(`[spawnAgent] Agent ${agentId} waiting for dependencies`, 'multi-agent')
-                // Wait for dependencies (poll every 2 seconds)
-                await new Promise<void>((resolve) => {
-                  const checkInterval = setInterval(() => {
-                    const currentState = get()
-                    const allCompleted = dependencies.every((depId) => {
-                      const dep = currentState.agents[depId]
-                      return dep && dep.status === 'completed'
-                    })
+            const slotReady = await waitForSlot()
+            if (!slotReady) return
 
-                    if (allCompleted) {
-                      clearInterval(checkInterval)
-                      resolve()
-                    }
-                  }, 2000)
-                })
-              }
-            }
+            // Get sandbox policy for agent type (normalize for Codex CLI)
+            const sandboxPolicyRaw = getAgentSandboxPolicy(type)
+            const sandboxPolicy = resolveSandboxPolicy(sandboxPolicyRaw)
 
-            // Get sandbox policy for agent type
-            const sandboxPolicy = getAgentSandboxPolicy(type)
+            const approvalPolicy = resolveApprovalPolicy(
+              sandboxPolicyRaw,
+              config.approvalPolicy,
+              state.config.approvalPolicy
+            )
 
-            // Map sandbox policy to approval policy
-            const approvalPolicyMap: Record<string, string> = {
-              'read-only': 'none',
-              'workspace-write': 'auto',
-              'workspace-write-with-approval': 'user',
-            }
-            const approvalPolicy = approvalPolicyMap[sandboxPolicy] || state.config.approvalPolicy
+            const model = config.model || state.config.model || undefined
+
+            const developerInstructions = buildAgentDeveloperInstructions(type)
 
             // Start thread
             const response = await threadApi.start(
-              '', // projectId - Will be set by backend
+              state.config.projectId || '', // projectId - optional for multi-agent mode
               state.config.cwd,
-              config.model || state.config.model,
+              model,
               sandboxPolicy,
-              approvalPolicy
+              approvalPolicy,
+              developerInstructions
+                ? { developerInstructions }
+                : undefined
             )
 
             const threadId = response.thread.id
@@ -252,15 +502,22 @@ export const useMultiAgentStore = create<MultiAgentState>()(
                 agent.threadId = threadId
                 agent.threadStoreRef = threadId
                 agent.status = 'running'
-                agent.startedAt = new Date()
                 agent.progress.description = '正在执行任务'
+                agent.interruptReason = undefined
               }
               // Add to agent mapping
               state.agentMapping[threadId] = agentId
             })
 
+            useThreadStore.getState().registerAgentThread(response.thread, agentId, { focus: false })
+
             // Send initial task message
-            await threadApi.sendMessage(threadId, task, [], [])
+            const agentTaskMessage = buildAgentTaskMessage(task)
+            await threadApi.sendMessage(threadId, agentTaskMessage, [], [], {
+              model,
+              approvalPolicy,
+              sandboxPolicy,
+            })
 
             log.info(`[spawnAgent] Agent ${agentId} started with thread ${threadId}`, 'multi-agent')
           } catch (error) {
@@ -269,6 +526,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
               const agent = state.agents[agentId]
               if (agent) {
                 agent.status = 'error'
+                agent.completedAt = new Date()
                 agent.error = {
                   message: error instanceof Error ? error.message : String(error),
                   code: 'THREAD_START_FAILED',
@@ -307,6 +565,14 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         if (error) {
           agent.error = error as WritableDraft<AgentError>
         }
+
+        if (status === 'running' || status === 'completed' || status === 'error') {
+          agent.interruptReason = undefined
+        }
+
+        if (status === 'cancelled') {
+          agent.interruptReason = agent.interruptReason || 'cancel'
+        }
       })
 
       // Check if phase is complete when agent completes
@@ -340,18 +606,20 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       if (!agent) return
 
       try {
+        set((state) => {
+          const current = state.agents[id]
+          if (current) {
+            current.status = 'cancelled'
+            current.completedAt = new Date()
+            current.interruptReason = 'cancel'
+            current.progress.description = '已取消'
+          }
+        })
+
         if (agent.threadId) {
           await threadApi.interrupt(agent.threadId)
           // Note: No closeThread method in threadApi, thread cleanup is handled by backend
         }
-
-        set((state) => {
-          const agent = state.agents[id]
-          if (agent) {
-            agent.status = 'cancelled'
-            agent.completedAt = new Date()
-          }
-        })
 
         log.info(`[cancelAgent] Agent ${id} cancelled`, 'multi-agent')
       } catch (error) {
@@ -364,13 +632,33 @@ export const useMultiAgentStore = create<MultiAgentState>()(
      */
     pauseAgent: async (id: string) => {
       const agent = get().agents[id]
-      if (!agent || !agent.threadId) return
+      if (!agent) return
 
       try {
-        await threadApi.interrupt(agent.threadId)
+        set((state) => {
+          const current = state.agents[id]
+          if (current) {
+            current.status = 'pending'
+            current.interruptReason = 'pause'
+            current.progress.description = '已暂停'
+          }
+        })
+
+        if (agent.threadId) {
+          await threadApi.interrupt(agent.threadId)
+        }
+
         log.info(`[pauseAgent] Agent ${id} paused`, 'multi-agent')
       } catch (error) {
         log.error(`[pauseAgent] Failed to pause agent ${id}: ${error}`, 'multi-agent')
+        set((state) => {
+          const current = state.agents[id]
+          if (current) {
+            current.status = 'running'
+            current.interruptReason = undefined
+            current.progress.description = '正在执行任务'
+          }
+        })
       }
     },
 
@@ -379,11 +667,24 @@ export const useMultiAgentStore = create<MultiAgentState>()(
      */
     resumeAgent: async (id: string) => {
       const agent = get().agents[id]
-      if (!agent || !agent.threadId) return
+      if (!agent) return
 
       try {
-        // Resume uses sendMessage with the resumed text
-        await threadApi.sendMessage(agent.threadId, '请继续执行任务', [], [])
+        set((state) => {
+          const current = state.agents[id]
+          if (current) {
+            current.interruptReason = undefined
+            if (current.status === 'pending') {
+              current.progress.description = current.threadId ? '正在恢复任务' : '等待启动'
+            }
+          }
+        })
+
+        if (agent.threadId) {
+          // Resume uses sendMessage with the resumed text
+          await threadApi.sendMessage(agent.threadId, '请继续执行任务', [], [])
+        }
+
         log.info(`[resumeAgent] Agent ${id} resumed`, 'multi-agent')
       } catch (error) {
         log.error(`[resumeAgent] Failed to resume agent ${id}: ${error}`, 'multi-agent')
@@ -394,9 +695,13 @@ export const useMultiAgentStore = create<MultiAgentState>()(
      * Remove an agent from the store
      */
     removeAgent: (id: string) => {
+      const agent = get().agents[id]
+      if (agent?.threadId) {
+        useThreadStore.getState().unregisterAgentThread(agent.threadId)
+      }
+
       set((state) => {
-        const agent = state.agents[id]
-        if (agent && agent.threadId) {
+        if (agent?.threadId) {
           delete state.agentMapping[agent.threadId]
         }
         delete state.agents[id]
@@ -408,6 +713,13 @@ export const useMultiAgentStore = create<MultiAgentState>()(
      * Clear all agents
      */
     clearAgents: () => {
+      const agents = Object.values(get().agents)
+      for (const agent of agents) {
+        if (agent.threadId) {
+          useThreadStore.getState().unregisterAgentThread(agent.threadId)
+        }
+      }
+
       set((state) => {
         state.agents = {}
         state.agentOrder = []
@@ -428,6 +740,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         s.workflow = workflow as WritableDraft<Workflow>
         s.workflow.status = 'running'
         s.workflow.startedAt = new Date()
+        s.previousPhaseOutput = undefined
       })
 
       // Create workflow engine
@@ -495,13 +808,33 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
         if (agentTasks.length === 0) {
           log.warn(`[_executePhase] No agent tasks generated for phase: ${phase.name}`, 'multi-agent')
+          set((s) => {
+            if (!s.workflow) return
+            const p = s.workflow.phases.find((wp) => wp.id === phase.id)
+            if (p) {
+              p.status = 'completed'
+              p.completedAt = new Date()
+              p.output = `阶段 ${phase.name} 未生成代理任务。`
+            }
+            s.previousPhaseOutput = p?.output
+          })
+
+          if (!phase.requiresApproval) {
+            await get().approvePhase(phase.id)
+          }
           return
         }
 
         // Spawn agents for this phase
         const spawnedAgentIds: string[] = []
         for (const { type, task, config } of agentTasks) {
-          const agentId = await state.spawnAgent(type, task, [], config)
+          const mergedConfig: AgentConfigOverrides = {
+            model: state.config.model,
+            approvalPolicy: state.config.approvalPolicy,
+            timeout: state.config.timeout,
+            ...config,
+          }
+          const agentId = await state.spawnAgent(type, task, [], mergedConfig)
           if (agentId) {
             spawnedAgentIds.push(agentId)
           }
@@ -552,7 +885,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         const p = s.workflow.phases[phaseIndex]
         if (p) {
           p.status = 'completed'
-          p.completedAt = new Date()
+          p.completedAt = p.completedAt ?? new Date()
         }
       })
 
@@ -579,7 +912,10 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
       // Notify workflow engine if it exists
       if (engine) {
-        engine.approvePhase(phaseId)
+        const status = engine.getStatus()
+        if (status.isPaused) {
+          engine.approvePhase(phaseId)
+        }
       }
     },
 
@@ -633,6 +969,8 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     clearWorkflow: () => {
       set((state) => {
         state.workflow = null
+        state.workflowEngine = null
+        state.previousPhaseOutput = undefined
       })
     },
 
@@ -693,6 +1031,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       if (!allCompleted) return
 
       const hasError = phaseAgents.some((a) => a.status === 'error')
+      const phaseOutput = buildPhaseOutput(currentPhase, phaseAgents)
 
       if (hasError) {
         // Phase failed
@@ -702,6 +1041,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           if (p) {
             p.status = 'failed'
             p.completedAt = new Date()
+            p.output = phaseOutput
           }
           s.workflow.status = 'failed'
         })
@@ -714,11 +1054,31 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       // Check if approval is required
       if (currentPhase.requiresApproval) {
         log.info(`[checkPhaseCompletion] Approval required for phase: ${currentPhase.name}`, 'multi-agent')
+        set((s) => {
+          if (!s.workflow) return
+          const p = s.workflow.phases[s.workflow.currentPhaseIndex]
+          if (p) {
+            p.status = 'completed'
+            if (!p.completedAt) {
+              p.completedAt = new Date()
+            }
+            p.output = phaseOutput
+          }
+          s.previousPhaseOutput = phaseOutput
+        })
         // UI will show approval dialog - don't auto-advance
         return
       }
 
       // Auto-advance to next phase
+      set((s) => {
+        if (!s.workflow) return
+        const p = s.workflow.phases[s.workflow.currentPhaseIndex]
+        if (p) {
+          p.output = phaseOutput
+        }
+        s.previousPhaseOutput = phaseOutput
+      })
       await state.approvePhase(currentPhase.id)
     },
 
@@ -738,12 +1098,21 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         }
       }
 
+      for (const agent of agents) {
+        if (agent.threadId) {
+          useThreadStore.getState().unregisterAgentThread(agent.threadId)
+        }
+      }
+
       set((state) => {
         state.config = defaultConfig
+        state.workingDirectory = ''
         state.agents = {}
         state.agentOrder = []
         state.agentMapping = {}
         state.workflow = null
+        state.workflowEngine = null
+        state.previousPhaseOutput = undefined
       })
     },
   }))

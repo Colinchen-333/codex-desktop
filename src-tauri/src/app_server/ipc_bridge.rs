@@ -201,7 +201,7 @@ pub struct TurnStartParams {
 
     /// Optional sandbox policy override
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sandbox_policy: Option<String>,
+    pub sandbox_policy: Option<SandboxPolicy>,
 
     /// Optional model override
     #[serde(skip_serializing_if = "Option::is_none")]

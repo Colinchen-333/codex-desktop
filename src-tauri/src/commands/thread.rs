@@ -8,11 +8,28 @@ use tauri::State;
 use crate::app_server::ipc_bridge::{
     ApprovalDecision, ApprovalResponseResult, ThreadListParams, ThreadListResponse,
     ThreadResumeParams, ThreadResumeResponse, ThreadStartParams, ThreadStartResponse,
-    TurnInterruptParams, TurnStartParams, TurnStartResponse, UserInput,
+    TurnInterruptParams, TurnStartParams, TurnStartResponse, UserInput, SandboxPolicy,
 };
 use crate::database::SessionMetadata;
 use crate::state::AppState;
 use crate::{Error, Result};
+
+fn parse_sandbox_policy(policy: Option<String>) -> Option<SandboxPolicy> {
+    match policy.as_deref() {
+        Some("read-only") => Some(SandboxPolicy::ReadOnly),
+        Some("workspace-write") => Some(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        }),
+        Some("danger-full-access") => Some(SandboxPolicy::DangerFullAccess),
+        Some("external-sandbox") | Some("external_sandbox") => Some(SandboxPolicy::ExternalSandbox {
+            network_access: "restricted".to_string(),
+        }),
+        _ => None,
+    }
+}
 
 /// Start a new thread
 #[tauri::command]
@@ -23,6 +40,9 @@ pub async fn start_thread(
     model: Option<String>,
     sandbox: Option<String>,
     approval_policy: Option<String>,
+    base_instructions: Option<String>,
+    developer_instructions: Option<String>,
+    config: Option<JsonValue>,
 ) -> Result<ThreadStartResponse> {
     // Ensure app-server is running
     state.start_app_server().await?;
@@ -33,9 +53,9 @@ pub async fn start_thread(
         model_provider: None,
         sandbox,
         approval_policy,
-        base_instructions: None,
-        developer_instructions: None,
-        config: None,
+        base_instructions,
+        developer_instructions,
+        config,
     };
 
     let mut server = state.app_server.write().await;
@@ -135,7 +155,7 @@ pub async fn send_message(
         summary,
         cwd: None,
         approval_policy,
-        sandbox_policy,
+        sandbox_policy: parse_sandbox_policy(sandbox_policy),
         model,
     };
 

@@ -7,11 +7,13 @@
  * - Global configuration (model, timeout, approval policy)
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FolderOpen, Workflow, Settings, ArrowRight } from 'lucide-react'
 import { useMultiAgentStore } from '../../stores/multi-agent-v2'
 import type { AgentConfigOverrides } from '../../stores/multi-agent-v2'
 import { createPlanModeWorkflow } from '../../lib/workflows/plan-mode'
+import { useModelsStore } from '../../stores/models'
+import { useProjectsStore } from '../../stores/projects'
 import { cn } from '../../lib/utils'
 
 interface SetupViewProps {
@@ -19,18 +21,24 @@ interface SetupViewProps {
 }
 
 export function SetupView({ onComplete }: SetupViewProps) {
-  const { setWorkingDirectory, startWorkflow } = useMultiAgentStore()
+  const { setWorkingDirectory, setConfig, startWorkflow } = useMultiAgentStore()
+  const { models, fetchModels, isLoading: isModelsLoading } = useModelsStore()
+  const { projects, selectedProjectId } = useProjectsStore()
 
   // Form state
   const [workingDir, setWorkingDir] = useState<string>('')
   const [workflowMode, setWorkflowMode] = useState<'plan' | 'custom'>('plan')
   const [globalConfig, setGlobalConfig] = useState<AgentConfigOverrides>({
-    model: 'sonnet',
-    approvalPolicy: 'auto',
-    timeout: 300000, // 5 minutes
+    model: '',
+    approvalPolicy: 'on-request',
+    timeout: 300, // seconds
   })
 
   const [isStarting, setIsStarting] = useState(false)
+
+  useEffect(() => {
+    void fetchModels()
+  }, [fetchModels])
 
   const handleSelectDirectory = async () => {
     try {
@@ -58,7 +66,13 @@ export function SetupView({ onComplete }: SetupViewProps) {
 
     setIsStarting(true)
     try {
-      // Set working directory
+      // Apply global config and working directory
+      setConfig({
+        model: globalConfig.model,
+        approvalPolicy: globalConfig.approvalPolicy,
+        timeout: globalConfig.timeout,
+        projectId: resolveProjectId(workingDir),
+      })
       setWorkingDirectory(workingDir)
 
       if (workflowMode === 'plan') {
@@ -242,9 +256,20 @@ export function SetupView({ onComplete }: SetupViewProps) {
                   }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900"
                 >
-                  <option value="sonnet">Claude Sonnet 4.5（推荐）</option>
-                  <option value="opus">Claude Opus 4.5（最强）</option>
-                  <option value="haiku">Claude Haiku 4.5（快速）</option>
+                  <option value="">{isModelsLoading ? '加载模型中...' : '使用默认模型'}</option>
+                  {models.length > 0 ? (
+                    models.map((model) => (
+                      <option key={model.id} value={model.model}>
+                        {model.displayName || model.model}
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4.5（推荐）</option>
+                      <option value="claude-opus-4-20250514">Claude Opus 4.5（最强）</option>
+                      <option value="claude-haiku-4-20250514">Claude Haiku 4.5（快速）</option>
+                    </>
+                  )}
                 </select>
               </div>
 
@@ -263,9 +288,10 @@ export function SetupView({ onComplete }: SetupViewProps) {
                   }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900"
                 >
-                  <option value="auto">自动审批（推荐）</option>
-                  <option value="manual">手动审批（所有操作）</option>
-                  <option value="smart">智能审批（高风险操作）</option>
+                  <option value="on-request">每次变更需审批（最安全）</option>
+                  <option value="on-failure">仅失败时审批（更快捷）</option>
+                  <option value="untrusted">不受信任项目审批</option>
+                  <option value="never">从不审批（高风险）</option>
                 </select>
               </div>
 
@@ -276,11 +302,11 @@ export function SetupView({ onComplete }: SetupViewProps) {
                 </label>
                 <input
                   type="number"
-                  value={globalConfig.timeout ? globalConfig.timeout / 1000 : 300}
+                  value={globalConfig.timeout ?? 300}
                   onChange={(e) =>
                     setGlobalConfig({
                       ...globalConfig,
-                      timeout: parseInt(e.target.value) * 1000,
+                      timeout: parseInt(e.target.value),
                     })
                   }
                   min="60"
@@ -328,3 +354,17 @@ export function SetupView({ onComplete }: SetupViewProps) {
     </div>
   )
 }
+  const resolveProjectId = (dir: string): string => {
+    const normalizedDir = dir.replace(/\\/g, '/').replace(/\/+$/, '')
+    const candidates = projects.filter((project) => {
+      const normalizedPath = project.path.replace(/\\/g, '/').replace(/\/+$/, '')
+      return normalizedDir === normalizedPath || normalizedDir.startsWith(`${normalizedPath}/`)
+    })
+
+    if (candidates.length === 0) {
+      return selectedProjectId || ''
+    }
+
+    candidates.sort((a, b) => b.path.length - a.path.length)
+    return candidates[0].id
+  }

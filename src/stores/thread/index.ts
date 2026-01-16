@@ -30,7 +30,9 @@ import {
   defaultTokenUsage,
   defaultTurnTiming,
   getFocusedThreadState,
+  createEmptyThreadState,
 } from './utils'
+import { safeClosingThreadsOperation } from './delta-buffer'
 
 // Import handlers
 import {
@@ -218,6 +220,34 @@ export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<Threa
       // ==================== Thread Lifecycle ====================
       startThread: createStartThread(typedSet, get, getThreadStore, cleanupStaleApprovals),
       resumeThread: createResumeThread(typedSet, get, getThreadStore, cleanupStaleApprovals),
+      registerAgentThread: (thread, agentId, options) => {
+        startApprovalCleanupTimer(cleanupStaleApprovals, 60000)
+        startTimerCleanupInterval(() => new Set(Object.keys(getThreadStore().threads)))
+
+        set((state) => {
+          safeClosingThreadsOperation(thread.id, 'delete')
+
+          if (!state.threads[thread.id]) {
+            state.threads[thread.id] = createEmptyThreadState(thread)
+          } else {
+            state.threads[thread.id].thread = {
+              ...state.threads[thread.id].thread,
+              ...thread,
+            }
+          }
+
+          state.agentMapping[thread.id] = agentId
+
+          if (options?.focus) {
+            state.focusedThreadId = thread.id
+          }
+        })
+      },
+      unregisterAgentThread: (threadId) => {
+        set((state) => {
+          delete state.agentMapping[threadId]
+        })
+      },
       sendMessage: createSendMessage(typedSet, get, enqueueQueuedMessage, dispatchNextQueuedMessage),
       interrupt: createInterrupt(typedSet, get),
       respondToApproval: createRespondToApproval(typedSet, get),

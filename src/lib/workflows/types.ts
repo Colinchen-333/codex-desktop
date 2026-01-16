@@ -70,6 +70,7 @@ export interface AgentDescriptor {
   startedAt?: Date
   completedAt?: Date
   error?: AgentError
+  interruptReason?: 'pause' | 'cancel'
 
   // Configuration
   config: AgentConfigOverrides

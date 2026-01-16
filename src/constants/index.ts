@@ -9,6 +9,7 @@
 // Timeout and timing constants
 export {
   POLL_INTERVALS,
+  CONNECTION_RETRY,
   CACHE_TTL,
   TIMEOUTS,
   DELAYS,

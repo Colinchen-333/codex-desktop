@@ -17,6 +17,7 @@ import type {
   ErrorItem,
 } from '../types'
 import { performFullTurnCleanup } from '../delta-buffer'
+import { notifyAgentStore } from '../agent-integration'
 
 // ==================== Token Usage Handler ====================
 
@@ -133,9 +134,17 @@ export function createHandleServerDisconnected(
     log.warn('[handleServerDisconnected] Server disconnected', 'error-handlers')
 
     // Clean up all threads
-    const { threads } = get()
+    const { threads, agentMapping } = get()
     Object.keys(threads).forEach((threadId) => {
       performFullTurnCleanup(threadId)
+    })
+
+    // Notify multi-agent store about agent failures
+    Object.keys(agentMapping).forEach((threadId) => {
+      notifyAgentStore(agentMapping, threadId, 'error', {
+        message: 'Server disconnected',
+        code: 'SERVER_DISCONNECTED',
+      })
     })
 
     set((state) => {

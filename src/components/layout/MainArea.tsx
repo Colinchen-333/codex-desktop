@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo, useCallback, useReducer } from 'r
 import { useProjectsStore } from '../../stores/projects'
 import { useThreadStore, selectFocusedThread } from '../../stores/thread'
 import { useSessionsStore } from '../../stores/sessions'
+import { useServerConnectionStore } from '../../stores/server-connection'
 import {
   useSettingsStore,
   mergeProjectSettings,
@@ -397,7 +398,7 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
   const threads = useThreadStore((state) => state.threads)
   const settings = useSettingsStore((state) => state.settings)
   const [localError, setLocalError] = useState<string | null>(null)
-  const [serverReady, setServerReady] = useState<boolean | null>(null)
+  const { status: serverStatus, isConnected: isServerConnected } = useServerConnectionStore()
 
   const project = projects.find((p) => p.id === projectId)
   const info = gitInfo[projectId]
@@ -409,27 +410,7 @@ function StartSessionView({ projectId }: StartSessionViewProps) {
     [settings, project?.settingsJson]
   )
 
-  // Check server status on mount
-  useEffect(() => {
-    let isMounted = true
-    const checkServer = async () => {
-      try {
-        const { serverApi } = await import('../../lib/api')
-        const status = await serverApi.getStatus()
-        if (isMounted) {
-          setServerReady(status.isRunning)
-        }
-      } catch {
-        if (isMounted) {
-          setServerReady(false)
-        }
-      }
-    }
-    void checkServer()
-    return () => {
-      isMounted = false
-    }
-  }, [])
+  const serverReady = serverStatus ? serverStatus.isRunning : isServerConnected ? null : false
 
   // Clear local error when project changes
   useEffect(() => {

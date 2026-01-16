@@ -434,7 +434,12 @@ export const threadApi = {
     cwd: string,
     model?: string,
     sandbox?: string,
-    approvalPolicy?: string
+    approvalPolicy?: string,
+    options?: {
+      baseInstructions?: string
+      developerInstructions?: string
+      config?: Record<string, unknown>
+    }
   ) =>
     invoke<ThreadStartResponse>('start_thread', {
       projectId,
@@ -443,6 +448,9 @@ export const threadApi = {
       model: model || undefined,
       sandbox: sandbox || undefined,
       approvalPolicy: approvalPolicy || undefined,
+      baseInstructions: options?.baseInstructions || undefined,
+      developerInstructions: options?.developerInstructions || undefined,
+      config: options?.config,
     }),
 
   resume: (threadId: string) =>

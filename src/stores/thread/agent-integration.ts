@@ -25,10 +25,15 @@ export function notifyAgentStore(
   // Dynamically import to avoid circular dependency
   import('../multi-agent-v2').then(({ useMultiAgentStore }) => {
     const store = useMultiAgentStore.getState()
+    const agent = store.getAgent(agentId)
+    if (!agent) return
 
     switch (eventType) {
       case 'turnStarted':
         // Agent is actively running
+        if (agent.status === 'cancelled' || agent.interruptReason === 'pause') {
+          return
+        }
         store.updateAgentStatus(agentId, 'running')
         log.debug(
           `[notifyAgentStore] Agent ${agentId} turn started (thread ${threadId})`,
@@ -39,12 +44,25 @@ export function notifyAgentStore(
       case 'turnCompleted': {
         // Check if this is the final completion
         const turnData = data as { status?: string } | undefined
-        if (turnData?.status === 'error') {
+        const turnStatus = turnData?.status
+
+        if (agent.status === 'cancelled') {
+          return
+        }
+
+        if (turnStatus === 'failed' || turnStatus === 'error') {
           store.updateAgentStatus(agentId, 'error', {
             message: 'Turn completed with error',
             code: 'TURN_ERROR',
             recoverable: true,
           })
+        } else if (turnStatus === 'interrupted') {
+          if (agent.interruptReason === 'pause') {
+            store.updateAgentStatus(agentId, 'pending')
+            store.updateAgentProgress(agentId, { description: '已暂停' })
+          } else {
+            store.updateAgentStatus(agentId, 'cancelled')
+          }
         } else {
           // Mark as completed
           store.updateAgentStatus(agentId, 'completed')

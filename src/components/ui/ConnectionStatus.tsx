@@ -1,76 +1,36 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { cn } from '../../lib/utils'
-import { serverApi } from '../../lib/api'
 import { log } from '../../lib/logger'
+import { useServerConnectionStore } from '../../stores/server-connection'
+import { CONNECTION_RETRY } from '../../constants'
 
 export function ConnectionStatus() {
-  const [isConnected, setIsConnected] = useState(true)
-  const [isReconnecting, setIsReconnecting] = useState(false)
-  const [retryCount, setRetryCount] = useState(0)
+  const {
+    isConnected,
+    hasConnectedOnce,
+    isReconnecting,
+    retryCount,
+    startMonitoring,
+    stopMonitoring,
+    attemptReconnect,
+    markDisconnected,
+    markConnected,
+  } = useServerConnectionStore()
 
   // Track if component is mounted to prevent state updates after unmount
   const isMountedRef = useRef(true)
 
-  // Wrap attemptReconnect in useCallback to ensure stable reference
-  const attemptReconnect = useCallback(async () => {
-    if (!isMountedRef.current) return
-
-    log.debug('[ConnectionStatus] Starting reconnection attempts...', 'ConnectionStatus')
-    setIsReconnecting(true)
-    let attempts = 0
-    const maxAttempts = 5
-
-    while (attempts < maxAttempts && isMountedRef.current) {
-      attempts++
-      log.debug(`[ConnectionStatus] Reconnect attempt ${attempts}/${maxAttempts}`, 'ConnectionStatus')
-
-      if (isMountedRef.current) {
-        setRetryCount(attempts)
-      }
-
-      try {
-        log.debug('[ConnectionStatus] Calling serverApi.restart()...', 'ConnectionStatus')
-        await serverApi.restart()
-        log.debug('[ConnectionStatus] Restart call completed, checking status...', 'ConnectionStatus')
-
-        const status = await serverApi.getStatus()
-        log.debug(`[ConnectionStatus] Server status: ${JSON.stringify(status)}`, 'ConnectionStatus')
-
-        if (status.isRunning) {
-          log.debug('[ConnectionStatus] Server is running, reconnection successful!', 'ConnectionStatus')
-          if (isMountedRef.current) {
-            setIsConnected(true)
-            setIsReconnecting(false)
-            setRetryCount(0)
-          }
-          return
-        }
-      } catch (error) {
-        log.error(`[ConnectionStatus] Reconnect attempt ${attempts} failed: ${error}`, 'ConnectionStatus')
-      }
-
-      // Wait before next attempt (exponential backoff)
-      const waitTime = Math.min(2000 * attempts, 10000)
-      log.debug(`[ConnectionStatus] Waiting ${waitTime}ms before next attempt...`, 'ConnectionStatus')
-      await new Promise((resolve) => setTimeout(resolve, waitTime))
-    }
-
-    log.error('[ConnectionStatus] All reconnection attempts failed', 'ConnectionStatus')
-    if (isMountedRef.current) {
-      setIsReconnecting(false)
-    }
-  }, [])
-
   useEffect(() => {
     isMountedRef.current = true
+    startMonitoring()
 
     // Listen for server disconnection and reconnection
     const setupListeners = async () => {
       const unlistenDisconnected = await listen('app-server-disconnected', async () => {
         log.debug('[ConnectionStatus] Server disconnected event received', 'ConnectionStatus')
         if (isMountedRef.current) {
-          setIsConnected(false)
+          markDisconnected('app-server-disconnected')
           void attemptReconnect()
         }
       })
@@ -78,9 +38,7 @@ export function ConnectionStatus() {
       const unlistenReconnected = await listen('app-server-reconnected', () => {
         log.debug('[ConnectionStatus] Server reconnected event received', 'ConnectionStatus')
         if (isMountedRef.current) {
-          setIsConnected(true)
-          setIsReconnecting(false)
-          setRetryCount(0)
+          markConnected()
         }
       })
 
@@ -93,11 +51,14 @@ export function ConnectionStatus() {
     const cleanupPromise = setupListeners()
     return () => {
       isMountedRef.current = false
+      stopMonitoring()
       void cleanupPromise.then((cleanup) => cleanup())
     }
-  }, [attemptReconnect])
+  }, [attemptReconnect, markConnected, markDisconnected, startMonitoring, stopMonitoring])
 
-  if (isConnected) {
+  const shouldShow = !isConnected && (hasConnectedOnce || isReconnecting)
+
+  if (!shouldShow) {
     return null
   }
 
@@ -111,7 +72,7 @@ export function ConnectionStatus() {
               <h2 className="mb-2 text-xl font-semibold">Reconnecting...</h2>
               <p className="mb-4 text-sm text-muted-foreground">
                 Attempting to reconnect to Codex engine
-                {retryCount > 0 && ` (attempt ${retryCount}/5)`}
+                {retryCount > 0 && ` (attempt ${retryCount}/${CONNECTION_RETRY.MAX_ATTEMPTS})`}
               </p>
               <div className="h-2 overflow-hidden rounded-full bg-secondary">
                 <div
@@ -119,7 +80,7 @@ export function ConnectionStatus() {
                     'h-full bg-primary transition-all duration-500',
                     'animate-pulse'
                   )}
-                  style={{ width: `${(retryCount / 5) * 100}%` }}
+                  style={{ width: `${(retryCount / CONNECTION_RETRY.MAX_ATTEMPTS) * 100}%` }}
                 />
               </div>
             </>

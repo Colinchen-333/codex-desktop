@@ -40,7 +40,11 @@ export function MultiAgentView() {
     if (!currentPhase) return
 
     // Check if phase requires approval and all agents are complete
-    if (currentPhase.requiresApproval && currentPhase.agentIds.length > 0) {
+    if (
+      currentPhase.requiresApproval &&
+      currentPhase.status === 'completed' &&
+      currentPhase.agentIds.length > 0
+    ) {
       const phaseAgents = currentPhase.agentIds
         .map((id) => agents.find((a) => a.id === id))
         .filter(Boolean)

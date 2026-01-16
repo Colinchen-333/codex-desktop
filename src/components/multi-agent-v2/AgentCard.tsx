@@ -89,7 +89,7 @@ export function AgentCard({ agent, onViewDetails, onCancel, onPause, onResume }:
             </button>
           )}
 
-          {agent.status === 'pending' && onResume && (
+          {agent.status === 'pending' && agent.interruptReason === 'pause' && onResume && (
             <button
               onClick={() => onResume(agent.id)}
               className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
@@ -167,6 +167,12 @@ export function AgentCard({ agent, onViewDetails, onCancel, onPause, onResume }:
               {agent.progress.description}
             </p>
           )}
+        </div>
+      )}
+
+      {agent.status === 'pending' && agent.progress.description && (
+        <div className="px-4 pb-4 text-xs text-gray-500">
+          {agent.progress.description}
         </div>
       )}
 

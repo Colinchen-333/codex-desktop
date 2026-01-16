@@ -203,7 +203,7 @@ export function createHandleTurnCompleted(
     // Notify multi-agent store if this is an agent thread
     const state = getThreadStore()
     notifyAgentStore(state.agentMapping, threadId, 'turnCompleted', {
-      status: nextTurnStatus === 'failed' ? 'error' : 'completed',
+      status,
     })
 
     if (nextTurnStatus === 'completed' || nextTurnStatus === 'interrupted') {

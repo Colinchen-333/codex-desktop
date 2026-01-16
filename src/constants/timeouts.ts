@@ -23,6 +23,26 @@ export const POLL_INTERVALS = {
 } as const
 
 /**
+ * Connection retry settings
+ */
+export const CONNECTION_RETRY = {
+  /** Maximum reconnect attempts */
+  MAX_ATTEMPTS: 5,
+
+  /** Base delay for reconnect backoff */
+  BASE_DELAY: 1_000, // 1 second
+
+  /** Max delay for reconnect backoff */
+  MAX_DELAY: 10_000, // 10 seconds
+
+  /** Jitter to avoid thundering herd */
+  JITTER: 250, // 250ms
+
+  /** Consecutive failures before auto-reconnect */
+  FAILURE_THRESHOLD: 2,
+} as const
+
+/**
  * Cache TTL (time-to-live) durations (in milliseconds)
  */
 export const CACHE_TTL = {

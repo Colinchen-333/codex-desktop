@@ -413,11 +413,13 @@ export function createCloseThread(
   getThreadStore: () => ThreadState
 ) {
   return (threadId: string) => {
-    const { threads, focusedThreadId } = get()
+    const { threads, focusedThreadId, agentMapping } = get()
     if (!threads[threadId]) {
       log.warn(`[closeThread] Thread not found: ${threadId}`, 'thread-actions')
       return
     }
+
+    const agentId = agentMapping[threadId]
 
     // Mark thread as closing IMMEDIATELY to prevent any new operations
     // This must happen before any async operations or state changes
@@ -446,8 +448,28 @@ export function createCloseThread(
     set((state) => {
       state.threads = updatedThreads
       state.focusedThreadId = newFocusedId
+      if (agentId) {
+        delete state.agentMapping[threadId]
+      }
       return state
     })
+
+    if (agentId) {
+      import('../../multi-agent-v2')
+        .then(({ useMultiAgentStore }) => {
+          const agent = useMultiAgentStore.getState().getAgent(agentId)
+          if (agent && agent.status !== 'cancelled') {
+            useMultiAgentStore.getState().updateAgentStatus(agentId, 'cancelled', {
+              message: 'Thread closed by user',
+              code: 'THREAD_CLOSED',
+              recoverable: true,
+            })
+          }
+        })
+        .catch((error) => {
+          log.error(`[closeThread] Failed to notify multi-agent store: ${error}`, 'thread-actions')
+        })
+    }
 
     // Stop approval cleanup if no threads left
     if (Object.keys(updatedThreads).length === 0) {
@@ -486,7 +508,7 @@ export function createCloseAllThreads(
   get: () => ThreadState
 ) {
   return () => {
-    const { threads } = get()
+    const { threads, agentMapping } = get()
     const threadIds = Object.keys(threads)
 
     if (threadIds.length === 0) {
@@ -513,8 +535,29 @@ export function createCloseAllThreads(
     set((state) => {
       state.threads = {}
       state.focusedThreadId = null
+      state.agentMapping = {}
       return state
     })
+
+    const agentIds = Object.values(agentMapping)
+    if (agentIds.length > 0) {
+      import('../../multi-agent-v2')
+        .then(({ useMultiAgentStore }) => {
+          for (const agentId of agentIds) {
+            const agent = useMultiAgentStore.getState().getAgent(agentId)
+            if (agent && agent.status !== 'cancelled') {
+              useMultiAgentStore.getState().updateAgentStatus(agentId, 'cancelled', {
+                message: 'Thread closed by user',
+                code: 'THREAD_CLOSED',
+                recoverable: true,
+              })
+            }
+          }
+        })
+        .catch((error) => {
+          log.error(`[closeAllThreads] Failed to notify multi-agent store: ${error}`, 'thread-actions')
+        })
+    }
 
     // Stop cleanup timers
     stopApprovalCleanupTimer()

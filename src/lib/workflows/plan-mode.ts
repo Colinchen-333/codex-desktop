@@ -137,10 +137,6 @@ export function generatePhaseAgentTasks(
     return {
       type,
       task,
-      config: {
-        model: 'sonnet', // Default model
-        approvalPolicy: 'auto',
-      },
     }
   })
 }

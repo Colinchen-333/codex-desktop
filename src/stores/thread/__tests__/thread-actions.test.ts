@@ -133,6 +133,8 @@ function createMockState(
     error: threadIds[0] ? threads[threadIds[0]].error : null,
     // Mock actions
     startThread: vi.fn(),
+    registerAgentThread: vi.fn(),
+    unregisterAgentThread: vi.fn(),
     resumeThread: vi.fn(),
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
