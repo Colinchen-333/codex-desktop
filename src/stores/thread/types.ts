@@ -298,8 +298,7 @@ export interface ThreadState {
   focusedThreadId: string | null
   maxSessions: number
 
-  // Agent mapping (for multi-agent system)
-  agentMapping: Record<string, string> // threadId -> agentId
+  // Note: agentMapping is now maintained in multi-agent-v2 store as single source of truth
 
   // Global state
   snapshots: Snapshot[]

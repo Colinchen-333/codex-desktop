@@ -94,7 +94,7 @@ export interface MultiAgentState {
   resumeAgent: (id: string) => Promise<void>
   retryAgent: (id: string) => Promise<void>
   removeAgent: (id: string) => void
-  clearAgents: () => void
+  clearAgents: () => Promise<void>
 
   // Actions - Workflow Management
   startWorkflow: (workflow: Workflow) => Promise<void>
@@ -274,6 +274,8 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
     /**
      * Spawn a new agent - creates a real Codex thread
+     * Returns a Promise that resolves with the agentId once the thread is created and running,
+     * or null if the agent creation failed.
      */
     spawnAgent: async (
       type: AgentType,
@@ -284,6 +286,12 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       try {
         const state = get()
         const agentId = crypto.randomUUID()
+
+        // Promise resolver for notifying when threadId is set or spawn fails
+        let resolveThreadReady: (success: boolean) => void
+        const threadReadyPromise = new Promise<boolean>((resolve) => {
+          resolveThreadReady = resolve
+        })
 
         // Create agent descriptor (initially pending)
         const agent: AgentDescriptor = {
@@ -373,19 +381,34 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
           log.info(`[spawnAgent] Agent ${agentId} waiting for dependencies`, 'multi-agent')
           return new Promise<boolean>((resolve) => {
-            const startTime = Date.now()
+            let activeTimeMs = 0
+            let lastCheckTime = Date.now()
+            let wasPaused = false
+
             const checkInterval = setInterval(() => {
+              const now = Date.now()
+              const currentlyPaused = isPaused()
+
               if (shouldAbortStart()) {
                 clearInterval(checkInterval)
                 resolve(false)
                 return
               }
 
-              if (isPaused()) {
+              // Track active (non-paused) time for timeout calculation
+              if (!wasPaused && !currentlyPaused) {
+                activeTimeMs += now - lastCheckTime
+              }
+              lastCheckTime = now
+              wasPaused = currentlyPaused
+
+              // Skip processing while paused, but continue the interval
+              if (currentlyPaused) {
                 return
               }
 
-              if (dependencyTimeoutMs > 0 && Date.now() - startTime >= dependencyTimeoutMs) {
+              // Check timeout based on active time only
+              if (dependencyTimeoutMs > 0 && activeTimeMs >= dependencyTimeoutMs) {
                 clearInterval(checkInterval)
                 set((state) => {
                   const agent = state.agents[agentId]
@@ -454,24 +477,37 @@ export const useMultiAgentStore = create<MultiAgentState>()(
               continue
             }
 
+            // Atomic slot reservation using Immer's transactional update
+            // The check and reservation happen in a single synchronous set() call,
+            // ensuring no race condition between concurrent agents
             let slotReserved = false
             set((state) => {
+              const agent = state.agents[agentId]
+              // Guard: agent must exist and not already be running/completed
+              if (!agent || agent.status === 'running' || agent.status === 'completed' || agent.status === 'cancelled') {
+                return
+              }
+
               const runningAgents = Object.values(state.agents).filter(
                 (a) => a.status === 'running'
               ).length
+
               if (runningAgents < state.config.maxConcurrentAgents) {
-                const agent = state.agents[agentId]
-                if (agent) {
-                  agent.status = 'running'
-                  agent.startedAt = new Date()
-                  agent.progress.description = '正在启动'
-                  slotReserved = true
-                }
+                agent.status = 'running'
+                agent.startedAt = new Date()
+                agent.progress.description = '正在启动'
+                slotReserved = true
               }
             })
 
             if (slotReserved) {
               return true
+            }
+
+            // Check if agent was removed or cancelled while waiting
+            const currentAgent = get().agents[agentId]
+            if (!currentAgent || currentAgent.status === 'cancelled') {
+              return false
             }
 
             if (!logged) {
@@ -483,7 +519,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
               )
               set((state) => {
                 const agent = state.agents[agentId]
-                if (agent) {
+                if (agent && agent.status === 'pending') {
                   agent.progress.description = '等待空闲代理位'
                 }
               })
@@ -493,14 +529,20 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           }
         }
 
-        // Start thread asynchronously
+        // Start thread creation (runs asynchronously but we await threadReadyPromise)
         void (async () => {
           try {
             const depsReady = await waitForDependencies()
-            if (!depsReady) return
+            if (!depsReady) {
+              resolveThreadReady!(false)
+              return
+            }
 
             const slotReady = await waitForSlot()
-            if (!slotReady) return
+            if (!slotReady) {
+              resolveThreadReady!(false)
+              return
+            }
 
             // Get sandbox policy for agent type (normalize for Codex CLI)
             const sandboxPolicyRaw = getAgentSandboxPolicy(type)
@@ -555,6 +597,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
             })
 
             log.info(`[spawnAgent] Agent ${agentId} started with thread ${threadId}`, 'multi-agent')
+            resolveThreadReady!(true)
           } catch (error) {
             log.error(`[spawnAgent] Failed to start thread for agent ${agentId}: ${error}`, 'multi-agent')
             set((state) => {
@@ -569,10 +612,13 @@ export const useMultiAgentStore = create<MultiAgentState>()(
                 }
               }
             })
+            resolveThreadReady!(false)
           }
         })()
 
-        return agentId
+        // Wait for thread to be ready (or fail)
+        const success = await threadReadyPromise
+        return success ? agentId : null
       } catch (error) {
         log.error(`[spawnAgent] Failed to create agent: ${error}`, 'multi-agent')
         return null
@@ -669,7 +715,18 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       const agent = get().agents[id]
       if (!agent) return
 
+      // Save original state for rollback on failure
+      const originalStatus = agent.status
+      const originalInterruptReason = agent.interruptReason
+      const originalProgressDescription = agent.progress.description
+
       try {
+        // First, interrupt the thread (if running)
+        if (agent.threadId && agent.status === 'running') {
+          await threadApi.interrupt(agent.threadId)
+        }
+
+        // Then update state after successful interrupt
         set((state) => {
           const current = state.agents[id]
           if (current) {
@@ -679,19 +736,16 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           }
         })
 
-        if (agent.threadId) {
-          await threadApi.interrupt(agent.threadId)
-        }
-
         log.info(`[pauseAgent] Agent ${id} paused`, 'multi-agent')
       } catch (error) {
         log.error(`[pauseAgent] Failed to pause agent ${id}: ${error}`, 'multi-agent')
+        // Restore original state on failure
         set((state) => {
           const current = state.agents[id]
           if (current) {
-            current.status = 'running'
-            current.interruptReason = undefined
-            current.progress.description = '正在执行任务'
+            current.status = originalStatus
+            current.interruptReason = originalInterruptReason
+            current.progress.description = originalProgressDescription
           }
         })
       }
@@ -766,7 +820,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           })
         } else {
           // Re-spawn the agent if no thread exists
-          const newAgentId = await get().spawnAgent(agent.type, agent.task, agent.config)
+          const newAgentId = await get().spawnAgent(agent.type, agent.task, agent.dependencies, agent.config)
           if (newAgentId) {
             // Remove the old failed agent
             get().removeAgent(id)
@@ -811,8 +865,21 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     /**
      * Clear all agents
      */
-    clearAgents: () => {
+    clearAgents: async () => {
       const agents = Object.values(get().agents)
+
+      // First, interrupt all running threads
+      for (const agent of agents) {
+        if (agent.threadId && agent.status === 'running') {
+          try {
+            await threadApi.interrupt(agent.threadId)
+          } catch (error) {
+            log.error(`[clearAgents] Failed to interrupt thread ${agent.threadId}: ${error}`, 'multi-agent')
+          }
+        }
+      }
+
+      // Then unregister all agent threads
       for (const agent of agents) {
         if (agent.threadId) {
           useThreadStore.getState().unregisterAgentThread(agent.threadId)
@@ -833,7 +900,43 @@ export const useMultiAgentStore = create<MultiAgentState>()(
      */
     startWorkflow: async (workflow: Workflow) => {
       const state = get()
-      
+
+      // Clean up any existing workflow/agents before starting a new one
+      if (state.workflow || Object.keys(state.agents).length > 0) {
+        log.info('[startWorkflow] Cleaning up existing workflow/agents before starting new workflow', 'multi-agent')
+
+        // Cancel any running agents
+        const runningAgents = Object.values(state.agents).filter((a) => a.status === 'running')
+        for (const agent of runningAgents) {
+          try {
+            if (agent.threadId) {
+              await threadApi.interrupt(agent.threadId)
+            }
+          } catch (error) {
+            log.error(`[startWorkflow] Failed to interrupt agent ${agent.id}: ${error}`, 'multi-agent')
+          }
+        }
+
+        // Unregister all agent threads from thread store
+        const threadStore = useThreadStore.getState()
+        for (const agent of Object.values(state.agents)) {
+          if (agent.threadId) {
+            threadStore.unregisterAgentThread(agent.threadId)
+          }
+        }
+
+        // Clear agents state
+        set((s) => {
+          s.agents = {}
+          s.agentOrder = []
+          s.agentMapping = {}
+          s.workflow = null
+          s.workflowEngine = null
+          s.previousPhaseOutput = undefined
+          s.phaseCompletionInFlight = null
+        })
+      }
+
       // Set workflow
       set((s) => {
         s.workflow = workflow as WritableDraft<Workflow>
@@ -1000,51 +1103,44 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     approvePhase: async (phaseId: string) => {
       const state = get()
       const workflow = state.workflow
-      const engine = state.workflowEngine
 
       if (!workflow) return
 
       const phaseIndex = workflow.phases.findIndex((p) => p.id === phaseId)
       if (phaseIndex === -1) return
 
-      // Mark phase as completed
+      const nextPhase = workflow.phases[phaseIndex + 1]
+      const hasNextPhase = !!nextPhase
+
+      // Atomic state update: mark phase completed and update workflow state in one operation
       set((s) => {
         if (!s.workflow) return
+
+        // Mark current phase as completed
         const p = s.workflow.phases[phaseIndex]
         if (p) {
           p.status = 'completed'
           p.completedAt = p.completedAt ?? new Date()
         }
+
+        // Update workflow state based on whether there's a next phase
+        if (hasNextPhase) {
+          s.workflow.currentPhaseIndex = phaseIndex + 1
+        } else {
+          // Workflow completed - no more phases
+          s.workflow.status = 'completed'
+          s.workflow.completedAt = new Date()
+        }
       })
 
-      // Move to next phase
-      const nextPhase = workflow.phases[phaseIndex + 1]
-      if (nextPhase) {
-        set((s) => {
-          if (s.workflow) {
-            s.workflow.currentPhaseIndex = phaseIndex + 1
-          }
-        })
-        
-        // Execute next phase
+      // Execute next phase after atomic state update (if applicable)
+      if (hasNextPhase) {
         await get()._executePhase(nextPhase)
-      } else {
-        // Workflow completed
-        set((s) => {
-          if (s.workflow) {
-            s.workflow.status = 'completed'
-            s.workflow.completedAt = new Date()
-          }
-        })
       }
 
-      // Notify workflow engine if it exists
-      if (engine) {
-        const status = engine.getStatus()
-        if (status.isPaused) {
-          engine.approvePhase(phaseId)
-        }
-      }
+      // Note: WorkflowEngine is now a pure state container.
+      // All execution logic is handled by this store.
+      // The engine.approvePhase() method has been removed to avoid double-execution.
     },
 
     /**
@@ -1164,12 +1260,21 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       if (!claimed) return
 
       try {
+        // Re-check workflow state after claiming - it may have changed
         const latestState = get()
         const latestWorkflow = latestState.workflow
-        if (!latestWorkflow) return
+
+        // If workflow was cleared/changed, bail out
+        if (!latestWorkflow || latestWorkflow.status !== 'running') {
+          log.info('[checkPhaseCompletion] Workflow state changed during execution, aborting', 'multi-agent')
+          return
+        }
 
         const latestPhase = latestWorkflow.phases[latestWorkflow.currentPhaseIndex]
-        if (!latestPhase || latestPhase.id !== phaseId || latestPhase.status !== 'running') return
+        if (!latestPhase || latestPhase.id !== phaseId || latestPhase.status !== 'running') {
+          log.info('[checkPhaseCompletion] Phase state changed during execution, aborting', 'multi-agent')
+          return
+        }
 
         const missingAgentIds = latestPhase.agentIds.filter((id) => !latestState.agents[id])
         if (missingAgentIds.length > 0) {
@@ -1179,6 +1284,8 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           )
           set((s) => {
             if (!s.workflow) return
+            // Double-check we're still on the same phase
+            if (s.workflow.currentPhaseIndex !== phaseIndex) return
             const p = s.workflow.phases[s.workflow.currentPhaseIndex]
             if (p && p.id === phaseId) {
               p.status = 'failed'
@@ -1210,8 +1317,10 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           // Phase failed
           set((s) => {
             if (!s.workflow) return
+            // Double-check we're still on the same phase
+            if (s.workflow.currentPhaseIndex !== phaseIndex) return
             const p = s.workflow.phases[s.workflow.currentPhaseIndex]
-            if (p) {
+            if (p && p.id === phaseId) {
               p.status = 'failed'
               p.completedAt = new Date()
               p.output = phaseOutput
@@ -1232,8 +1341,10 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           )
           set((s) => {
             if (!s.workflow) return
+            // Double-check we're still on the same phase
+            if (s.workflow.currentPhaseIndex !== phaseIndex) return
             const p = s.workflow.phases[s.workflow.currentPhaseIndex]
-            if (p) {
+            if (p && p.id === phaseId) {
               p.status = 'completed'
               if (!p.completedAt) {
                 p.completedAt = new Date()
@@ -1246,17 +1357,28 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           return
         }
 
+        // Final state check before auto-advancing
+        const finalState = get()
+        if (!finalState.workflow || finalState.workflow.currentPhaseIndex !== phaseIndex) {
+          log.info('[checkPhaseCompletion] Workflow state changed before auto-advance, aborting', 'multi-agent')
+          return
+        }
+
         // Auto-advance to next phase
         set((s) => {
           if (!s.workflow) return
+          // Double-check we're still on the same phase
+          if (s.workflow.currentPhaseIndex !== phaseIndex) return
           const p = s.workflow.phases[s.workflow.currentPhaseIndex]
-          if (p) {
+          if (p && p.id === phaseId) {
             p.output = phaseOutput
           }
           s.previousPhaseOutput = phaseOutput
         })
-        await latestState.approvePhase(latestPhase.id)
+        await finalState.approvePhase(latestPhase.id)
       } finally {
+        // Always reset phaseCompletionInFlight if it still matches our phaseId
+        // This ensures cleanup even if workflow state changed
         set((s) => {
           if (s.phaseCompletionInFlight === phaseId) {
             s.phaseCompletionInFlight = null
@@ -1273,18 +1395,23 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     reset: () => {
       // Interrupt all running agent threads
       const agents = Object.values(get().agents)
-      for (const agent of agents) {
-        if (agent.threadId && agent.status === 'running') {
-          threadApi.interrupt(agent.threadId).catch((error) => {
-            log.error(`[reset] Failed to interrupt thread ${agent.threadId}: ${error}`, 'multi-agent')
-          })
-        }
-      }
+      const threadIds: string[] = []
 
       for (const agent of agents) {
         if (agent.threadId) {
-          useThreadStore.getState().unregisterAgentThread(agent.threadId)
+          threadIds.push(agent.threadId)
+          if (agent.status === 'running') {
+            threadApi.interrupt(agent.threadId).catch((error) => {
+              log.error(`[reset] Failed to interrupt thread ${agent.threadId}: ${error}`, 'multi-agent')
+            })
+          }
         }
+      }
+
+      // Unregister all agent threads from thread store
+      const threadStore = useThreadStore.getState()
+      for (const threadId of threadIds) {
+        threadStore.unregisterAgentThread(threadId)
       }
 
       set((state) => {

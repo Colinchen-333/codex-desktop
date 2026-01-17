@@ -248,7 +248,7 @@ export function createHandleAgentMessageDelta(get: () => ThreadState) {
   return (event: AgentMessageDeltaEvent) => {
     const threadId = event.threadId
 
-    const { threads, agentMapping } = get()
+    const { threads } = get()
     if (!threads[threadId]) return
 
     // Check if thread is being closed - early exit before any processing
@@ -271,7 +271,7 @@ export function createHandleAgentMessageDelta(get: () => ThreadState) {
     }
 
     // Notify multi-agent store if this is an agent thread
-    notifyAgentStore(agentMapping, threadId, 'messageDelta', { text: event.delta })
+    notifyAgentStore(threadId, 'messageDelta', { text: event.delta })
 
     const current = buffer.agentMessages.get(event.itemId) || ''
     const isFirstDelta = current === ''

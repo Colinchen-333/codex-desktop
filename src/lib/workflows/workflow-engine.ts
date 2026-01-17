@@ -1,16 +1,21 @@
 /**
- * WorkflowEngine - Core workflow execution engine
+ * WorkflowEngine - Simplified workflow state container
  *
- * Features:
- * - Phase-based execution
- * - Approval gates
- * - Agent dependency management
- * - Event emission
+ * NOTE: This class has been simplified to be a pure state container.
+ * The actual workflow execution logic is in multi-agent-v2.ts store.
+ * This class only provides:
+ * - Event callbacks for logging/UI updates
+ * - Status queries
+ *
+ * The previous execution methods (start, executePhase, waitForPhaseCompletion,
+ * approvePhase, rejectPhase, completePhase) have been removed because:
+ * 1. start() was never called - dead code
+ * 2. The store handles all execution logic via _executePhase, checkPhaseCompletion, approvePhase
+ * 3. Having two control paths caused potential double-execution issues
  */
 
 import type {
   WorkflowPhase,
-  AgentDescriptor,
   AgentType,
   WorkflowExecutionContext,
 } from './types'
@@ -27,13 +32,16 @@ export interface WorkflowEngineEvents {
   onAllPhasesCompleted?: () => void
 }
 
+/**
+ * Simplified WorkflowEngine - pure state container and event emitter
+ *
+ * Execution is handled by multi-agent-v2.ts store, not this class.
+ */
 export class WorkflowEngine {
   private phases: WorkflowPhase[]
   private currentPhaseIndex: number = 0
   private events: WorkflowEngineEvents
   private context: WorkflowExecutionContext
-  private isRunning: boolean = false
-  private isPaused: boolean = false
 
   constructor(
     phases: WorkflowPhase[],
@@ -43,188 +51,6 @@ export class WorkflowEngine {
     this.phases = phases
     this.context = context
     this.events = events
-  }
-
-  /**
-   * Start workflow execution
-   */
-  async start(): Promise<void> {
-    if (this.isRunning) {
-      throw new Error('Workflow is already running')
-    }
-
-    log.info('[WorkflowEngine] Starting workflow execution')
-    this.isRunning = true
-    this.currentPhaseIndex = 0
-
-    try {
-      await this.executeNextPhase()
-    } catch (error) {
-      log.error('[WorkflowEngine] Workflow execution failed:', error instanceof Error ? error.message : String(error))
-      this.isRunning = false
-      throw error
-    }
-  }
-
-  /**
-   * Execute the next phase in the workflow
-   */
-  private async executeNextPhase(): Promise<void> {
-    if (this.currentPhaseIndex >= this.phases.length) {
-      log.info('[WorkflowEngine] All phases completed')
-      this.isRunning = false
-      this.events.onAllPhasesCompleted?.()
-      return
-    }
-
-    const phase = this.phases[this.currentPhaseIndex]
-    log.info(`[WorkflowEngine] Starting phase ${this.currentPhaseIndex + 1}: ${phase.name}`)
-
-    try {
-      // Update phase status
-      phase.status = 'running'
-      this.events.onPhaseStarted?.(phase)
-
-      // Execute phase (agents will be spawned by the multi-agent store)
-      await this.executePhase(phase)
-
-      // Wait for phase completion
-      await this.waitForPhaseCompletion(phase)
-
-      // Check if approval is required
-      if (phase.requiresApproval) {
-        log.info(`[WorkflowEngine] Phase ${phase.name} requires approval`)
-        this.isPaused = true
-        this.events.onApprovalRequired?.(phase)
-        // Execution will resume when approvePhase() is called
-        return
-      }
-
-      // Phase completed, move to next
-      await this.completePhase(phase)
-    } catch (error) {
-      log.error(`[WorkflowEngine] Phase ${phase.name} failed:`, error instanceof Error ? error.message : String(error))
-      phase.status = 'failed'
-      this.events.onPhaseFailed?.(phase, error as Error)
-      this.isRunning = false
-      throw error
-    }
-  }
-
-  /**
-   * Execute a single phase
-   */
-  private async executePhase(phase: WorkflowPhase): Promise<void> {
-    // Note: Actual agent spawning is handled by the multi-agent store
-    // This method is a placeholder for phase-specific logic
-    log.debug(`[WorkflowEngine] Executing phase: ${phase.name}`)
-    
-    // Phase execution happens through agent spawning in the store
-    // The store will create agents for this phase using phase.agentIds
-  }
-
-  /**
-   * Wait for all agents in a phase to complete
-   */
-  private async waitForPhaseCompletion(phase: WorkflowPhase): Promise<void> {
-    return new Promise((resolve) => {
-      // This will be triggered by the multi-agent store when all agents complete
-      // For now, we'll resolve immediately and let the store handle completion
-      // In a real implementation, this would poll or listen to agent status changes
-      
-      log.debug(`[WorkflowEngine] Waiting for phase completion: ${phase.name}`)
-      
-      // The multi-agent store will call checkPhaseCompletion() which will
-      // eventually call completePhase() when all agents are done
-      resolve()
-    })
-  }
-
-  /**
-   * Check if a phase is complete (all agents finished)
-   */
-  checkPhaseCompletion(agents: AgentDescriptor[]): boolean {
-    const currentPhase = this.phases[this.currentPhaseIndex]
-    if (!currentPhase) return false
-
-    const phaseAgents = agents.filter((a) => currentPhase.agentIds.includes(a.id))
-    if (phaseAgents.length === 0) return false
-
-    const allCompleted = phaseAgents.every(
-      (a) => a.status === 'completed' || a.status === 'error' || a.status === 'cancelled'
-    )
-
-    const hasError = phaseAgents.some((a) => a.status === 'error')
-
-    if (allCompleted) {
-      if (hasError) {
-        currentPhase.status = 'failed'
-        this.events.onPhaseFailed?.(currentPhase, new Error('Some agents failed'))
-        this.isRunning = false
-        return true
-      }
-
-      // Phase completed successfully
-      if (!this.isPaused) {
-        void this.completePhase(currentPhase)
-      }
-      return true
-    }
-
-    return false
-  }
-
-  /**
-   * Complete a phase and move to the next
-   */
-  private async completePhase(phase: WorkflowPhase): Promise<void> {
-    log.info(`[WorkflowEngine] Phase completed: ${phase.name}`)
-    phase.status = 'completed'
-    this.events.onPhaseCompleted?.(phase)
-
-    // Store phase output for next phase context
-    // TODO: Collect and aggregate agent outputs
-    this.context.previousPhaseOutput = `Phase ${phase.name} completed successfully`
-
-    // Move to next phase
-    this.currentPhaseIndex++
-    await this.executeNextPhase()
-  }
-
-  /**
-   * Approve a phase (resume execution)
-   */
-  approvePhase(phaseId: string): void {
-    const phase = this.phases.find((p) => p.id === phaseId)
-    if (!phase) {
-      throw new Error(`Phase ${phaseId} not found`)
-    }
-
-    if (!this.isPaused) {
-      throw new Error('Workflow is not paused')
-    }
-
-    log.info(`[WorkflowEngine] Phase approved: ${phase.name}`)
-    this.isPaused = false
-
-    // Complete the current phase and move to next
-    void this.completePhase(phase)
-  }
-
-  /**
-   * Reject a phase (stop workflow)
-   */
-  rejectPhase(phaseId: string, reason?: string): void {
-    const phase = this.phases.find((p) => p.id === phaseId)
-    if (!phase) {
-      throw new Error(`Phase ${phaseId} not found`)
-    }
-
-    log.info(`[WorkflowEngine] Phase rejected: ${phase.name}, reason: ${reason}`)
-    phase.status = 'failed'
-    this.isRunning = false
-    this.isPaused = false
-    this.events.onPhaseFailed?.(phase, new Error(reason || 'Phase rejected by user'))
   }
 
   /**
@@ -238,26 +64,74 @@ export class WorkflowEngine {
    * Get workflow status
    */
   getStatus(): {
-    isRunning: boolean
-    isPaused: boolean
     currentPhaseIndex: number
     totalPhases: number
   } {
     return {
-      isRunning: this.isRunning,
-      isPaused: this.isPaused,
       currentPhaseIndex: this.currentPhaseIndex,
       totalPhases: this.phases.length,
     }
   }
 
   /**
-   * Stop workflow execution
+   * Get workflow context
    */
-  stop(): void {
-    log.info('[WorkflowEngine] Stopping workflow')
-    this.isRunning = false
-    this.isPaused = false
+  getContext(): WorkflowExecutionContext {
+    return this.context
+  }
+
+  /**
+   * Get all phases
+   */
+  getPhases(): WorkflowPhase[] {
+    return this.phases
+  }
+
+  /**
+   * Emit phase started event (called by store)
+   */
+  emitPhaseStarted(phase: WorkflowPhase): void {
+    log.info(`[WorkflowEngine] Phase started: ${phase.name}`)
+    this.events.onPhaseStarted?.(phase)
+  }
+
+  /**
+   * Emit phase completed event (called by store)
+   */
+  emitPhaseCompleted(phase: WorkflowPhase): void {
+    log.info(`[WorkflowEngine] Phase completed: ${phase.name}`)
+    this.events.onPhaseCompleted?.(phase)
+  }
+
+  /**
+   * Emit phase failed event (called by store)
+   */
+  emitPhaseFailed(phase: WorkflowPhase, error: Error): void {
+    log.error(`[WorkflowEngine] Phase failed: ${phase.name}: ${error.message}`)
+    this.events.onPhaseFailed?.(phase, error)
+  }
+
+  /**
+   * Emit approval required event (called by store)
+   */
+  emitApprovalRequired(phase: WorkflowPhase): void {
+    log.info(`[WorkflowEngine] Approval required for phase: ${phase.name}`)
+    this.events.onApprovalRequired?.(phase)
+  }
+
+  /**
+   * Emit all phases completed event (called by store)
+   */
+  emitAllPhasesCompleted(): void {
+    log.info('[WorkflowEngine] All phases completed')
+    this.events.onAllPhasesCompleted?.()
+  }
+
+  /**
+   * Update current phase index (called by store)
+   */
+  setCurrentPhaseIndex(index: number): void {
+    this.currentPhaseIndex = index
   }
 }
 

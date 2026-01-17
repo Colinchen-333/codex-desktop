@@ -96,6 +96,10 @@ import {
 } from './actions'
 
 // Import timer cleanup utilities
+import {
+  startApprovalCleanupTimer,
+  startTimerCleanupInterval,
+} from './utils'
 
 // ==================== Store Creation ====================
 
@@ -134,9 +138,6 @@ export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<Threa
       threads: {},
       focusedThreadId: null,
       maxSessions: MAX_PARALLEL_SESSIONS,
-
-      // ==================== Agent Mapping ====================
-      agentMapping: {},
 
       // ==================== Global State ====================
       snapshots: [],
@@ -220,7 +221,7 @@ export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<Threa
       // ==================== Thread Lifecycle ====================
       startThread: createStartThread(typedSet, get, getThreadStore, cleanupStaleApprovals),
       resumeThread: createResumeThread(typedSet, get, getThreadStore, cleanupStaleApprovals),
-      registerAgentThread: (thread, agentId, options) => {
+      registerAgentThread: (thread, _agentId, options) => {
         startApprovalCleanupTimer(cleanupStaleApprovals, 60000)
         startTimerCleanupInterval(() => new Set(Object.keys(getThreadStore().threads)))
 
@@ -236,17 +237,16 @@ export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<Threa
             }
           }
 
-          state.agentMapping[thread.id] = agentId
+          // Note: agentMapping is maintained in multi-agent-v2 store as the single source of truth
 
           if (options?.focus) {
             state.focusedThreadId = thread.id
           }
         })
       },
-      unregisterAgentThread: (threadId) => {
-        set((state) => {
-          delete state.agentMapping[threadId]
-        })
+      unregisterAgentThread: (_threadId) => {
+        // Note: agentMapping cleanup is handled by multi-agent-v2 store
+        // This function is kept for API compatibility but no longer modifies thread store state
       },
       sendMessage: createSendMessage(typedSet, get, enqueueQueuedMessage, dispatchNextQueuedMessage),
       interrupt: createInterrupt(typedSet, get),

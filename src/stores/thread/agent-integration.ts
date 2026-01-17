@@ -3,30 +3,87 @@
  *
  * This module provides functions to notify the multi-agent store when
  * events occur on threads that belong to agents.
+ *
+ * Note: agentMapping is now maintained solely in multi-agent-v2 store as the single source of truth.
+ *
+ * P1 Fix: Uses lazy initialization with require() instead of dynamic import()
+ * to avoid 10-50ms async delay while still preventing circular dependency issues.
  */
 
 import { log } from '../../lib/logger'
-import type { AgentMapping } from './agent-mapping'
-import { getAgentIdByThreadId } from './agent-mapping'
+
+// P1 Fix: Lazy initialization to avoid circular dependency
+// The module is loaded synchronously on first access, avoiding the async delay of dynamic import()
+let multiAgentStoreModule: typeof import('../multi-agent-v2') | null = null
+
+function getMultiAgentStore() {
+  if (!multiAgentStoreModule) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    multiAgentStoreModule = require('../multi-agent-v2') as typeof import('../multi-agent-v2')
+  }
+  return multiAgentStoreModule.useMultiAgentStore.getState()
+}
+
+// P1 Fix: Event version tracking to handle concurrent turn completion ordering
+// Maps threadId -> last processed event version
+const eventVersions = new Map<string, number>()
+let globalEventCounter = 0
+
+function getNextEventVersion(): number {
+  return ++globalEventCounter
+}
+
+function shouldProcessEvent(threadId: string, eventVersion: number): boolean {
+  const lastVersion = eventVersions.get(threadId) ?? 0
+  if (eventVersion <= lastVersion) {
+    log.debug(
+      `[notifyAgentStore] Ignoring stale event for thread ${threadId} (version ${eventVersion} <= ${lastVersion})`,
+      'agent-integration'
+    )
+    return false
+  }
+  eventVersions.set(threadId, eventVersion)
+  return true
+}
+
+/**
+ * Clean up event version tracking for a thread
+ * Should be called when a thread is closed
+ */
+export function cleanupEventVersion(threadId: string): void {
+  eventVersions.delete(threadId)
+}
 
 /**
  * Notify multi-agent store about thread events
  * This function checks if a thread belongs to an agent and updates the agent accordingly
+ *
+ * Note: agentMapping is fetched directly from multi-agent store to maintain single source of truth
+ *
+ * P1 Fix: Now uses synchronous lazy initialization instead of async dynamic import
+ * P1 Fix: Uses event versioning to handle concurrent turn completion ordering
  */
 export function notifyAgentStore(
-  agentMapping: AgentMapping,
   threadId: string,
   eventType: 'turnStarted' | 'turnCompleted' | 'messageDelta' | 'error',
   data?: unknown
 ): void {
-  const agentId = getAgentIdByThreadId(agentMapping, threadId)
-  if (!agentId) return // Not an agent thread
+  // P1 Fix: Assign version at call time to preserve ordering intent
+  const eventVersion = getNextEventVersion()
 
-  // Dynamically import to avoid circular dependency
-  import('../multi-agent-v2').then(({ useMultiAgentStore }) => {
-    const store = useMultiAgentStore.getState()
+  try {
+    const store = getMultiAgentStore()
+
+    // Get agentId from multi-agent store's agentMapping (single source of truth)
+    const agentId = store.agentMapping[threadId]
+    if (!agentId) return // Not an agent thread
     const agent = store.getAgent(agentId)
     if (!agent) return
+
+    // P1 Fix: Check event version to ignore stale events (except for messageDelta which is high-frequency)
+    if (eventType !== 'messageDelta' && !shouldProcessEvent(threadId, eventVersion)) {
+      return
+    }
 
     switch (eventType) {
       case 'turnStarted':
@@ -102,14 +159,37 @@ export function notifyAgentStore(
         break
       }
     }
-  }).catch((err) => {
-    log.error(`[notifyAgentStore] Failed to import multi-agent store: ${err}`, 'agent-integration')
-  })
+  } catch (err) {
+    log.error(`[notifyAgentStore] Failed to notify multi-agent store: ${err}`, 'agent-integration')
+  }
 }
 
 /**
  * Helper to check if a thread is an agent thread
+ * P1 Fix: Now synchronous using lazy initialization
  */
-export function isAgentThread(agentMapping: AgentMapping, threadId: string): boolean {
+export function isAgentThread(threadId: string): boolean {
+  try {
+    const store = getMultiAgentStore()
+    return threadId in store.agentMapping
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Async version for backward compatibility
+ * @deprecated Use isAgentThread (now synchronous) instead
+ */
+export function isAgentThreadAsync(threadId: string): Promise<boolean> {
+  return Promise.resolve(isAgentThread(threadId))
+}
+
+/**
+ * Synchronous helper to check if a thread is an agent thread
+ * Uses provided agentMapping for cases where async is not suitable
+ * @deprecated Use isAgentThread (now synchronous) when possible
+ */
+export function isAgentThreadSync(agentMapping: Record<string, string>, threadId: string): boolean {
   return threadId in agentMapping
 }

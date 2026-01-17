@@ -85,8 +85,7 @@ export function createHandleTurnStarted(
     }
 
     // Notify multi-agent store if this is an agent thread
-    const state = getThreadStore()
-    notifyAgentStore(state.agentMapping, threadId, 'turnStarted')
+    notifyAgentStore(threadId, 'turnStarted')
 
     // Set turn timeout for this specific thread
     const turnId = event.turn.id
@@ -108,13 +107,19 @@ export function createHandleTurnStarted(
         set((state) => {
           const threadState = state.threads[threadId]
           if (!threadState) return state
-          
+
           // P2: Immer optimization - direct mutation instead of spreading
           threadState.turnStatus = 'failed'
           threadState.error = 'Turn timed out - server may have disconnected'
           threadState.currentTurnId = null
           threadState.pendingApprovals = []
           threadState.turnTiming.completedAt = Date.now()
+        })
+
+        // P0 Fix: Notify multi-agent store about timeout error
+        notifyAgentStore(threadId, 'error', {
+          message: 'Turn timed out',
+          code: 'TURN_TIMEOUT',
         })
       }
     }, TURN_TIMEOUT_MS)
@@ -201,8 +206,7 @@ export function createHandleTurnCompleted(
     })
 
     // Notify multi-agent store if this is an agent thread
-    const state = getThreadStore()
-    notifyAgentStore(state.agentMapping, threadId, 'turnCompleted', {
+    notifyAgentStore(threadId, 'turnCompleted', {
       status,
     })
 

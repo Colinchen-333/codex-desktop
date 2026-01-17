@@ -10,8 +10,8 @@
  * - Quick start dialogs for workflow/agent creation
  */
 
-import { useState, useEffect, useRef } from 'react'
-import { X, Plus, Play, Bot, Search, FileCode, Terminal, FileText, TestTube } from 'lucide-react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { X, Plus, Play, Bot, Search, FileCode, Terminal, FileText, TestTube, AlertTriangle, Loader2 } from 'lucide-react'
 import { WorkflowStageHeader } from './WorkflowStageHeader'
 import { AgentGridView } from './AgentGridView'
 import { AgentDetailPanel } from './AgentDetailPanel'
@@ -32,14 +32,32 @@ const AGENT_TYPE_OPTIONS: { type: AgentType; icon: React.ReactNode; name: string
 export function MultiAgentView() {
   const agents = useMultiAgentStore((state) => Object.values(state.agents))
   const config = useMultiAgentStore((state) => state.config)
-  const { workflow, approvePhase, rejectPhase, cancelAgent, pauseAgent, resumeAgent, startWorkflow, spawnAgent, retryAgent } =
-    useMultiAgentStore()
+  const {
+    workflow,
+    approvePhase,
+    rejectPhase,
+    cancelAgent,
+    pauseAgent,
+    resumeAgent,
+    startWorkflow,
+    spawnAgent,
+    retryAgent,
+    clearAgents,
+    clearWorkflow,
+  } = useMultiAgentStore()
 
   // Track selected agent for detail panel
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
 
-  // Track approval dialog
-  const [pendingApprovalPhaseId, setPendingApprovalPhaseId] = useState<string | null>(null)
+  // Track agent operation state (for cancel/pause/resume feedback)
+  const [operatingAgentId, setOperatingAgentId] = useState<string | null>(null)
+  const [confirmCancelAgentId, setConfirmCancelAgentId] = useState<string | null>(null)
+
+  // Track approval dialog - dismissed phase IDs to prevent re-showing
+  const [dismissedApprovalPhaseIds, setDismissedApprovalPhaseIds] = useState<Set<string>>(new Set())
+
+  // Confirmation dialog for starting new workflow when one is already running
+  const [showConfirmRestartDialog, setShowConfirmRestartDialog] = useState(false)
 
   // Quick start dialogs
   const [showWorkflowDialog, setShowWorkflowDialog] = useState(false)
@@ -55,18 +73,22 @@ export function MultiAgentView() {
     ? agents.find((a) => a.id === selectedAgentId)
     : null
 
-  // Monitor workflow phases for approval requirement
-  useEffect(() => {
-    if (!workflow) return
+  // Check if there's a running workflow
+  const hasRunningWorkflow = workflow && workflow.status === 'running'
+
+  // Compute pending approval phase using useMemo to avoid race conditions
+  const pendingApprovalPhase = useMemo(() => {
+    if (!workflow) return null
 
     const currentPhase = workflow.phases[workflow.currentPhaseIndex]
-    if (!currentPhase) return
+    if (!currentPhase) return null
 
-    // Check if phase requires approval and all agents are complete
+    // Check if phase requires approval, is completed, and not already dismissed
     if (
       currentPhase.requiresApproval &&
       currentPhase.status === 'completed' &&
-      currentPhase.agentIds.length > 0
+      currentPhase.agentIds.length > 0 &&
+      !dismissedApprovalPhaseIds.has(currentPhase.id)
     ) {
       const phaseAgents = currentPhase.agentIds
         .map((id) => agents.find((a) => a.id === id))
@@ -76,18 +98,12 @@ export function MultiAgentView() {
         (a) => a!.status === 'completed' || a!.status === 'error' || a!.status === 'cancelled'
       )
 
-      if (allCompleted && !pendingApprovalPhaseId) {
-        // Use setTimeout to avoid setState during effect
-        setTimeout(() => {
-          setPendingApprovalPhaseId(currentPhase.id)
-        }, 0)
+      if (allCompleted) {
+        return currentPhase
       }
     }
-  }, [workflow, agents, pendingApprovalPhaseId])
-
-  const currentPhase = workflow && pendingApprovalPhaseId
-    ? workflow.phases.find((p) => p.id === pendingApprovalPhaseId)
-    : null
+    return null
+  }, [workflow, agents, dismissedApprovalPhaseIds])
 
   const handleViewDetails = (agentId: string) => {
     setSelectedAgentId(agentId)
@@ -97,33 +113,59 @@ export function MultiAgentView() {
     setSelectedAgentId(null)
   }
 
-  const handleCancel = (agentId: string) => {
-    void cancelAgent(agentId)
+  // Show confirmation dialog before cancel
+  const handleRequestCancel = (agentId: string) => {
+    setConfirmCancelAgentId(agentId)
   }
 
-  const handlePause = (agentId: string) => {
-    void pauseAgent(agentId)
+  // Actually cancel the agent after confirmation
+  const handleConfirmCancel = useCallback(async () => {
+    if (!confirmCancelAgentId) return
+
+    setOperatingAgentId(confirmCancelAgentId)
+    try {
+      await cancelAgent(confirmCancelAgentId)
+    } finally {
+      setOperatingAgentId(null)
+      setConfirmCancelAgentId(null)
+    }
+  }, [confirmCancelAgentId, cancelAgent])
+
+  const handleCancelCancelDialog = () => {
+    setConfirmCancelAgentId(null)
   }
 
-  const handleResume = (agentId: string) => {
-    void resumeAgent(agentId)
-  }
+  const handlePause = useCallback(async (agentId: string) => {
+    setOperatingAgentId(agentId)
+    try {
+      await pauseAgent(agentId)
+    } finally {
+      setOperatingAgentId(null)
+    }
+  }, [pauseAgent])
 
-  const handleApprovePhase = (phaseId: string) => {
-    void approvePhase(phaseId)
-  }
+  const handleResume = useCallback(async (agentId: string) => {
+    setOperatingAgentId(agentId)
+    try {
+      await resumeAgent(agentId)
+    } finally {
+      setOperatingAgentId(null)
+    }
+  }, [resumeAgent])
 
   const handleApproval = () => {
-    if (pendingApprovalPhaseId) {
-      void approvePhase(pendingApprovalPhaseId)
-      setPendingApprovalPhaseId(null)
+    if (pendingApprovalPhase) {
+      void approvePhase(pendingApprovalPhase.id)
+      // Mark as dismissed to prevent re-showing
+      setDismissedApprovalPhaseIds((prev) => new Set([...prev, pendingApprovalPhase.id]))
     }
   }
 
   const handleRejection = (reason: string) => {
-    if (pendingApprovalPhaseId) {
-      rejectPhase(pendingApprovalPhaseId, reason)
-      setPendingApprovalPhaseId(null)
+    if (pendingApprovalPhase) {
+      rejectPhase(pendingApprovalPhase.id, reason)
+      // Mark as dismissed to prevent re-showing
+      setDismissedApprovalPhaseIds((prev) => new Set([...prev, pendingApprovalPhase.id]))
     }
   }
 
@@ -133,9 +175,30 @@ export function MultiAgentView() {
 
   // Workflow dialog handlers
   const handleOpenWorkflowDialog = () => {
+    // Check if there's already a running workflow
+    if (hasRunningWorkflow) {
+      setShowConfirmRestartDialog(true)
+      return
+    }
+    openWorkflowDialogDirectly()
+  }
+
+  const openWorkflowDialogDirectly = () => {
     setShowWorkflowDialog(true)
     setWorkflowTask('')
     setTimeout(() => workflowInputRef.current?.focus(), 100)
+  }
+
+  const handleConfirmRestart = () => {
+    // Clear existing workflow and agents before starting new one
+    clearAgents()
+    clearWorkflow()
+    setShowConfirmRestartDialog(false)
+    openWorkflowDialogDirectly()
+  }
+
+  const handleCancelRestart = () => {
+    setShowConfirmRestartDialog(false)
   }
 
   const handleCloseWorkflowDialog = () => {
@@ -145,6 +208,16 @@ export function MultiAgentView() {
 
   const handleStartWorkflow = () => {
     if (!workflowTask.trim()) return
+
+    // Clean up any existing agents before starting new workflow
+    // This ensures a fresh state even if there are leftover agents from previous workflows
+    if (agents.length > 0) {
+      clearAgents()
+    }
+    if (workflow) {
+      clearWorkflow()
+    }
+
     const workflowInstance = createPlanModeWorkflow(workflowTask.trim(), {
       workingDirectory: config.cwd,
       userTask: workflowTask.trim(),
@@ -175,13 +248,136 @@ export function MultiAgentView() {
   return (
     <>
       {/* Approval Dialog */}
-      {pendingApprovalPhaseId && currentPhase && (
+      {pendingApprovalPhase && (
         <ApprovalDialog
-          phase={currentPhase}
-          agents={agents.filter((a) => currentPhase.agentIds.includes(a.id))}
+          phase={pendingApprovalPhase}
+          agents={agents.filter((a) => pendingApprovalPhase.agentIds.includes(a.id))}
           onApprove={handleApproval}
           onReject={handleRejection}
         />
+      )}
+
+      {/* Cancel Confirmation Dialog */}
+      {confirmCancelAgentId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Dialog Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700 bg-gradient-to-r from-red-500 to-orange-500">
+              <div className="flex items-center space-x-3">
+                <AlertTriangle className="w-5 h-5 text-white" />
+                <h3 className="text-lg font-semibold text-white">确认取消代理</h3>
+              </div>
+              <button
+                onClick={handleCancelCancelDialog}
+                className="p-1 rounded-full hover:bg-white/20 transition-colors"
+              >
+                <X className="w-5 h-5 text-white" />
+              </button>
+            </div>
+
+            {/* Dialog Content */}
+            <div className="p-6">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                确定要取消此代理吗？取消后：
+              </p>
+              <ul className="text-sm text-gray-600 dark:text-gray-400 list-disc list-inside space-y-1 mb-4">
+                <li>当前正在执行的任务将被中断</li>
+                <li>已完成的工作将被保留</li>
+                <li>此操作无法撤销</li>
+              </ul>
+              {(() => {
+                const agent = agents.find((a) => a.id === confirmCancelAgentId)
+                return agent ? (
+                  <div className="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      代理：{agent.name}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
+                      {agent.task}
+                    </p>
+                  </div>
+                ) : null
+              })()}
+            </div>
+
+            {/* Dialog Footer */}
+            <div className="flex items-center justify-end space-x-3 px-6 py-4 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+              <button
+                onClick={handleCancelCancelDialog}
+                disabled={operatingAgentId === confirmCancelAgentId}
+                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+              >
+                返回
+              </button>
+              <button
+                onClick={() => void handleConfirmCancel()}
+                disabled={operatingAgentId === confirmCancelAgentId}
+                className="px-6 py-2 bg-red-500 text-white rounded-lg font-medium hover:bg-red-600 shadow-md hover:shadow-lg transition-all disabled:opacity-50 flex items-center space-x-2"
+              >
+                {operatingAgentId === confirmCancelAgentId ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>取消中...</span>
+                  </>
+                ) : (
+                  <span>确认取消</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Restart Dialog - shown when trying to start new workflow while one is running */}
+      {showConfirmRestartDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Dialog Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700 bg-gradient-to-r from-amber-500 to-orange-500">
+              <div className="flex items-center space-x-3">
+                <AlertTriangle className="w-5 h-5 text-white" />
+                <h3 className="text-lg font-semibold text-white">工作流正在运行</h3>
+              </div>
+              <button
+                onClick={handleCancelRestart}
+                className="p-1 rounded-full hover:bg-white/20 transition-colors"
+              >
+                <X className="w-5 h-5 text-white" />
+              </button>
+            </div>
+
+            {/* Dialog Content */}
+            <div className="p-6">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                当前已有一个工作流正在运行。启动新工作流将会：
+              </p>
+              <ul className="text-sm text-gray-600 dark:text-gray-400 list-disc list-inside space-y-1 mb-4">
+                <li>停止当前所有运行中的代理</li>
+                <li>清除当前工作流的状态</li>
+                <li>开始一个全新的工作流</li>
+              </ul>
+              <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">
+                确定要继续吗？
+              </p>
+            </div>
+
+            {/* Dialog Footer */}
+            <div className="flex items-center justify-end space-x-3 px-6 py-4 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+              <button
+                onClick={handleCancelRestart}
+                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmRestart}
+                className="px-6 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 shadow-md hover:shadow-lg transition-all"
+              >
+                确认重启
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Workflow Quick Start Dialog */}
@@ -354,7 +550,7 @@ export function MultiAgentView() {
       <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
         {/* Workflow Header */}
         {workflow && (
-          <WorkflowStageHeader workflow={workflow} onApprovePhase={handleApprovePhase} />
+          <WorkflowStageHeader workflow={workflow} />
         )}
 
         {/* Main Content Area */}
@@ -402,10 +598,11 @@ export function MultiAgentView() {
                 <AgentGridView
                   agents={agents}
                   onViewDetails={handleViewDetails}
-                  onCancel={handleCancel}
-                  onPause={handlePause}
-                  onResume={handleResume}
+                  onCancel={handleRequestCancel}
+                  onPause={(id) => void handlePause(id)}
+                  onResume={(id) => void handleResume(id)}
                   onRetry={handleRetry}
+                  operatingAgentId={operatingAgentId}
                 />
               )}
             </div>
