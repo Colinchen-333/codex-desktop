@@ -170,11 +170,11 @@ export function notifyAgentStore(
 
       case 'error': {
         // Agent encountered an error
-        const errorData = data as { message?: string; code?: string } | undefined
+        const errorData = data as { message?: string; code?: string; recoverable?: boolean } | undefined
         store.updateAgentStatus(agentId, 'error', {
           message: errorData?.message || 'Unknown error',
           code: errorData?.code || 'UNKNOWN_ERROR',
-          recoverable: true,
+          recoverable: errorData?.recoverable ?? true, // Default to recoverable if not specified
         })
         log.error(
           `[notifyAgentStore] Agent ${agentId} error (thread ${threadId}): ${JSON.stringify(errorData)}`,

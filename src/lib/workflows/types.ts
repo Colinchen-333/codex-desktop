@@ -34,6 +34,7 @@ export interface AgentError {
   code: string
   recoverable: boolean
   stackTrace?: string
+  details?: Record<string, unknown> // Additional error details (e.g., failed dependencies)
 }
 
 /**
@@ -80,8 +81,13 @@ export interface AgentDescriptor {
 
 /**
  * Workflow phase status
+ * - pending: Phase has not started yet
+ * - running: Phase is currently executing
+ * - completed: Phase completed successfully
+ * - failed: Phase failed due to error
+ * - approval_timeout: Phase completed but approval timed out (recoverable)
  */
-export type WorkflowPhaseStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type WorkflowPhaseStatus = 'pending' | 'running' | 'completed' | 'failed' | 'approval_timeout'
 
 /**
  * Workflow phase - represents a stage in a multi-agent workflow
@@ -93,6 +99,7 @@ export interface WorkflowPhase {
   agentIds: string[] // IDs of agents in this phase
   status: WorkflowPhaseStatus
   requiresApproval: boolean
+  approvalTimeoutMs?: number // Approval timeout in milliseconds (default: 5 minutes)
   output?: string // Phase summary output
   metadata?: Record<string, unknown> // Phase metadata (agent types, tasks, etc.)
   createdAt: Date

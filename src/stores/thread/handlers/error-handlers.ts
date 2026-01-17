@@ -113,13 +113,20 @@ export function createHandleRateLimitExceeded(
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      
+
       // P2: Immer optimization - direct mutation instead of spreading
       threadState.turnStatus = 'failed'
       threadState.error = errorMessage
       threadState.currentTurnId = null
       threadState.pendingApprovals = []
       threadState.turnTiming.completedAt = Date.now()
+    })
+
+    // Notify multi-agent store about rate limit error (agentMapping is checked internally)
+    notifyAgentStore(threadId, 'error', {
+      message: errorMessage,
+      code: 'RATE_LIMIT_EXCEEDED',
+      recoverable: true,
     })
   }
 }

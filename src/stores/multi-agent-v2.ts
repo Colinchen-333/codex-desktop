@@ -110,6 +110,7 @@ export interface MultiAgentState {
   startWorkflow: (workflow: Workflow) => Promise<void>
   approvePhase: (phaseId: string) => Promise<void>
   rejectPhase: (phaseId: string, reason?: string) => void
+  recoverApprovalTimeout: (phaseId: string) => void
   cancelWorkflow: () => Promise<void>
   clearWorkflow: () => void
   _executePhase: (phase: WorkflowPhase) => Promise<void>
@@ -123,6 +124,10 @@ export interface MultiAgentState {
   // WF-008: Dependency timeout helpers
   _clearDependencyWaitTimeout: (agentId: string) => void
   retryDependencyWait: (agentId: string) => Promise<void>
+
+  // Phase/Workflow retry methods (allows recovery from failed state)
+  retryPhase: (phaseId: string) => Promise<void>
+  retryWorkflow: () => Promise<void>
 
   // Getters
   getAgent: (id: string) => AgentDescriptor | undefined
@@ -1272,6 +1277,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     /**
      * Approve a workflow phase
      * WF-009 fix: Added re-entrancy protection to prevent double execution
+     * WF-011 fix: Also allows approval from 'approval_timeout' state
      */
     approvePhase: async (phaseId: string) => {
       const state = get()
@@ -1287,6 +1293,13 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
       const phaseIndex = workflow.phases.findIndex((p) => p.id === phaseId)
       if (phaseIndex === -1) return
+
+      // WF-011: Check phase status - allow approval from 'completed' or 'approval_timeout' status
+      const phase = workflow.phases[phaseIndex]
+      if (phase.status !== 'completed' && phase.status !== 'approval_timeout') {
+        log.warn(`[approvePhase] Phase ${phaseId} is not in approvable state (current: ${phase.status})`, 'multi-agent')
+        return
+      }
 
       // WF-009: Mark approval as in-flight atomically
       let claimed = false
@@ -1349,13 +1362,24 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     /**
      * Reject a workflow phase
      * WF-009 fix: Added re-entrancy protection
+     * WF-011 fix: Also allows rejection from 'approval_timeout' state
      */
     rejectPhase: (phaseId: string, reason?: string) => {
       const state = get()
+      const workflow = state.workflow
+
+      if (!workflow) return
 
       // WF-009: Check if approval is already in flight
       if (state.approvalInFlight[phaseId]) {
         log.warn(`[rejectPhase] Approval already in flight for phase ${phaseId}, ignoring duplicate call`, 'multi-agent')
+        return
+      }
+
+      // WF-011: Check phase status - allow rejection from 'completed' or 'approval_timeout' status
+      const phaseRef = workflow.phases.find((p) => p.id === phaseId)
+      if (!phaseRef || (phaseRef.status !== 'completed' && phaseRef.status !== 'approval_timeout')) {
+        log.warn(`[rejectPhase] Phase ${phaseId} is not in rejectable state (current: ${phaseRef?.status})`, 'multi-agent')
         return
       }
 
@@ -1383,6 +1407,60 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         // Release lock immediately since this is synchronous
         delete s.approvalInFlight[phaseId]
       })
+    },
+
+    /**
+     * Recover from approval timeout for a phase
+     * WF-011 fix: Allows manual recovery from approval_timeout state
+     * This method restarts the approval timeout timer and allows the user to approve/reject the phase
+     */
+    recoverApprovalTimeout: (phaseId: string) => {
+      const state = get()
+      const workflow = state.workflow
+
+      if (!workflow) {
+        log.warn(`[recoverApprovalTimeout] No workflow found`, 'multi-agent')
+        return
+      }
+
+      const phase = workflow.phases.find((p) => p.id === phaseId)
+      if (!phase) {
+        log.warn(`[recoverApprovalTimeout] Phase ${phaseId} not found`, 'multi-agent')
+        return
+      }
+
+      // Check phase status must be 'approval_timeout'
+      if (phase.status !== 'approval_timeout') {
+        log.warn(`[recoverApprovalTimeout] Phase ${phaseId} is not in approval_timeout state (current: ${phase.status})`, 'multi-agent')
+        return
+      }
+
+      // Check workflow is still running
+      if (workflow.status !== 'running') {
+        log.warn(`[recoverApprovalTimeout] Workflow is not running (current: ${workflow.status})`, 'multi-agent')
+        return
+      }
+
+      log.info(`[recoverApprovalTimeout] Recovering phase ${phaseId} from approval_timeout`, 'multi-agent')
+
+      // Reset phase status to 'completed' (waiting for approval)
+      set((s) => {
+        if (!s.workflow) return
+
+        const p = s.workflow.phases.find((wp) => wp.id === phaseId)
+        if (p) {
+          p.status = 'completed'
+          p.output = p.output?.replace(/审批超时.*/, '审批已恢复，等待用户操作')
+        }
+      })
+
+      // Restart approval timeout timer
+      const approvalTimeoutMs = phase.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
+      if (approvalTimeoutMs > 0) {
+        get()._startApprovalTimeout(phaseId, approvalTimeoutMs)
+      }
+
+      log.info(`[recoverApprovalTimeout] Phase ${phaseId} recovered, approval timeout restarted`, 'multi-agent')
     },
 
     /**
@@ -1673,21 +1751,21 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           return
         }
 
-        log.warn(`[_startApprovalTimeout] Approval timeout for phase ${phaseId}, marking as timed out`, 'multi-agent')
+        log.warn(`[_startApprovalTimeout] Approval timeout for phase ${phaseId}, marking as approval_timeout (recoverable)`, 'multi-agent')
 
-        // Mark phase as timed out (using 'failed' status with specific output)
+        // WF-011: Mark phase as approval_timeout (recoverable state - workflow stays running)
         set((s) => {
           if (!s.workflow) return
 
           const p = s.workflow.phases.find((wp) => wp.id === phaseId)
           if (p) {
-            p.status = 'failed'
-            p.completedAt = new Date()
-            p.output = `审批超时：用户在 ${timeoutMs / 1000} 秒内未响应`
+            p.status = 'approval_timeout'
+            // Don't set completedAt since the phase can be recovered
+            p.output = `审批超时：用户在 ${timeoutMs / 1000} 秒内未响应。可通过 recoverApprovalTimeout 恢复。`
           }
 
-          s.workflow.status = 'failed'
-          s.workflow.completedAt = new Date()
+          // Keep workflow running - user can still recover
+          // s.workflow.status stays 'running'
 
           // Clean up timeout reference
           delete s.approvalTimeouts[phaseId]
@@ -1772,6 +1850,134 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       } else {
         log.error(`[retryDependencyWait] Failed to respawn agent ${agentId}`, 'multi-agent')
       }
+    },
+
+    // ==================== Phase/Workflow Retry Methods ====================
+
+    /**
+     * Retry a failed workflow phase
+     * Allows recovery from failed state by re-executing the phase with fresh agents.
+     *
+     * @param phaseId - The ID of the phase to retry
+     * @throws Error if phase is not found or not in 'failed' status
+     */
+    retryPhase: async (phaseId: string) => {
+      const state = get()
+      const workflow = state.workflow
+
+      if (!workflow) {
+        log.error('[retryPhase] No active workflow', 'multi-agent')
+        return
+      }
+
+      const phaseIndex = workflow.phases.findIndex((p) => p.id === phaseId)
+      if (phaseIndex === -1) {
+        log.error(`[retryPhase] Phase ${phaseId} not found`, 'multi-agent')
+        return
+      }
+
+      const phase = workflow.phases[phaseIndex]
+
+      // Check that phase is in 'failed' status
+      if (phase.status !== 'failed') {
+        log.error(`[retryPhase] Phase ${phaseId} is not in 'failed' status (current: ${phase.status})`, 'multi-agent')
+        return
+      }
+
+      log.info(`[retryPhase] Retrying phase: ${phase.name} (${phaseId})`, 'multi-agent')
+
+      // Step 1: Clean up old agents from the failed phase
+      const oldAgentIds = phase.agentIds || []
+      for (const agentId of oldAgentIds) {
+        const agent = state.agents[agentId]
+        if (agent) {
+          // Cancel and remove the old agent
+          if (agent.status === 'running' && agent.threadId) {
+            try {
+              await threadApi.interrupt(agent.threadId)
+            } catch (error) {
+              log.error(`[retryPhase] Failed to interrupt agent ${agentId}: ${error}`, 'multi-agent')
+            }
+          }
+          get().removeAgent(agentId)
+        }
+      }
+
+      // Step 2: Reset phase and workflow status
+      set((s) => {
+        if (!s.workflow) return
+
+        const p = s.workflow.phases.find((wp) => wp.id === phaseId)
+        if (p) {
+          p.status = 'pending'
+          p.startedAt = undefined
+          p.completedAt = undefined
+          p.output = undefined
+          p.agentIds = []
+          // Clear any error metadata
+          if (p.metadata?.spawnFailedCount) {
+            delete p.metadata.spawnFailedCount
+          }
+        }
+
+        // Reset workflow status from 'failed' to 'running'
+        s.workflow.status = 'running'
+        s.workflow.completedAt = undefined
+
+        // Set current phase index to the retried phase
+        s.workflow.currentPhaseIndex = phaseIndex
+
+        // Reset phaseCompletionInFlight if it was stuck on this phase
+        if (s.phaseCompletionInFlight === phaseId) {
+          s.phaseCompletionInFlight = null
+        }
+      })
+
+      // Step 3: Re-execute the phase
+      const updatedWorkflow = get().workflow
+      if (updatedWorkflow) {
+        const updatedPhase = updatedWorkflow.phases[phaseIndex]
+        if (updatedPhase) {
+          await get()._executePhase(updatedPhase)
+        }
+      }
+
+      log.info(`[retryPhase] Phase ${phase.name} retry initiated`, 'multi-agent')
+    },
+
+    /**
+     * Retry a failed workflow from the first failed phase
+     * Automatically finds the first failed phase and retries it.
+     *
+     * @throws Error if workflow is not found or not in 'failed' status
+     */
+    retryWorkflow: async () => {
+      const state = get()
+      const workflow = state.workflow
+
+      if (!workflow) {
+        log.error('[retryWorkflow] No active workflow', 'multi-agent')
+        return
+      }
+
+      // Check that workflow is in 'failed' status
+      if (workflow.status !== 'failed') {
+        log.error(`[retryWorkflow] Workflow is not in 'failed' status (current: ${workflow.status})`, 'multi-agent')
+        return
+      }
+
+      // Find the first failed phase
+      const failedPhase = workflow.phases.find((p) => p.status === 'failed')
+
+      if (!failedPhase) {
+        log.error('[retryWorkflow] No failed phase found in workflow', 'multi-agent')
+        return
+      }
+
+      log.info(`[retryWorkflow] Found failed phase: ${failedPhase.name} (${failedPhase.id}), retrying...`, 'multi-agent')
+
+      // Retry the failed phase
+      await get().retryPhase(failedPhase.id)
     },
 
     // ==================== Reset ====================
