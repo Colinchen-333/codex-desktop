@@ -90,6 +90,9 @@ export interface MultiAgentState {
   // WF-008: Dependency timeout tracking
   dependencyWaitTimeouts: Record<string, ReturnType<typeof setTimeout>> // Track dependency wait timeout timers
 
+  // Pause timeout tracking
+  pauseTimeouts: Record<string, ReturnType<typeof setTimeout>> // Track pause timeout timers
+
   // Actions - Agent Management
   spawnAgent: (
     type: AgentType,
@@ -125,9 +128,14 @@ export interface MultiAgentState {
   _clearDependencyWaitTimeout: (agentId: string) => void
   retryDependencyWait: (agentId: string) => Promise<void>
 
+  // Pause timeout helpers
+  _startPauseTimeout: (agentId: string, timeoutMs?: number) => void
+  _clearPauseTimeout: (agentId: string) => void
+
   // Phase/Workflow retry methods (allows recovery from failed state)
   retryPhase: (phaseId: string) => Promise<void>
   retryWorkflow: () => Promise<void>
+  recoverCancelledWorkflow: () => Promise<void>
 
   // Getters
   getAgent: (id: string) => AgentDescriptor | undefined
@@ -161,6 +169,7 @@ const MAX_AGENT_OUTPUT_CHARS = 4000
 const START_SLOT_POLL_MS = 500
 const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes default approval timeout
 const DEFAULT_DEPENDENCY_WAIT_TIMEOUT_MS = 5 * 60 * 1000 // WF-008: 5 minutes default dependency wait timeout
+const DEFAULT_PAUSE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes default pause timeout
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -275,6 +284,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     approvalTimeouts: {},
     pauseInFlight: {}, // WF-006: Track pause operations
     dependencyWaitTimeouts: {}, // WF-008: Track dependency wait timeouts
+    pauseTimeouts: {}, // Track pause timeout timers
 
     // ==================== Configuration ====================
     setConfig: (config: Partial<MultiAgentConfig>) => {
@@ -806,6 +816,9 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       if (!agent) return
 
       try {
+        // Clear pause timeout if agent was paused
+        get()._clearPauseTimeout(id)
+
         set((state) => {
           const current = state.agents[id]
           if (current) {
@@ -881,6 +894,9 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           }
         })
 
+        // Start pause timeout timer
+        get()._startPauseTimeout(id)
+
         log.info(`[pauseAgent] Agent ${id} paused`, 'multi-agent')
       } catch (error) {
         log.error(`[pauseAgent] Failed to pause agent ${id}: ${error}`, 'multi-agent')
@@ -909,6 +925,9 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       if (!agent) return
 
       try {
+        // Clear pause timeout before resuming
+        get()._clearPauseTimeout(id)
+
         set((state) => {
           const current = state.agents[id]
           if (current) {
@@ -1003,6 +1022,9 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     removeAgent: (id: string) => {
       const agent = get().agents[id]
       if (!agent) return
+
+      // Clear pause timeout if agent was paused
+      get()._clearPauseTimeout(id)
 
       const threadId = agent.threadId
 
@@ -1852,6 +1874,93 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       }
     },
 
+    // ==================== Pause Timeout Helpers ====================
+
+    /**
+     * Start pause timeout timer for an agent
+     * Prevents indefinite pausing - after timeout, agent is marked as error with PAUSE_TIMEOUT code
+     */
+    _startPauseTimeout: (agentId: string, timeoutMs: number = DEFAULT_PAUSE_TIMEOUT_MS) => {
+      // Clear any existing timeout for this agent
+      get()._clearPauseTimeout(agentId)
+
+      log.info(`[_startPauseTimeout] Starting ${timeoutMs}ms timeout for agent ${agentId}`, 'multi-agent')
+
+      const timeoutId = setTimeout(async () => {
+        const state = get()
+        const agent = state.agents[agentId]
+
+        // Validate state before timing out
+        if (!agent) {
+          log.info(`[_startPauseTimeout] Timeout fired but agent ${agentId} not found, ignoring`, 'multi-agent')
+          return
+        }
+
+        // Only timeout if agent is still paused (pending with interruptReason='pause')
+        if (agent.status !== 'pending' || agent.interruptReason !== 'pause') {
+          log.info(`[_startPauseTimeout] Timeout fired but agent ${agentId} is no longer paused, ignoring`, 'multi-agent')
+          return
+        }
+
+        log.warn(`[_startPauseTimeout] Pause timeout for agent ${agentId}, marking as error`, 'multi-agent')
+
+        // Interrupt the thread if it exists
+        if (agent.threadId) {
+          try {
+            await threadApi.interrupt(agent.threadId)
+          } catch (error) {
+            log.error(`[_startPauseTimeout] Failed to interrupt thread ${agent.threadId}: ${error}`, 'multi-agent')
+          }
+        }
+
+        // Mark agent as error with PAUSE_TIMEOUT code (recoverable)
+        set((s) => {
+          const a = s.agents[agentId]
+          if (a) {
+            a.status = 'error'
+            a.completedAt = new Date()
+            a.interruptReason = undefined
+            a.error = {
+              message: `暂停超时：Agent 在 ${timeoutMs / 1000 / 60} 分钟内未恢复`,
+              code: 'PAUSE_TIMEOUT',
+              recoverable: true,
+            }
+            a.progress.description = '暂停超时'
+          }
+
+          // Clean up timeout reference
+          delete s.pauseTimeouts[agentId]
+        })
+
+        // Check if phase completion needs to be triggered
+        get().checkPhaseCompletion().catch((err) => {
+          log.error(`[_startPauseTimeout] Failed to check phase completion: ${err}`, 'multi-agent')
+        })
+      }, timeoutMs)
+
+      // Store timeout reference
+      set((s) => {
+        s.pauseTimeouts[agentId] = timeoutId
+      })
+    },
+
+    /**
+     * Clear pause timeout timer for an agent
+     */
+    _clearPauseTimeout: (agentId: string) => {
+      const state = get()
+      const timeoutId = state.pauseTimeouts[agentId]
+
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        log.info(`[_clearPauseTimeout] Cleared timeout for agent ${agentId}`, 'multi-agent')
+
+        set((s) => {
+          delete s.pauseTimeouts[agentId]
+        })
+      }
+    },
+
     // ==================== Phase/Workflow Retry Methods ====================
 
     /**
@@ -1980,6 +2089,100 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       await get().retryPhase(failedPhase.id)
     },
 
+
+    /**
+     * Recover a cancelled workflow from where it left off
+     * Allows resuming a workflow that was cancelled, continuing from the current phase.
+     *
+     * @throws Error if workflow is not found or not in 'cancelled' status
+     */
+    recoverCancelledWorkflow: async () => {
+      const state = get()
+      const workflow = state.workflow
+
+      if (!workflow) {
+        log.error('[recoverCancelledWorkflow] No active workflow', 'multi-agent')
+        return
+      }
+
+      // Check that workflow is in 'cancelled' status
+      if (workflow.status !== 'cancelled') {
+        log.error(`[recoverCancelledWorkflow] Workflow is not in 'cancelled' status (current: ${workflow.status})`, 'multi-agent')
+        return
+      }
+
+      log.info('[recoverCancelledWorkflow] Recovering cancelled workflow', 'multi-agent')
+
+      // Step 1: Reset workflow status
+      set((s) => {
+        if (!s.workflow) return
+        s.workflow.status = 'running'
+        s.workflow.completedAt = undefined
+      })
+
+      // Step 2: Get current phase
+      const currentPhaseIndex = workflow.currentPhaseIndex
+      const currentPhase = workflow.phases[currentPhaseIndex]
+
+      if (!currentPhase) {
+        log.error('[recoverCancelledWorkflow] No current phase found', 'multi-agent')
+        set((s) => {
+          if (s.workflow) {
+            s.workflow.status = 'failed'
+            s.workflow.completedAt = new Date()
+          }
+        })
+        return
+      }
+
+      log.info(`[recoverCancelledWorkflow] Current phase: ${currentPhase.name} (${currentPhase.id}), status: ${currentPhase.status}`, 'multi-agent')
+
+      // Step 3: Handle recovery based on phase status
+      if (currentPhase.status === 'completed') {
+        // Phase was completed before cancellation, approve to move to next
+        log.info(`[recoverCancelledWorkflow] Phase ${currentPhase.name} already completed, approving to continue`, 'multi-agent')
+        await get().approvePhase(currentPhase.id)
+      } else if (currentPhase.status === 'failed') {
+        // Phase failed before cancellation, retry it
+        log.info(`[recoverCancelledWorkflow] Phase ${currentPhase.name} failed, retrying`, 'multi-agent')
+        await get().retryPhase(currentPhase.id)
+      } else {
+        // Phase is pending, running, or other status - re-execute it
+        log.info(`[recoverCancelledWorkflow] Re-executing phase ${currentPhase.name}`, 'multi-agent')
+        
+        // Clean up any cancelled agents from this phase
+        const phaseAgentIds = currentPhase.agentIds || []
+        for (const agentId of phaseAgentIds) {
+          const agent = state.agents[agentId]
+          if (agent && agent.status === 'cancelled') {
+            get().removeAgent(agentId)
+          }
+        }
+
+        // Reset phase state before re-execution
+        set((s) => {
+          if (!s.workflow) return
+          const p = s.workflow.phases.find((wp) => wp.id === currentPhase.id)
+          if (p) {
+            p.status = 'pending'
+            p.startedAt = undefined
+            p.completedAt = undefined
+            p.agentIds = []
+          }
+        })
+
+        // Re-execute the phase
+        const updatedWorkflow = get().workflow
+        if (updatedWorkflow) {
+          const updatedPhase = updatedWorkflow.phases[currentPhaseIndex]
+          if (updatedPhase) {
+            await get()._executePhase(updatedPhase)
+          }
+        }
+      }
+
+      log.info('[recoverCancelledWorkflow] Workflow recovery initiated', 'multi-agent')
+    },
     // ==================== Reset ====================
 
     /**
@@ -1996,6 +2199,11 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       // Clear all dependency wait timeouts before resetting
       for (const agentId of Object.keys(state.dependencyWaitTimeouts)) {
         get()._clearDependencyWaitTimeout(agentId)
+      }
+
+      // Clear all pause timeouts before resetting
+      for (const agentId of Object.keys(state.pauseTimeouts)) {
+        get()._clearPauseTimeout(agentId)
       }
 
       // Interrupt all running agent threads
@@ -2034,6 +2242,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         s.approvalTimeouts = {}
         s.pauseInFlight = {}
         s.dependencyWaitTimeouts = {}
+        s.pauseTimeouts = {}
       })
     },
   }))

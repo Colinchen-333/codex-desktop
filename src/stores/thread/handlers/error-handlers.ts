@@ -81,13 +81,23 @@ export function createHandleStreamError(
     set((state) => {
       const threadState = state.threads[threadId]
       if (!threadState) return state
-      
+
       // P2: Immer optimization - direct mutation instead of spreading
       threadState.items[errorItem.id] = errorItem
       threadState.itemOrder.push(errorItem.id)
       threadState.error = event.error.message
       threadState.turnStatus = event.willRetry ? threadState.turnStatus : 'failed'
     })
+
+    // Notify multi-agent store about stream error
+    // Only mark as final error if willRetry is false
+    if (!event.willRetry) {
+      notifyAgentStore(threadId, 'error', {
+        message: event.error.message,
+        code: 'STREAM_ERROR',
+        recoverable: false,
+      })
+    }
   }
 }
 
