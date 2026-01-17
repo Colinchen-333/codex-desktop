@@ -24,25 +24,49 @@ function getMultiAgentStore() {
   return multiAgentStoreModule.useMultiAgentStore.getState()
 }
 
-// P1 Fix: Event version tracking to handle concurrent turn completion ordering
-// Maps threadId -> last processed event version
-const eventVersions = new Map<string, number>()
-let globalEventCounter = 0
+/**
+ * P0-1 Fix: Per-thread event version tracking to prevent global race conditions
+ * Previous implementation used a global counter which could cause version conflicts
+ * when multiple agents have concurrent events (e.g., counter overflow, non-monotonic
+ * versions within a thread due to interleaving).
+ *
+ * New implementation: Each thread has its own independent version counter.
+ * This ensures:
+ * 1. No interference between threads
+ * 2. Version numbers are always monotonically increasing within a thread
+ * 3. No risk of global counter overflow affecting event ordering
+ */
+interface ThreadEventState {
+  counter: number       // Next event version to assign
+  lastProcessed: number // Last processed event version
+}
 
-function getNextEventVersion(): number {
-  return ++globalEventCounter
+const threadEventStates = new Map<string, ThreadEventState>()
+
+function getThreadEventState(threadId: string): ThreadEventState {
+  let state = threadEventStates.get(threadId)
+  if (!state) {
+    state = { counter: 0, lastProcessed: 0 }
+    threadEventStates.set(threadId, state)
+  }
+  return state
+}
+
+function getNextEventVersion(threadId: string): number {
+  const state = getThreadEventState(threadId)
+  return ++state.counter
 }
 
 function shouldProcessEvent(threadId: string, eventVersion: number): boolean {
-  const lastVersion = eventVersions.get(threadId) ?? 0
-  if (eventVersion <= lastVersion) {
+  const state = getThreadEventState(threadId)
+  if (eventVersion <= state.lastProcessed) {
     log.debug(
-      `[notifyAgentStore] Ignoring stale event for thread ${threadId} (version ${eventVersion} <= ${lastVersion})`,
+      `[notifyAgentStore] Ignoring stale event for thread ${threadId} (version ${eventVersion} <= ${state.lastProcessed})`,
       'agent-integration'
     )
     return false
   }
-  eventVersions.set(threadId, eventVersion)
+  state.lastProcessed = eventVersion
   return true
 }
 
@@ -51,7 +75,7 @@ function shouldProcessEvent(threadId: string, eventVersion: number): boolean {
  * Should be called when a thread is closed
  */
 export function cleanupEventVersion(threadId: string): void {
-  eventVersions.delete(threadId)
+  threadEventStates.delete(threadId)
 }
 
 /**
@@ -68,8 +92,8 @@ export function notifyAgentStore(
   eventType: 'turnStarted' | 'turnCompleted' | 'messageDelta' | 'error',
   data?: unknown
 ): void {
-  // P1 Fix: Assign version at call time to preserve ordering intent
-  const eventVersion = getNextEventVersion()
+  // P0-1 Fix: Assign per-thread version at call time to preserve ordering intent
+  const eventVersion = getNextEventVersion(threadId)
 
   try {
     const store = getMultiAgentStore()

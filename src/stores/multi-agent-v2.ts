@@ -80,6 +80,16 @@ export interface MultiAgentState {
   previousPhaseOutput?: string
   phaseCompletionInFlight: string | null
 
+  // Approval state tracking (WF-001 & WF-009 fixes)
+  approvalInFlight: Record<string, boolean> // Track in-flight approval operations
+  approvalTimeouts: Record<string, ReturnType<typeof setTimeout>> // Track approval timeout timers
+
+  // WF-006: Pause operation atomicity tracking
+  pauseInFlight: Record<string, boolean> // Track agents currently being paused (prevents event race conditions)
+
+  // WF-008: Dependency timeout tracking
+  dependencyWaitTimeouts: Record<string, ReturnType<typeof setTimeout>> // Track dependency wait timeout timers
+
   // Actions - Agent Management
   spawnAgent: (
     type: AgentType,
@@ -104,6 +114,15 @@ export interface MultiAgentState {
   clearWorkflow: () => void
   _executePhase: (phase: WorkflowPhase) => Promise<void>
   checkPhaseCompletion: () => Promise<void>
+  _startApprovalTimeout: (phaseId: string, timeoutMs?: number) => void
+  _clearApprovalTimeout: (phaseId: string) => void
+
+  // WF-006: Pause atomicity helpers
+  _isPauseInFlight: (agentId: string) => boolean
+
+  // WF-008: Dependency timeout helpers
+  _clearDependencyWaitTimeout: (agentId: string) => void
+  retryDependencyWait: (agentId: string) => Promise<void>
 
   // Getters
   getAgent: (id: string) => AgentDescriptor | undefined
@@ -135,6 +154,8 @@ const APPROVAL_POLICY_ORDER: Record<string, number> = {
 
 const MAX_AGENT_OUTPUT_CHARS = 4000
 const START_SLOT_POLL_MS = 500
+const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes default approval timeout
+const DEFAULT_DEPENDENCY_WAIT_TIMEOUT_MS = 5 * 60 * 1000 // WF-008: 5 minutes default dependency wait timeout
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -245,6 +266,10 @@ export const useMultiAgentStore = create<MultiAgentState>()(
     workflowEngine: null,
     previousPhaseOutput: undefined,
     phaseCompletionInFlight: null,
+    approvalInFlight: {},
+    approvalTimeouts: {},
+    pauseInFlight: {}, // WF-006: Track pause operations
+    dependencyWaitTimeouts: {}, // WF-008: Track dependency wait timeouts
 
     // ==================== Configuration ====================
     setConfig: (config: Partial<MultiAgentConfig>) => {
@@ -327,10 +352,13 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           return current?.interruptReason === 'pause'
         }
 
+        // WF-008: Use configurable timeout with fallback to default (5 minutes)
         const dependencyTimeoutMs = (() => {
           const timeoutSeconds = config.timeout ?? state.config.timeout
-          if (!timeoutSeconds || timeoutSeconds <= 0) return 0
-          return timeoutSeconds * 1000
+          if (timeoutSeconds && timeoutSeconds > 0) {
+            return timeoutSeconds * 1000
+          }
+          return DEFAULT_DEPENDENCY_WAIT_TIMEOUT_MS
         })()
 
         const waitForDependencies = async () => {
@@ -343,21 +371,25 @@ export const useMultiAgentStore = create<MultiAgentState>()(
             }
           })
 
+          // WF-008: Enhanced dependency evaluation with detailed failure info
           const evaluateDependencies = (currentState: MultiAgentState) => {
             let hasFailed = false
+            const failedDeps: string[] = []
             const allCompleted = dependencies.every((depId) => {
               const dep = currentState.agents[depId]
               if (!dep) {
                 hasFailed = true
+                failedDeps.push(depId)
                 return false
               }
               if (dep.status === 'error' || dep.status === 'cancelled') {
                 hasFailed = true
+                failedDeps.push(depId)
                 return false
               }
               return dep.status === 'completed'
             })
-            return { allCompleted, hasFailed }
+            return { allCompleted, hasFailed, failedDeps }
           }
 
           const initialStatus = evaluateDependencies(get())
@@ -368,9 +400,10 @@ export const useMultiAgentStore = create<MultiAgentState>()(
                 agent.status = 'error'
                 agent.completedAt = new Date()
                 agent.error = {
-                  message: '依赖代理执行失败或被取消',
+                  message: `依赖代理执行失败或被取消: ${initialStatus.failedDeps.join(', ')}`,
                   code: 'DEPENDENCY_FAILED',
-                  recoverable: false,
+                  recoverable: true, // WF-008: Allow retry when dependencies fail
+                  details: { failedDependencies: initialStatus.failedDeps },
                 }
               }
             })
@@ -379,19 +412,41 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
           if (initialStatus.allCompleted) return true
 
-          log.info(`[spawnAgent] Agent ${agentId} waiting for dependencies`, 'multi-agent')
+          log.info(`[spawnAgent] Agent ${agentId} waiting for dependencies (timeout: ${dependencyTimeoutMs}ms)`, 'multi-agent')
+
           return new Promise<boolean>((resolve) => {
             let activeTimeMs = 0
             let lastCheckTime = Date.now()
             let wasPaused = false
+            let resolved = false
+
+            // WF-008: Cleanup helper to ensure proper resource cleanup
+            const cleanup = () => {
+              if (checkInterval) clearInterval(checkInterval)
+              // Clear the dependency wait timeout tracker
+              get()._clearDependencyWaitTimeout(agentId)
+            }
+
+            // WF-008: Safe resolve to prevent multiple resolutions
+            const safeResolve = (value: boolean) => {
+              if (resolved) return
+              resolved = true
+              cleanup()
+              resolve(value)
+            }
 
             const checkInterval = setInterval(() => {
               const now = Date.now()
               const currentlyPaused = isPaused()
 
+              // WF-006: Also check if pause is in flight - skip processing during pause
+              const pauseInProgress = get().pauseInFlight[agentId]
+              if (pauseInProgress) {
+                return // Skip processing while pause is being applied
+              }
+
               if (shouldAbortStart()) {
-                clearInterval(checkInterval)
-                resolve(false)
+                safeResolve(false)
                 return
               }
 
@@ -407,51 +462,65 @@ export const useMultiAgentStore = create<MultiAgentState>()(
                 return
               }
 
-              // Check timeout based on active time only
+              // WF-008: Check timeout based on active time only with improved error message
               if (dependencyTimeoutMs > 0 && activeTimeMs >= dependencyTimeoutMs) {
-                clearInterval(checkInterval)
+                log.warn(`[spawnAgent] Agent ${agentId} dependency wait timed out after ${activeTimeMs}ms`, 'multi-agent')
                 set((state) => {
                   const agent = state.agents[agentId]
                   if (agent) {
+                    const pendingDeps = dependencies.filter((depId) => {
+                      const dep = state.agents[depId]
+                      return dep && dep.status !== 'completed'
+                    })
                     agent.status = 'error'
                     agent.completedAt = new Date()
                     agent.error = {
-                      message: 'Dependency wait timed out',
+                      message: `依赖等待超时 (${Math.round(activeTimeMs / 1000)}秒)，请检查依赖代理状态后重试`,
                       code: 'DEPENDENCY_TIMEOUT',
-                      recoverable: true,
+                      recoverable: true, // WF-008: Explicitly recoverable
+                      details: {
+                        waitedMs: activeTimeMs,
+                        timeoutMs: dependencyTimeoutMs,
+                        pendingDependencies: pendingDeps,
+                      },
                     }
                   }
                 })
-                resolve(false)
+                safeResolve(false)
                 return
               }
 
               const currentState = get()
-              const { allCompleted, hasFailed } = evaluateDependencies(currentState)
+              const { allCompleted, hasFailed, failedDeps } = evaluateDependencies(currentState)
 
               if (hasFailed) {
-                clearInterval(checkInterval)
                 set((state) => {
                   const agent = state.agents[agentId]
                   if (agent) {
                     agent.status = 'error'
                     agent.completedAt = new Date()
                     agent.error = {
-                      message: '依赖代理执行失败或被取消',
+                      message: `依赖代理执行失败或被取消: ${failedDeps.join(', ')}`,
                       code: 'DEPENDENCY_FAILED',
-                      recoverable: false,
+                      recoverable: true, // WF-008: Allow retry when dependencies fail
+                      details: { failedDependencies: failedDeps },
                     }
                   }
                 })
-                resolve(false)
+                safeResolve(false)
                 return
               }
 
               if (allCompleted) {
-                clearInterval(checkInterval)
-                resolve(true)
+                safeResolve(true)
               }
             }, 2000)
+
+            // WF-008: Register this wait operation for tracking/cleanup
+            set((s) => {
+              // Store a reference to track this wait is in progress
+              s.dependencyWaitTimeouts[agentId] = setTimeout(() => {}, 0) as ReturnType<typeof setTimeout>
+            })
           })
         }
 
@@ -572,7 +641,31 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
             const threadId = response.thread.id
 
-            // Update agent with threadId
+            // P0-2 Fix: Use transactional approach for registration
+            // Step 1: Try to register with thread store first (external operation)
+            // If this fails, we haven't modified any state yet
+            try {
+              useThreadStore.getState().registerAgentThread(response.thread, agentId, { focus: false })
+            } catch (registrationError) {
+              // Registration failed - don't update any state, just report error
+              log.error(`[spawnAgent] Failed to register thread ${threadId} for agent ${agentId}: ${registrationError}`, 'multi-agent')
+              set((state) => {
+                const agent = state.agents[agentId]
+                if (agent) {
+                  agent.status = 'error'
+                  agent.completedAt = new Date()
+                  agent.error = {
+                    message: `Thread registration failed: ${registrationError instanceof Error ? registrationError.message : String(registrationError)}`,
+                    code: 'THREAD_REGISTRATION_FAILED',
+                    recoverable: true,
+                  }
+                }
+              })
+              resolveThreadReady!(false)
+              return
+            }
+
+            // Step 2: Update agent state and mapping atomically after successful registration
             set((state) => {
               const agent = state.agents[agentId]
               if (agent) {
@@ -586,15 +679,36 @@ export const useMultiAgentStore = create<MultiAgentState>()(
               state.agentMapping[threadId] = agentId
             })
 
-            useThreadStore.getState().registerAgentThread(response.thread, agentId, { focus: false })
-
-            // Send initial task message
+            // Step 3: Send initial task message
             const agentTaskMessage = buildAgentTaskMessage(task)
-            await threadApi.sendMessage(threadId, agentTaskMessage, [], [], {
-              model,
-              approvalPolicy,
-              sandboxPolicy,
-            })
+            try {
+              await threadApi.sendMessage(threadId, agentTaskMessage, [], [], {
+                model,
+                approvalPolicy,
+                sandboxPolicy,
+              })
+            } catch (sendError) {
+              // Message send failed - rollback: unregister thread and update agent state
+              log.error(`[spawnAgent] Failed to send initial message for agent ${agentId}: ${sendError}`, 'multi-agent')
+              useThreadStore.getState().unregisterAgentThread(threadId)
+              set((state) => {
+                const agent = state.agents[agentId]
+                if (agent) {
+                  agent.status = 'error'
+                  agent.completedAt = new Date()
+                  agent.threadId = ''
+                  agent.threadStoreRef = ''
+                  agent.error = {
+                    message: `Failed to send initial message: ${sendError instanceof Error ? sendError.message : String(sendError)}`,
+                    code: 'INITIAL_MESSAGE_FAILED',
+                    recoverable: true,
+                  }
+                }
+                delete state.agentMapping[threadId]
+              })
+              resolveThreadReady!(false)
+              return
+            }
 
             log.info(`[spawnAgent] Agent ${agentId} started with thread ${threadId}`, 'multi-agent')
             resolveThreadReady!(true)
@@ -710,23 +824,49 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
     /**
      * Pause an agent
+     * WF-006 fix: Added atomic pause flag to prevent race conditions with incoming events
      */
     pauseAgent: async (id: string) => {
       const agent = get().agents[id]
       if (!agent) return
 
-      // Save original state for rollback on failure
+      // WF-006: Check if pause is already in flight (prevent duplicate pause operations)
+      if (get().pauseInFlight[id]) {
+        log.warn(`[pauseAgent] Pause already in flight for agent ${id}, ignoring duplicate call`, 'multi-agent')
+        return
+      }
+
+      // WF-006: Atomically claim the pause lock and set pausing state
+      // This ensures incoming events see the pausing state immediately
+      let claimed = false
       const originalStatus = agent.status
       const originalInterruptReason = agent.interruptReason
       const originalProgressDescription = agent.progress.description
 
+      set((state) => {
+        if (state.pauseInFlight[id]) return
+        state.pauseInFlight[id] = true
+        claimed = true
+        // Immediately mark as pausing to signal incoming events
+        const current = state.agents[id]
+        if (current) {
+          current.progress.description = '正在暂停...'
+        }
+      })
+
+      if (!claimed) {
+        log.warn(`[pauseAgent] Failed to claim pause lock for agent ${id}`, 'multi-agent')
+        return
+      }
+
       try {
-        // First, interrupt the thread (if running)
+        // Interrupt the thread (if running) - this is the async operation
         if (agent.threadId && agent.status === 'running') {
           await threadApi.interrupt(agent.threadId)
         }
 
-        // Then update state after successful interrupt
+        // WF-006: Complete the pause operation atomically
+        // Any events that arrived during the interrupt will see interruptReason='pause'
         set((state) => {
           const current = state.agents[id]
           if (current) {
@@ -747,6 +887,11 @@ export const useMultiAgentStore = create<MultiAgentState>()(
             current.interruptReason = originalInterruptReason
             current.progress.description = originalProgressDescription
           }
+        })
+      } finally {
+        // WF-006: Always release the pause lock
+        set((state) => {
+          delete state.pauseInFlight[id]
         })
       }
     },
@@ -846,16 +991,27 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
     /**
      * Remove an agent from the store
+     * P0-3 Fix: Correct cleanup order - first stop/cleanup resources, then delete mapping
+     * Order: 1. Get agent info while mapping exists, 2. Unregister from thread store,
+     *        3. Delete mapping and agent state atomically
      */
     removeAgent: (id: string) => {
       const agent = get().agents[id]
-      if (agent?.threadId) {
-        useThreadStore.getState().unregisterAgentThread(agent.threadId)
+      if (!agent) return
+
+      const threadId = agent.threadId
+
+      // Step 1: Unregister from thread store first (cleans up eventVersions)
+      // This must happen while agentMapping still exists so thread store can
+      // properly identify this as an agent thread
+      if (threadId) {
+        useThreadStore.getState().unregisterAgentThread(threadId)
       }
 
+      // Step 2: Delete mapping and agent state atomically after external cleanup
       set((state) => {
-        if (agent?.threadId) {
-          delete state.agentMapping[agent.threadId]
+        if (threadId) {
+          delete state.agentMapping[threadId]
         }
         delete state.agents[id]
         state.agentOrder = state.agentOrder.filter((aid) => aid !== id)
@@ -864,34 +1020,49 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
     /**
      * Clear all agents
+     * P0-003 Fix: Ensure complete cleanup of all related resources including:
+     * - Interrupt all agent threads
+     * - Unregister from thread store (which also cleans up eventVersions)
+     * - Clear agents, agentOrder, and agentMapping atomically
+     * - Clean up any orphaned mappings that might exist
      */
     clearAgents: async () => {
-      const agents = Object.values(get().agents)
+      const state = get()
+      const agents = Object.values(state.agents)
 
-      // Interrupt all threads that have a threadId (not just running ones)
-      // This ensures pending agents with threads are also properly cleaned up
-      for (const agent of agents) {
-        if (agent.threadId) {
-          try {
-            await threadApi.interrupt(agent.threadId)
-          } catch (error) {
-            log.error(`[clearAgents] Failed to interrupt thread ${agent.threadId}: ${error}`, 'multi-agent')
-          }
+      // Collect all threadIds from agents
+      const agentThreadIds = agents
+        .map((agent) => agent.threadId)
+        .filter((id): id is string => !!id)
+
+      // Also include any orphaned mappings that might exist (defensive cleanup)
+      const mappedThreadIds = Object.keys(state.agentMapping)
+      const allThreadIds = [...new Set([...agentThreadIds, ...mappedThreadIds])]
+
+      // Step 1: Interrupt all threads (stop running operations)
+      for (const threadId of allThreadIds) {
+        try {
+          await threadApi.interrupt(threadId)
+        } catch (error) {
+          log.error(`[clearAgents] Failed to interrupt thread ${threadId}: ${error}`, 'multi-agent')
         }
       }
 
-      // Then unregister all agent threads
-      for (const agent of agents) {
-        if (agent.threadId) {
-          useThreadStore.getState().unregisterAgentThread(agent.threadId)
-        }
+      // Step 2: Unregister all agent threads from thread store
+      // This also cleans up eventVersions via cleanupEventVersion
+      const threadStore = useThreadStore.getState()
+      for (const threadId of allThreadIds) {
+        threadStore.unregisterAgentThread(threadId)
       }
 
-      set((state) => {
-        state.agents = {}
-        state.agentOrder = []
-        state.agentMapping = {}
+      // Step 3: Clear all state atomically
+      set((s) => {
+        s.agents = {}
+        s.agentOrder = []
+        s.agentMapping = {}
       })
+
+      log.info(`[clearAgents] Cleared ${agents.length} agents and ${allThreadIds.length} threads`, 'multi-agent')
     },
 
     // ==================== Workflow Management ====================
@@ -1100,6 +1271,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
     /**
      * Approve a workflow phase
+     * WF-009 fix: Added re-entrancy protection to prevent double execution
      */
     approvePhase: async (phaseId: string) => {
       const state = get()
@@ -1107,13 +1279,35 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
       if (!workflow) return
 
+      // WF-009: Check if approval is already in flight (prevent double execution)
+      if (state.approvalInFlight[phaseId]) {
+        log.warn(`[approvePhase] Approval already in flight for phase ${phaseId}, ignoring duplicate call`, 'multi-agent')
+        return
+      }
+
       const phaseIndex = workflow.phases.findIndex((p) => p.id === phaseId)
       if (phaseIndex === -1) return
+
+      // WF-009: Mark approval as in-flight atomically
+      let claimed = false
+      set((s) => {
+        if (s.approvalInFlight[phaseId]) return
+        s.approvalInFlight[phaseId] = true
+        claimed = true
+      })
+
+      if (!claimed) {
+        log.warn(`[approvePhase] Failed to claim approval lock for phase ${phaseId}`, 'multi-agent')
+        return
+      }
 
       const nextPhase = workflow.phases[phaseIndex + 1]
       const hasNextPhase = !!nextPhase
 
       try {
+        // WF-001: Clear approval timeout since user responded
+        get()._clearApprovalTimeout(phaseId)
+
         // Atomic state update: mark phase completed and update workflow state in one operation
         set((s) => {
           if (!s.workflow) return
@@ -1144,8 +1338,9 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         // All execution logic is handled by this store.
         // The engine.approvePhase() method has been removed to avoid double-execution.
       } finally {
-        // Always reset phaseCompletionInFlight after approvePhase completes
+        // WF-009: Always release approval lock and reset phaseCompletionInFlight
         set((s) => {
+          delete s.approvalInFlight[phaseId]
           s.phaseCompletionInFlight = null
         })
       }
@@ -1153,12 +1348,27 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
     /**
      * Reject a workflow phase
+     * WF-009 fix: Added re-entrancy protection
      */
     rejectPhase: (phaseId: string, reason?: string) => {
-      set((state) => {
-        if (!state.workflow) return
+      const state = get()
 
-        const phase = state.workflow.phases.find((p) => p.id === phaseId)
+      // WF-009: Check if approval is already in flight
+      if (state.approvalInFlight[phaseId]) {
+        log.warn(`[rejectPhase] Approval already in flight for phase ${phaseId}, ignoring duplicate call`, 'multi-agent')
+        return
+      }
+
+      // WF-001: Clear approval timeout since user responded
+      get()._clearApprovalTimeout(phaseId)
+
+      set((s) => {
+        if (!s.workflow) return
+
+        // WF-009: Mark as in-flight during the operation
+        s.approvalInFlight[phaseId] = true
+
+        const phase = s.workflow.phases.find((p) => p.id === phaseId)
         if (phase) {
           phase.status = 'failed'
           phase.completedAt = new Date()
@@ -1167,8 +1377,11 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           }
         }
 
-        state.workflow.status = 'failed'
-        state.workflow.completedAt = new Date()
+        s.workflow.status = 'failed'
+        s.workflow.completedAt = new Date()
+
+        // Release lock immediately since this is synchronous
+        delete s.approvalInFlight[phaseId]
       })
     },
 
@@ -1176,24 +1389,33 @@ export const useMultiAgentStore = create<MultiAgentState>()(
      * Cancel the workflow
      */
     cancelWorkflow: async () => {
-      const workflow = get().workflow
+      const state = get()
+      const workflow = state.workflow
       if (!workflow) return
 
+      // Clear all approval timeouts
+      for (const phaseId of Object.keys(state.approvalTimeouts)) {
+        get()._clearApprovalTimeout(phaseId)
+      }
+
       // Cancel all running agents
-      const agents = Object.values(get().agents)
+      const agents = Object.values(state.agents)
       for (const agent of agents) {
         if (agent.status === 'running') {
           await get().cancelAgent(agent.id)
         }
       }
 
-      set((state) => {
-        if (state.workflow) {
-          state.workflow.status = 'cancelled'
-          state.workflow.completedAt = new Date()
+      set((s) => {
+        if (s.workflow) {
+          s.workflow.status = 'cancelled'
+          s.workflow.completedAt = new Date()
         }
         // Reset phaseCompletionInFlight when workflow is cancelled
-        state.phaseCompletionInFlight = null
+        s.phaseCompletionInFlight = null
+        // Clear approval tracking state
+        s.approvalInFlight = {}
+        s.approvalTimeouts = {}
       })
     },
 
@@ -1201,11 +1423,19 @@ export const useMultiAgentStore = create<MultiAgentState>()(
      * Clear the workflow
      */
     clearWorkflow: () => {
-      set((state) => {
-        state.workflow = null
-        state.workflowEngine = null
-        state.previousPhaseOutput = undefined
-        state.phaseCompletionInFlight = null
+      // Clear all approval timeouts before clearing state
+      const state = get()
+      for (const phaseId of Object.keys(state.approvalTimeouts)) {
+        get()._clearApprovalTimeout(phaseId)
+      }
+
+      set((s) => {
+        s.workflow = null
+        s.workflowEngine = null
+        s.previousPhaseOutput = undefined
+        s.phaseCompletionInFlight = null
+        s.approvalInFlight = {}
+        s.approvalTimeouts = {}
       })
     },
 
@@ -1363,6 +1593,13 @@ export const useMultiAgentStore = create<MultiAgentState>()(
             }
             s.previousPhaseOutput = phaseOutput
           })
+
+          // WF-001: Start approval timeout timer
+          const approvalTimeoutMs = latestPhase.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
+          if (approvalTimeoutMs > 0) {
+            get()._startApprovalTimeout(phaseId, approvalTimeoutMs)
+          }
+
           // UI will show approval dialog - don't auto-advance
           return
         }
@@ -1397,14 +1634,166 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       }
     },
 
+    /**
+     * Start approval timeout timer for a phase
+     * WF-001 fix: Prevents indefinite waiting for user approval
+     */
+    _startApprovalTimeout: (phaseId: string, timeoutMs: number = DEFAULT_APPROVAL_TIMEOUT_MS) => {
+      // Clear any existing timeout for this phase
+      get()._clearApprovalTimeout(phaseId)
+
+      log.info(`[_startApprovalTimeout] Starting ${timeoutMs}ms timeout for phase ${phaseId}`, 'multi-agent')
+
+      const timeoutId = setTimeout(() => {
+        const state = get()
+        const workflow = state.workflow
+
+        // Validate state before timing out
+        if (!workflow || workflow.status !== 'running') {
+          log.info(`[_startApprovalTimeout] Timeout fired but workflow not running, ignoring`, 'multi-agent')
+          return
+        }
+
+        const phase = workflow.phases.find((p) => p.id === phaseId)
+        if (!phase) {
+          log.info(`[_startApprovalTimeout] Timeout fired but phase ${phaseId} not found, ignoring`, 'multi-agent')
+          return
+        }
+
+        // Only timeout if phase is still waiting for approval (completed but not yet advanced)
+        const currentPhase = workflow.phases[workflow.currentPhaseIndex]
+        if (!currentPhase || currentPhase.id !== phaseId) {
+          log.info(`[_startApprovalTimeout] Timeout fired but phase ${phaseId} is no longer current, ignoring`, 'multi-agent')
+          return
+        }
+
+        // Check if approval is already in flight
+        if (state.approvalInFlight[phaseId]) {
+          log.info(`[_startApprovalTimeout] Timeout fired but approval in flight for ${phaseId}, ignoring`, 'multi-agent')
+          return
+        }
+
+        log.warn(`[_startApprovalTimeout] Approval timeout for phase ${phaseId}, marking as timed out`, 'multi-agent')
+
+        // Mark phase as timed out (using 'failed' status with specific output)
+        set((s) => {
+          if (!s.workflow) return
+
+          const p = s.workflow.phases.find((wp) => wp.id === phaseId)
+          if (p) {
+            p.status = 'failed'
+            p.completedAt = new Date()
+            p.output = `审批超时：用户在 ${timeoutMs / 1000} 秒内未响应`
+          }
+
+          s.workflow.status = 'failed'
+          s.workflow.completedAt = new Date()
+
+          // Clean up timeout reference
+          delete s.approvalTimeouts[phaseId]
+        })
+      }, timeoutMs)
+
+      // Store timeout reference
+      set((s) => {
+        s.approvalTimeouts[phaseId] = timeoutId
+      })
+    },
+
+    /**
+     * Clear approval timeout timer for a phase
+     */
+    _clearApprovalTimeout: (phaseId: string) => {
+      const state = get()
+      const timeoutId = state.approvalTimeouts[phaseId]
+
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        log.info(`[_clearApprovalTimeout] Cleared timeout for phase ${phaseId}`, 'multi-agent')
+
+        set((s) => {
+          delete s.approvalTimeouts[phaseId]
+        })
+      }
+    },
+
+    // ==================== WF-006: Pause Atomicity Helpers ====================
+
+    /**
+     * Check if a pause operation is in flight for an agent
+     * WF-006 fix: Prevents race conditions during pause operations
+     */
+    _isPauseInFlight: (agentId: string) => {
+      return get().pauseInFlight[agentId] === true
+    },
+
+    // ==================== WF-008: Dependency Timeout Helpers ====================
+
+    /**
+     * Clear dependency wait timeout for an agent
+     * WF-008 fix: Cleanup helper for dependency wait timeouts
+     */
+    _clearDependencyWaitTimeout: (agentId: string) => {
+      const state = get()
+      const timeoutId = state.dependencyWaitTimeouts[agentId]
+
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        log.info(`[_clearDependencyWaitTimeout] Cleared timeout for agent ${agentId}`, 'multi-agent')
+
+        set((s) => {
+          delete s.dependencyWaitTimeouts[agentId]
+        })
+      }
+    },
+
+    /**
+     * Retry dependency wait for an agent that timed out
+     * WF-008 fix: Allows user to retry after dependency timeout
+     */
+    retryDependencyWait: async (agentId: string) => {
+      const agent = get().agents[agentId]
+      if (!agent) return
+
+      // Only retry if agent failed due to dependency timeout
+      if (agent.status !== 'error' || agent.error?.code !== 'DEPENDENCY_TIMEOUT') {
+        log.warn(`[retryDependencyWait] Agent ${agentId} is not in dependency timeout state`, 'multi-agent')
+        return
+      }
+
+      log.info(`[retryDependencyWait] Retrying dependency wait for agent ${agentId}`, 'multi-agent')
+
+      // Reset agent state and re-spawn
+      const newAgentId = await get().spawnAgent(agent.type, agent.task, agent.dependencies, agent.config)
+      if (newAgentId) {
+        // Remove the old timed out agent
+        get().removeAgent(agentId)
+        log.info(`[retryDependencyWait] Agent ${agentId} replaced with new agent ${newAgentId}`, 'multi-agent')
+      } else {
+        log.error(`[retryDependencyWait] Failed to respawn agent ${agentId}`, 'multi-agent')
+      }
+    },
+
     // ==================== Reset ====================
 
     /**
      * Reset all state
      */
     reset: () => {
+      const state = get()
+
+      // Clear all approval timeouts before resetting
+      for (const phaseId of Object.keys(state.approvalTimeouts)) {
+        get()._clearApprovalTimeout(phaseId)
+      }
+
+      // Clear all dependency wait timeouts before resetting
+      for (const agentId of Object.keys(state.dependencyWaitTimeouts)) {
+        get()._clearDependencyWaitTimeout(agentId)
+      }
+
       // Interrupt all running agent threads
-      const agents = Object.values(get().agents)
+      const agents = Object.values(state.agents)
       const threadIds: string[] = []
 
       for (const agent of agents) {
@@ -1424,16 +1813,21 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         threadStore.unregisterAgentThread(threadId)
       }
 
-      set((state) => {
-        state.config = defaultConfig
-        state.workingDirectory = ''
-        state.agents = {}
-        state.agentOrder = []
-        state.agentMapping = {}
-        state.workflow = null
-        state.workflowEngine = null
-        state.previousPhaseOutput = undefined
-        state.phaseCompletionInFlight = null
+      set((s) => {
+        s.config = defaultConfig
+        s.workingDirectory = ''
+        s.agents = {}
+        s.agentOrder = []
+        s.agentMapping = {}
+        s.workflow = null
+        s.workflowEngine = null
+        s.previousPhaseOutput = undefined
+        s.phaseCompletionInFlight = null
+        // Clear all approval and timeout tracking state
+        s.approvalInFlight = {}
+        s.approvalTimeouts = {}
+        s.pauseInFlight = {}
+        s.dependencyWaitTimeouts = {}
       })
     },
   }))

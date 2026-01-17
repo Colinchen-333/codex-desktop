@@ -10,7 +10,7 @@
  * - Quick start dialogs for workflow/agent creation
  */
 
-import { useState, useMemo, useCallback, useRef } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { X, Plus, Play, Bot, Search, FileCode, Terminal, FileText, TestTube, AlertTriangle, Loader2 } from 'lucide-react'
 import { WorkflowStageHeader } from './WorkflowStageHeader'
 import { AgentGridView } from './AgentGridView'
@@ -53,6 +53,9 @@ export function MultiAgentView() {
   const [operatingAgentId, setOperatingAgentId] = useState<string | null>(null)
   const [confirmCancelAgentId, setConfirmCancelAgentId] = useState<string | null>(null)
 
+  // Ref to track if an operation is in flight (for debounce protection)
+  const operationInFlightRef = useRef<boolean>(false)
+
   // Track approval dialog - dismissed phase IDs to prevent re-showing
   const [dismissedApprovalPhaseIds, setDismissedApprovalPhaseIds] = useState<Set<string>>(new Set())
 
@@ -72,6 +75,13 @@ export function MultiAgentView() {
   const selectedAgent = selectedAgentId
     ? agents.find((a) => a.id === selectedAgentId)
     : null
+
+  // P0-002: Clean up selectedAgentId when the selected agent is deleted
+  useEffect(() => {
+    if (selectedAgentId && !agents.find((a) => a.id === selectedAgentId)) {
+      setSelectedAgentId(null)
+    }
+  }, [selectedAgentId, agents])
 
   // Check if there's a running workflow
   const hasRunningWorkflow = workflow && workflow.status === 'running'
@@ -119,8 +129,12 @@ export function MultiAgentView() {
   }
 
   // Actually cancel the agent after confirmation
+  // P0-008: Added debounce protection using operationInFlightRef
   const handleConfirmCancel = useCallback(async () => {
     if (!confirmCancelAgentId) return
+    // Debounce protection: prevent double-click
+    if (operationInFlightRef.current) return
+    operationInFlightRef.current = true
 
     setOperatingAgentId(confirmCancelAgentId)
     try {
@@ -128,6 +142,7 @@ export function MultiAgentView() {
     } finally {
       setOperatingAgentId(null)
       setConfirmCancelAgentId(null)
+      operationInFlightRef.current = false
     }
   }, [confirmCancelAgentId, cancelAgent])
 
@@ -135,21 +150,33 @@ export function MultiAgentView() {
     setConfirmCancelAgentId(null)
   }
 
+  // P0-008: Added debounce protection using operationInFlightRef
   const handlePause = useCallback(async (agentId: string) => {
+    // Debounce protection: prevent double-click
+    if (operationInFlightRef.current) return
+    operationInFlightRef.current = true
+
     setOperatingAgentId(agentId)
     try {
       await pauseAgent(agentId)
     } finally {
       setOperatingAgentId(null)
+      operationInFlightRef.current = false
     }
   }, [pauseAgent])
 
+  // P0-008: Added debounce protection using operationInFlightRef
   const handleResume = useCallback(async (agentId: string) => {
+    // Debounce protection: prevent double-click
+    if (operationInFlightRef.current) return
+    operationInFlightRef.current = true
+
     setOperatingAgentId(agentId)
     try {
       await resumeAgent(agentId)
     } finally {
       setOperatingAgentId(null)
+      operationInFlightRef.current = false
     }
   }, [resumeAgent])
 
@@ -169,9 +196,20 @@ export function MultiAgentView() {
     }
   }
 
-  const handleRetry = (agentId: string) => {
-    void retryAgent(agentId)
-  }
+  // P0-008: Added debounce protection using operationInFlightRef
+  const handleRetry = useCallback(async (agentId: string) => {
+    // Debounce protection: prevent double-click
+    if (operationInFlightRef.current) return
+    operationInFlightRef.current = true
+
+    setOperatingAgentId(agentId)
+    try {
+      await retryAgent(agentId)
+    } finally {
+      setOperatingAgentId(null)
+      operationInFlightRef.current = false
+    }
+  }, [retryAgent])
 
   // Workflow dialog handlers
   const handleOpenWorkflowDialog = () => {
@@ -601,7 +639,7 @@ export function MultiAgentView() {
                   onCancel={handleRequestCancel}
                   onPause={(id) => void handlePause(id)}
                   onResume={(id) => void handleResume(id)}
-                  onRetry={handleRetry}
+                  onRetry={(id) => void handleRetry(id)}
                   operatingAgentId={operatingAgentId}
                 />
               )}
