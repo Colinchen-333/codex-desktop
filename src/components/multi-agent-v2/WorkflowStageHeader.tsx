@@ -174,6 +174,11 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
                       {phase.agentIds.length} 代理
+                      {typeof phase.metadata?.spawnFailedCount === 'number' && phase.metadata.spawnFailedCount > 0 && (
+                        <span className="text-red-500 dark:text-red-400 ml-1">
+                          ({phase.metadata.spawnFailedCount} 失败)
+                        </span>
+                      )}
                     </p>
 
                     {phase.requiresApproval &&

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { CheckCircle, XCircle, RotateCcw, ChevronDown, ChevronUp, ChevronRight, Terminal, FileCode, AlertCircle, Activity } from 'lucide-react'
+import { CheckCircle, XCircle, RotateCcw, ChevronDown, ChevronUp, ChevronRight, Terminal, FileCode, AlertCircle, Activity, Loader2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import type { WorkflowPhase, AgentDescriptor } from '../../stores/multi-agent-v2'
+import { useMultiAgentStore, type WorkflowPhase, type AgentDescriptor } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
 import { getAgentTypeDisplayName, getAgentTypeIcon } from '../../lib/agent-utils'
 import { useToast } from '../ui/Toast'
@@ -42,6 +42,7 @@ export function ApprovalDialog({
   const phaseAgents = agents.filter((a) => phase.agentIds.includes(a.id))
   const hasErrors = phaseAgents.some((a) => a.status === 'error')
   const retryButtonRef = useRef<HTMLButtonElement>(null)
+  const approvalInFlight = useMultiAgentStore((state) => state.approvalInFlight[phase.id] ?? false)
 
   const stats = phaseAgents.reduce(
     (acc, agent) => {
@@ -289,10 +290,20 @@ export function ApprovalDialog({
                   </button>
                   <button
                     onClick={onApprove}
-                    className="px-6 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors flex items-center space-x-2"
+                    disabled={approvalInFlight}
+                    className="px-6 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <CheckCircle className="w-4 h-4" />
-                    <span>批准并继续</span>
+                    {approvalInFlight ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>处理中...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-4 h-4" />
+                        <span>批准并继续</span>
+                      </>
+                    )}
                   </button>
                 </>
               ) : (
