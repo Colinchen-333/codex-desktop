@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { CheckCircle, XCircle, RotateCcw, ChevronDown, ChevronUp, Terminal, FileCode, AlertCircle } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { CheckCircle, XCircle, RotateCcw, ChevronDown, ChevronUp, Terminal, FileCode, AlertCircle, Activity } from 'lucide-react'
+import { cn } from '../../lib/utils'
 import type { WorkflowPhase, AgentDescriptor } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
 import { getAgentTypeDisplayName, getAgentTypeIcon } from '../../lib/agent-utils'
@@ -13,6 +14,13 @@ interface ApprovalDialogProps {
   onReject: (reason: string) => void
   onRejectAndRetry?: (reason: string) => void
 }
+
+const REJECTION_REASONS = [
+  "测试失败需修复",
+  "变更范围过大，需拆分",
+  "不符合项目架构",
+  "缺少回滚方案"
+]
 
 export function ApprovalDialog({
   phase,
@@ -29,9 +37,69 @@ export function ApprovalDialog({
     return initial
   })
   const { showToast } = useToast()
+  const threads = useThreadStore((state) => state.threads)
 
   const phaseAgents = agents.filter((a) => phase.agentIds.includes(a.id))
   const hasErrors = phaseAgents.some((a) => a.status === 'error')
+  const retryButtonRef = useRef<HTMLButtonElement>(null)
+
+  const stats = phaseAgents.reduce(
+    (acc, agent) => {
+      if (agent.status === 'error') {
+        acc.failed++
+      } else {
+        acc.success++
+      }
+
+      const thread = threads[agent.threadId]
+      if (thread) {
+        thread.itemOrder.forEach((id) => {
+          const item = thread.items[id]
+          if (!item) return
+          if (item.type === 'fileChange') {
+            const content = item.content as any
+            if (content.changes) {
+              acc.files += content.changes.length
+            }
+          } else if (item.type === 'commandExecution') {
+            acc.commands++
+          }
+        })
+      }
+      return acc
+    },
+    { files: 0, commands: 0, success: 0, failed: 0 }
+  )
+
+  useEffect(() => {
+    if (isRejectMode && hasErrors && retryButtonRef.current) {
+      retryButtonRef.current.focus()
+    }
+  }, [isRejectMode, hasErrors])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isRejectMode) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setIsRejectMode(false)
+          setRejectReason('')
+        }
+      } else {
+        if (e.key === 'Enter' || (e.key === 'Enter' && e.metaKey)) {
+          e.preventDefault()
+          onApprove()
+        }
+        if (e.key.toLowerCase() === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          e.preventDefault()
+          setIsRejectMode(true)
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isRejectMode, onApprove])
 
   const toggleAgentExpanded = (agentId: string) => {
     setExpandedAgents((prev) => ({
@@ -81,6 +149,39 @@ export function ApprovalDialog({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div className="mb-6 bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              变更概览
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center text-center">
+                <span className="text-gray-500 dark:text-gray-400 text-xs mb-1 flex items-center gap-1">
+                  <FileCode className="w-3 h-3" /> 文件
+                </span>
+                <span className="text-xl font-bold text-gray-900 dark:text-gray-100">{stats.files}</span>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center text-center">
+                <span className="text-gray-500 dark:text-gray-400 text-xs mb-1 flex items-center gap-1">
+                  <Terminal className="w-3 h-3" /> 命令
+                </span>
+                <span className="text-xl font-bold text-gray-900 dark:text-gray-100">{stats.commands}</span>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center text-center">
+                <span className="text-gray-500 dark:text-gray-400 text-xs mb-1 flex items-center gap-1">
+                  <CheckCircle className="w-3 h-3 text-green-500" /> 成功
+                </span>
+                <span className="text-xl font-bold text-green-600 dark:text-green-400">{stats.success}</span>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center text-center">
+                <span className="text-gray-500 dark:text-gray-400 text-xs mb-1 flex items-center gap-1">
+                  <XCircle className="w-3 h-3 text-red-500" /> 失败
+                </span>
+                <span className="text-xl font-bold text-red-600 dark:text-red-400">{stats.failed}</span>
+              </div>
+            </div>
+          </div>
+
           {/* Error Banner */}
           {hasErrors && (
             <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start gap-3">
@@ -128,6 +229,19 @@ export function ApprovalDialog({
               <label className="block text-sm font-medium text-red-800 dark:text-red-300 mb-2">
                 拒绝原因（将用于指导重试）
               </label>
+              
+              <div className="flex flex-wrap gap-2 mb-3">
+                {REJECTION_REASONS.map((reason) => (
+                  <button
+                    key={reason}
+                    onClick={() => setRejectReason((prev) => (prev ? `${prev}\n${reason}` : reason))}
+                    className="px-2 py-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-md hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors border border-red-200 dark:border-red-800"
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
+
               <textarea
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
@@ -143,8 +257,25 @@ export function ApprovalDialog({
         {/* Footer Actions */}
         <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
           <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-500 dark:text-gray-400">
-              {isRejectMode ? '拒绝后可选择立即重试此阶段' : '审批后将继续执行下一阶段'}
+            <div className="flex flex-col gap-1">
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                {isRejectMode ? (
+                  '拒绝后可选择立即重试此阶段'
+                ) : hasErrors ? (
+                  <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                    <AlertCircle className="w-4 h-4" /> 批准将继续执行，部分代理存在错误
+                  </span>
+                ) : (
+                  '审批后将继续执行下一阶段'
+                )}
+              </div>
+              <div className="text-xs text-gray-400 dark:text-gray-500 font-mono hidden md:block">
+                {isRejectMode ? (
+                  <span>Esc 取消</span>
+                ) : (
+                  <span><span className="font-sans">⏎</span> 批准 · R 拒绝 · Esc 取消</span>
+                )}
+              </div>
             </div>
             <div className="flex items-center space-x-3">
               {!isRejectMode ? (
@@ -171,17 +302,28 @@ export function ApprovalDialog({
                       setIsRejectMode(false)
                       setRejectReason('')
                     }}
-                    className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                    className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
                   >
                     取消
                   </button>
                   {onRejectAndRetry && (
                     <button
+                      ref={retryButtonRef}
                       onClick={handleRejectAndRetry}
-                      className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors flex items-center space-x-2"
+                      className={cn(
+                        "px-4 py-2 rounded-lg transition-colors flex items-center space-x-2 relative group",
+                        hasErrors
+                          ? "bg-amber-500 text-white hover:bg-amber-600 ring-2 ring-amber-500 ring-offset-2 ring-offset-white dark:ring-offset-gray-800"
+                          : "bg-amber-500 text-white hover:bg-amber-600"
+                      )}
                     >
                       <RotateCcw className="w-4 h-4" />
                       <span>拒绝并重试</span>
+                      {hasErrors && (
+                        <span className="absolute -top-2 -right-2 px-1.5 py-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full shadow-sm border border-white dark:border-gray-800 z-10">
+                          推荐
+                        </span>
+                      )}
                     </button>
                   )}
                   <button
