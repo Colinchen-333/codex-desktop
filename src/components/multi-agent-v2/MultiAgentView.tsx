@@ -96,10 +96,9 @@ export function MultiAgentView() {
     const currentPhase = workflow.phases[workflow.currentPhaseIndex]
     if (!currentPhase) return null
 
-    // Check if phase requires approval, is completed, and not already dismissed
     if (
       currentPhase.requiresApproval &&
-      currentPhase.status === 'completed' &&
+      (currentPhase.status === 'awaiting_approval' || currentPhase.status === 'approval_timeout') &&
       currentPhase.agentIds.length > 0 &&
       !dismissedApprovalPhaseIds.has(currentPhase.id)
     ) {

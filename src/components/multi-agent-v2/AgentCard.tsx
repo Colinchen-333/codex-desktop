@@ -5,7 +5,7 @@
  * Supports dark mode and provides retry functionality
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef, memo } from 'react'
 import { ChevronDown, ChevronUp, X, Eye, Pause, Play, AlertCircle, RotateCcw, Loader2, Bell } from 'lucide-react'
 import type { AgentDescriptor } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
@@ -34,53 +34,57 @@ interface AgentCardProps {
   isOperating?: boolean
 }
 
-export function AgentCard({ agent, onViewDetails, onCancel, onPause, onResume, onRetry, isOperating }: AgentCardProps) {
+function AgentCardComponent({ agent, onViewDetails, onCancel, onPause, onResume, onRetry, isOperating }: AgentCardProps) {
   const [isTaskExpanded, setIsTaskExpanded] = useState(false)
   const threadState = useThreadStore((state) => state.threads[agent.threadId])
 
-  // P0-008: Local operation-in-flight state for debounce protection against rapid double-clicks
   const [localOperationInFlight, setLocalOperationInFlight] = useState(false)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Combined disabled state for buttons - checks both parent and local operation state
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+    }
+  }, [])
+
   const isButtonDisabled = isOperating || localOperationInFlight
 
-  // P0-008: Wrapped handlers with debounce protection
+  const resetOperationState = useCallback(() => {
+    timeoutRef.current = setTimeout(() => {
+      setLocalOperationInFlight(false)
+      timeoutRef.current = null
+    }, 300)
+  }, [])
+
   const handlePause = useCallback(() => {
     if (localOperationInFlight || isOperating) return
     setLocalOperationInFlight(true)
     onPause?.(agent.id)
-    // Reset after a short delay to allow for state updates from parent
-    setTimeout(() => {
-      setLocalOperationInFlight(false)
-    }, 300)
-  }, [agent.id, onPause, isOperating, localOperationInFlight])
+    resetOperationState()
+  }, [agent.id, onPause, isOperating, localOperationInFlight, resetOperationState])
 
   const handleResume = useCallback(() => {
     if (localOperationInFlight || isOperating) return
     setLocalOperationInFlight(true)
     onResume?.(agent.id)
-    setTimeout(() => {
-      setLocalOperationInFlight(false)
-    }, 300)
-  }, [agent.id, onResume, isOperating, localOperationInFlight])
+    resetOperationState()
+  }, [agent.id, onResume, isOperating, localOperationInFlight, resetOperationState])
 
   const handleCancel = useCallback(() => {
     if (localOperationInFlight || isOperating) return
     setLocalOperationInFlight(true)
     onCancel?.(agent.id)
-    setTimeout(() => {
-      setLocalOperationInFlight(false)
-    }, 300)
-  }, [agent.id, onCancel, isOperating, localOperationInFlight])
+    resetOperationState()
+  }, [agent.id, onCancel, isOperating, localOperationInFlight, resetOperationState])
 
   const handleRetry = useCallback(() => {
     if (localOperationInFlight || isOperating) return
     setLocalOperationInFlight(true)
     onRetry?.(agent.id)
-    setTimeout(() => {
-      setLocalOperationInFlight(false)
-    }, 300)
-  }, [agent.id, onRetry, isOperating, localOperationInFlight])
+    resetOperationState()
+  }, [agent.id, onRetry, isOperating, localOperationInFlight, resetOperationState])
 
   const outputLines = extractAgentOutput(threadState, 3)
   const progressPercentage = calculateProgressPercentage(agent.progress)
@@ -337,3 +341,5 @@ export function AgentCard({ agent, onViewDetails, onCancel, onPause, onResume, o
     </div>
   )
 }
+
+export const AgentCard = memo(AgentCardComponent)

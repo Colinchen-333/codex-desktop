@@ -1318,9 +1318,8 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       const phaseIndex = workflow.phases.findIndex((p) => p.id === phaseId)
       if (phaseIndex === -1) return
 
-      // WF-011: Check phase status - allow approval from 'completed' or 'approval_timeout' status
       const phase = workflow.phases[phaseIndex]
-      if (phase.status !== 'completed' && phase.status !== 'approval_timeout') {
+      if (phase.status !== 'awaiting_approval' && phase.status !== 'approval_timeout') {
         log.warn(`[approvePhase] Phase ${phaseId} is not in approvable state (current: ${phase.status})`, 'multi-agent')
         return
       }
@@ -1345,22 +1344,21 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         // WF-001: Clear approval timeout since user responded
         get()._clearApprovalTimeout(phaseId)
 
-        // Atomic state update: mark phase completed and update workflow state in one operation
         set((s) => {
           if (!s.workflow) return
 
-          // Mark current phase as completed
           const p = s.workflow.phases[phaseIndex]
           if (p) {
             p.status = 'completed'
             p.completedAt = p.completedAt ?? new Date()
+            if (p.output) {
+              s.previousPhaseOutput = p.output
+            }
           }
 
-          // Update workflow state based on whether there's a next phase
           if (hasNextPhase) {
             s.workflow.currentPhaseIndex = phaseIndex + 1
           } else {
-            // Workflow completed - no more phases
             s.workflow.status = 'completed'
             s.workflow.completedAt = new Date()
           }
@@ -1400,9 +1398,8 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         return
       }
 
-      // WF-011: Check phase status - allow rejection from 'completed' or 'approval_timeout' status
       const phaseRef = workflow.phases.find((p) => p.id === phaseId)
-      if (!phaseRef || (phaseRef.status !== 'completed' && phaseRef.status !== 'approval_timeout')) {
+      if (!phaseRef || (phaseRef.status !== 'awaiting_approval' && phaseRef.status !== 'approval_timeout')) {
         log.warn(`[rejectPhase] Phase ${phaseId} is not in rejectable state (current: ${phaseRef?.status})`, 'multi-agent')
         return
       }
@@ -1687,13 +1684,12 @@ export const useMultiAgentStore = create<MultiAgentState>()(
             if (s.workflow.currentPhaseIndex !== phaseIndex) return
             const p = s.workflow.phases[s.workflow.currentPhaseIndex]
             if (p && p.id === phaseId) {
-              p.status = 'completed'
+              p.status = 'awaiting_approval'
               if (!p.completedAt) {
                 p.completedAt = new Date()
               }
               p.output = phaseOutput
             }
-            s.previousPhaseOutput = phaseOutput
           })
 
           // WF-001: Start approval timeout timer

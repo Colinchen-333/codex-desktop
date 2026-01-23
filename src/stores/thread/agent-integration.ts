@@ -12,6 +12,12 @@
 
 import { log } from '../../lib/logger'
 
+export type AgentStoreEvent =
+  | { type: 'turnStarted' }
+  | { type: 'turnCompleted'; data: { status?: 'completed' | 'failed' | 'error' | 'interrupted' } }
+  | { type: 'messageDelta'; data: { text?: string } }
+  | { type: 'error'; data: { message?: string; code?: string; recoverable?: boolean } }
+
 // P1 Fix: Lazy initialization to avoid circular dependency
 // The module is loaded synchronously on first access, avoiding the async delay of dynamic import()
 let multiAgentStoreModule: typeof import('../multi-agent-v2') | null = null
@@ -87,10 +93,14 @@ export function cleanupEventVersion(threadId: string): void {
  * P1 Fix: Now uses synchronous lazy initialization instead of async dynamic import
  * P1 Fix: Uses event versioning to handle concurrent turn completion ordering
  */
+export function notifyAgentStore(threadId: string, eventType: 'turnStarted'): void
+export function notifyAgentStore(threadId: string, eventType: 'turnCompleted', data?: { status?: string }): void
+export function notifyAgentStore(threadId: string, eventType: 'messageDelta', data?: { text?: string }): void
+export function notifyAgentStore(threadId: string, eventType: 'error', data?: { message?: string; code?: string; recoverable?: boolean }): void
 export function notifyAgentStore(
   threadId: string,
-  eventType: 'turnStarted' | 'turnCompleted' | 'messageDelta' | 'error',
-  data?: unknown
+  eventType: AgentStoreEvent['type'],
+  data?: { status?: string } | { text?: string } | { message?: string; code?: string; recoverable?: boolean }
 ): void {
   // P0-1 Fix: Assign per-thread version at call time to preserve ordering intent
   const eventVersion = getNextEventVersion(threadId)

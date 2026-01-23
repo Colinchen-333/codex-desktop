@@ -7,7 +7,7 @@
  * - Collapsible completed agents
  */
 
-import { useState } from 'react'
+import { useState, useMemo, memo } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { AgentDescriptor, AgentStatus } from '../../stores/multi-agent-v2'
 import { AgentCard } from './AgentCard'
@@ -57,7 +57,7 @@ const STATUS_GROUP_CONFIG: Record<
   },
 }
 
-export function AgentGridView({
+function AgentGridViewComponent({
   agents,
   onViewDetails,
   onCancel,
@@ -66,8 +66,7 @@ export function AgentGridView({
   onRetry,
   operatingAgentId,
 }: AgentGridViewProps) {
-  // Group agents by status
-  const groupedAgents = groupAgentsByStatus(agents)
+  const groupedAgents = useMemo(() => groupAgentsByStatus(agents), [agents])
 
   // Track expanded state for each group
   const [expandedGroups, setExpandedGroups] = useState<Record<AgentStatus, boolean>>({
@@ -156,3 +155,5 @@ export function AgentGridView({
     </div>
   )
 }
+
+export const AgentGridView = memo(AgentGridViewComponent)

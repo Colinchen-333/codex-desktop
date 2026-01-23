@@ -83,11 +83,12 @@ export interface AgentDescriptor {
  * Workflow phase status
  * - pending: Phase has not started yet
  * - running: Phase is currently executing
- * - completed: Phase completed successfully
- * - failed: Phase failed due to error
- * - approval_timeout: Phase completed but approval timed out (recoverable)
+ * - awaiting_approval: Phase work is done, waiting for user approval
+ * - completed: Phase fully completed (approved or no approval required)
+ * - failed: Phase failed due to error or rejection
+ * - approval_timeout: Approval timed out (recoverable - can still approve/reject)
  */
-export type WorkflowPhaseStatus = 'pending' | 'running' | 'completed' | 'failed' | 'approval_timeout'
+export type WorkflowPhaseStatus = 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'approval_timeout'
 
 /**
  * Workflow phase - represents a stage in a multi-agent workflow

@@ -9,7 +9,8 @@
  * - Running phase pulse effect
  */
 
-import { Check, AlertCircle, Search, FileText, Eye, Code, Loader2, RotateCcw } from 'lucide-react'
+import { memo } from 'react'
+import { Check, AlertCircle, Search, FileText, Eye, Code, Loader2, RotateCcw, Clock } from 'lucide-react'
 import type { Workflow, WorkflowPhase } from '../../stores/multi-agent-v2'
 import { cn } from '../../lib/utils'
 
@@ -26,7 +27,7 @@ const PHASE_ICONS: Record<string, React.ReactNode> = {
   implement: <Code className="w-4 h-4" />,
 }
 
-export function WorkflowStageHeader({ workflow, onRetryWorkflow }: WorkflowStageHeaderProps) {
+function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow }: WorkflowStageHeaderProps) {
   const { phases, currentPhaseIndex } = workflow
 
   const getPhaseIcon = (phase: WorkflowPhase, index: number) => {
@@ -44,7 +45,9 @@ export function WorkflowStageHeader({ workflow, onRetryWorkflow }: WorkflowStage
         </div>
       )
     }
-    // Pending phase - show phase-specific icon
+    if (phase.status === 'awaiting_approval' || phase.status === 'approval_timeout') {
+      return <Clock className="w-5 h-5" />
+    }
     return PHASE_ICONS[phase.id] || <span className="text-sm font-semibold">{index + 1}</span>
   }
 
@@ -70,6 +73,18 @@ export function WorkflowStageHeader({ workflow, onRetryWorkflow }: WorkflowStage
         label: 'text-blue-700 dark:text-blue-400 font-semibold',
       }
     }
+    if (phase.status === 'awaiting_approval') {
+      return {
+        circle: 'bg-amber-500 dark:bg-amber-600 text-white shadow-lg shadow-amber-500/30',
+        label: 'text-amber-700 dark:text-amber-400 font-semibold',
+      }
+    }
+    if (phase.status === 'approval_timeout') {
+      return {
+        circle: 'bg-orange-500 dark:bg-orange-600 text-white shadow-lg shadow-orange-500/30',
+        label: 'text-orange-700 dark:text-orange-400',
+      }
+    }
     if (isCurrentPhase) {
       return {
         circle: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 ring-2 ring-blue-500/50',
@@ -92,8 +107,10 @@ export function WorkflowStageHeader({ workflow, onRetryWorkflow }: WorkflowStage
     if (phase.status === 'completed') {
       return 'bg-green-500 dark:bg-green-600'
     }
+    if (phase.status === 'awaiting_approval' || phase.status === 'approval_timeout') {
+      return 'bg-amber-500 dark:bg-amber-600'
+    }
     if (phase.status === 'running') {
-      // Animated gradient for running phase
       return 'bg-gradient-to-r from-blue-500 to-gray-300 dark:from-blue-600 dark:to-gray-700 animate-pulse'
     }
     return 'bg-gray-300 dark:bg-gray-700'
@@ -158,12 +175,11 @@ export function WorkflowStageHeader({ workflow, onRetryWorkflow }: WorkflowStage
                       {phase.agentIds.length} 代理
                     </p>
 
-                    {/* Show waiting status when approval is needed */}
                     {phase.requiresApproval &&
-                      phase.status === 'completed' &&
+                      (phase.status === 'awaiting_approval' || phase.status === 'approval_timeout') &&
                       index === currentPhaseIndex && (
                         <span className="mt-2 inline-block px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 rounded-full">
-                          等待审批
+                          {phase.status === 'approval_timeout' ? '审批超时' : '等待审批'}
                         </span>
                       )}
                   </div>
@@ -215,3 +231,5 @@ export function WorkflowStageHeader({ workflow, onRetryWorkflow }: WorkflowStage
     </div>
   )
 }
+
+export const WorkflowStageHeader = memo(WorkflowStageHeaderComponent)

@@ -12,6 +12,7 @@ import { CheckCircle, XCircle, Edit, ChevronDown, ChevronUp } from 'lucide-react
 import type { WorkflowPhase, AgentDescriptor } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
 import { getAgentTypeDisplayName, getAgentTypeIcon } from '../../lib/agent-utils'
+import { useToast } from '../ui/Toast'
 
 interface ApprovalDialogProps {
   phase: WorkflowPhase
@@ -31,6 +32,7 @@ export function ApprovalDialog({
   const [rejectReason, setRejectReason] = useState('')
   const [isRejectMode, setIsRejectMode] = useState(false)
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({})
+  const { showToast } = useToast()
 
   const phaseAgents = agents.filter((a) => phase.agentIds.includes(a.id))
 
@@ -43,7 +45,7 @@ export function ApprovalDialog({
 
   const handleReject = () => {
     if (!rejectReason.trim()) {
-      alert('请输入拒绝原因')
+      showToast('请输入拒绝原因', 'warning')
       return
     }
     onReject(rejectReason)
