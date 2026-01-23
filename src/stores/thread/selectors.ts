@@ -224,6 +224,36 @@ export function selectPendingApprovalsByType(type: 'command' | 'fileChange') {
   }
 }
 
+// ==================== Cross-Thread Approval Selectors (Multi-Agent) ====================
+
+export function selectPendingApprovalsByThread(state: ThreadState): Record<string, ThreadState['pendingApprovals']> {
+  const result: Record<string, ThreadState['pendingApprovals']> = {}
+  for (const threadId of Object.keys(state.threads)) {
+    const threadState = state.threads[threadId]
+    if (threadState && threadState.pendingApprovals.length > 0) {
+      result[threadId] = threadState.pendingApprovals
+    }
+  }
+  return result
+}
+
+export function selectGlobalPendingApprovalCount(state: ThreadState): number {
+  let count = 0
+  for (const threadId of Object.keys(state.threads)) {
+    const threadState = state.threads[threadId]
+    if (threadState) {
+      count += threadState.pendingApprovals.length
+    }
+  }
+  return count
+}
+
+export function selectPendingApprovalsForThread(threadId: string) {
+  return (state: ThreadState): ThreadState['pendingApprovals'] => {
+    return state.threads[threadId]?.pendingApprovals ?? EMPTY_PENDING_APPROVALS
+  }
+}
+
 // ==================== Queue Selectors ====================
 
 /**

@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback } from 'react'
-import { ChevronDown, ChevronUp, X, Eye, Pause, Play, AlertCircle, RotateCcw, Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, X, Eye, Pause, Play, AlertCircle, RotateCcw, Loader2, Bell } from 'lucide-react'
 import type { AgentDescriptor } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
 import {
@@ -82,12 +82,13 @@ export function AgentCard({ agent, onViewDetails, onCancel, onPause, onResume, o
     }, 300)
   }, [agent.id, onRetry, isOperating, localOperationInFlight])
 
-  // Get output preview
   const outputLines = extractAgentOutput(threadState, 3)
   const progressPercentage = calculateProgressPercentage(agent.progress)
   const elapsedTime = getElapsedTime(agent)
   const isRunning = agent.status === 'running'
   const isPaused = agent.status === 'pending' && agent.interruptReason === 'pause'
+  const pendingApprovalCount = threadState?.pendingApprovals?.length ?? 0
+  const hasWaitingApprovals = pendingApprovalCount > 0
 
   return (
     <div
@@ -136,6 +137,12 @@ export function AgentCard({ agent, onViewDetails, onCancel, onPause, onResume, o
               {isPaused && (
                 <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
                   已暂停
+                </span>
+              )}
+              {hasWaitingApprovals && (
+                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 flex items-center space-x-1 animate-pulse">
+                  <Bell className="w-3 h-3" />
+                  <span>待审批 {pendingApprovalCount}</span>
                 </span>
               )}
             </div>

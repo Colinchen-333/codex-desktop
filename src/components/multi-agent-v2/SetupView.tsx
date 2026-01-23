@@ -204,7 +204,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
             {/* Dialog Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-blue-500 to-indigo-500">
+            <div className="flex items-center justify-between px-6 py-4 border-b bg-gray-900 dark:bg-gray-800">
               <div className="flex items-center space-x-3">
                 <Sparkles className="w-5 h-5 text-white" />
                 <h3 className="text-lg font-semibold text-white">描述您的任务</h3>
@@ -261,7 +261,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
                   'px-6 py-2 rounded-lg font-medium transition-all flex items-center space-x-2',
                   !taskDescription.trim() || isStarting
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : 'bg-blue-500 text-white hover:bg-blue-600'
+                    : 'bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200'
                 )}
               >
                 {isStarting ? (
@@ -282,11 +282,11 @@ export function SetupView({ onComplete }: SetupViewProps) {
       )}
 
       {/* Main Setup View */}
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50">
+      <div className="flex items-center justify-center min-h-screen bg-gray-50 dark:bg-gray-900">
         <div className="w-full max-w-2xl mx-4">
           {/* Header */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-500 text-white rounded-2xl mb-4">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-2xl mb-4">
               <Workflow className="w-8 h-8" />
             </div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">多智能体模式配置</h1>
@@ -300,7 +300,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
           {/* Step 1: Working Directory */}
           <div>
             <div className="flex items-center space-x-2 mb-3">
-              <FolderOpen className="w-5 h-5 text-blue-500" />
+              <FolderOpen className="w-5 h-5 text-gray-700 dark:text-gray-300" />
               <h2 className="text-lg font-semibold text-gray-900">1. 工作目录</h2>
             </div>
             <p className="text-sm text-gray-600 mb-3">
@@ -324,7 +324,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
                   "px-4 py-2 rounded-lg transition-colors flex items-center space-x-2",
                   isValidatingDir
                     ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                    : "bg-blue-500 text-white hover:bg-blue-600"
+                    : "bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200"
                 )}
               >
                 {isValidatingDir ? (
@@ -357,7 +357,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
           {/* Step 2: Workflow Mode */}
           <div>
             <div className="flex items-center space-x-2 mb-3">
-              <Workflow className="w-5 h-5 text-blue-500" />
+              <Workflow className="w-5 h-5 text-gray-700 dark:text-gray-300" />
               <h2 className="text-lg font-semibold text-gray-900">2. 工作流模式</h2>
             </div>
             <p className="text-sm text-gray-600 mb-3">
@@ -370,8 +370,8 @@ export function SetupView({ onComplete }: SetupViewProps) {
                 className={cn(
                   'w-full p-4 border-2 rounded-lg text-left transition-all',
                   workflowMode === 'plan'
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-gray-900 dark:border-gray-100 bg-gray-100 dark:bg-gray-800'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
                 )}
               >
                 <div className="flex items-start justify-between">
@@ -384,7 +384,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
                     </p>
                   </div>
                   {workflowMode === 'plan' && (
-                    <div className="w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 ml-3">
+                    <div className="w-5 h-5 bg-gray-900 dark:bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0 ml-3">
                       <svg
                         className="w-3 h-3 text-white"
                         fill="none"
@@ -409,8 +409,8 @@ export function SetupView({ onComplete }: SetupViewProps) {
                 className={cn(
                   'w-full p-4 border-2 rounded-lg text-left transition-all',
                   workflowMode === 'custom'
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-gray-900 dark:border-gray-100 bg-gray-100 dark:bg-gray-800'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
                 )}
               >
                 <div className="flex items-start justify-between">
@@ -423,7 +423,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
                     </p>
                   </div>
                   {workflowMode === 'custom' && (
-                    <div className="w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 ml-3">
+                    <div className="w-5 h-5 bg-gray-900 dark:bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0 ml-3">
                       <svg
                         className="w-3 h-3 text-white"
                         fill="none"
@@ -447,7 +447,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
           {/* Step 3: Global Configuration */}
           <div>
             <div className="flex items-center space-x-2 mb-3">
-              <Settings className="w-5 h-5 text-blue-500" />
+              <Settings className="w-5 h-5 text-gray-700 dark:text-gray-300" />
               <h2 className="text-lg font-semibold text-gray-900">3. 全局配置</h2>
             </div>
             <div className="space-y-4">
@@ -534,7 +534,7 @@ export function SetupView({ onComplete }: SetupViewProps) {
               'px-6 py-3 rounded-lg font-semibold transition-all flex items-center space-x-2',
               !workingDir || isStarting || isValidatingDir || dirError
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                : 'bg-blue-500 text-white hover:bg-blue-600 shadow-lg hover:shadow-xl'
+                : 'bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200 shadow-lg hover:shadow-xl'
             )}
           >
             {isStarting ? (

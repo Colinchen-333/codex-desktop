@@ -55,7 +55,7 @@ export function ApprovalDialog({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white">
+            <div className="w-10 h-10 bg-gray-900 dark:bg-gray-100 rounded-full flex items-center justify-center text-white dark:text-gray-900">
               <CheckCircle className="w-6 h-6" />
             </div>
             <div>
@@ -72,7 +72,7 @@ export function ApprovalDialog({
           {/* Phase Summary */}
           <div className="mb-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-2">阶段总结</h3>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
               <p className="text-sm text-gray-700">
                 本阶段共执行了 <span className="font-semibold">{phaseAgents.length}</span>{' '}
                 个代理任务，所有任务已完成。请审查以下输出并决定是否继续下一阶段。
@@ -138,7 +138,7 @@ export function ApprovalDialog({
                   </button>
                   <button
                     onClick={onApprove}
-                    className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center space-x-2"
+                    className="px-6 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors flex items-center space-x-2"
                   >
                     <CheckCircle className="w-4 h-4" />
                     <span>批准并继续</span>
@@ -188,25 +188,41 @@ function AgentOutputCard({
 }) {
   const threadState = useThreadStore((state) => state.threads[agent.threadId])
 
-  // Extract agent output from thread
-  const getAgentOutput = (): string => {
-    if (!threadState) return '无输出'
+  const getAgentOutput = (): { text: string; itemCount: number; types: string[] } => {
+    if (!threadState) return { text: '无输出', itemCount: 0, types: [] }
 
-    const messages = threadState.itemOrder
+    const relevantTypes = ['agentMessage', 'fileChange', 'commandExecution', 'error']
+    const items = threadState.itemOrder
       .map((id) => threadState.items[id])
-      .filter((item) => item?.type === 'agentMessage')
-      .slice(-5) // Last 5 messages
+      .filter((item) => item && relevantTypes.includes(item.type))
 
-    if (messages.length === 0) return '无输出'
+    if (items.length === 0) return { text: '无输出', itemCount: 0, types: [] }
 
-    return messages
-      .map((msg) => (msg.content as { text?: string })?.text || '')
-      .filter(Boolean)
-      .join('\n\n')
+    const types = [...new Set(items.map((item) => item.type))]
+    const lines: string[] = []
+
+    for (const item of items) {
+      if (item.type === 'agentMessage') {
+        const text = (item.content as { text?: string })?.text
+        if (text) lines.push(text)
+      } else if (item.type === 'commandExecution') {
+        const cmd = item.content as { command: string; output?: string; exitCode?: number }
+        lines.push(`$ ${cmd.command}${cmd.exitCode !== undefined ? ` (exit ${cmd.exitCode})` : ''}`)
+        if (cmd.output) lines.push(cmd.output.slice(0, 500))
+      } else if (item.type === 'fileChange') {
+        const fc = item.content as { changes: Array<{ path: string; kind: string }> }
+        lines.push(`文件变更: ${fc.changes.map((c) => `${c.kind} ${c.path}`).join(', ')}`)
+      } else if (item.type === 'error') {
+        const err = item.content as { message: string }
+        lines.push(`错误: ${err.message}`)
+      }
+    }
+
+    return { text: lines.join('\n\n'), itemCount: items.length, types }
   }
 
-  const output = getAgentOutput()
-  const preview = output.slice(0, 200) + (output.length > 200 ? '...' : '')
+  const { text: output, itemCount, types } = getAgentOutput()
+  const preview = output.slice(0, 300) + (output.length > 300 ? '...' : '')
 
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -222,6 +238,12 @@ function AgentOutputCard({
               代理 {index + 1}: {getAgentTypeDisplayName(agent.type)}
             </h4>
             <p className="text-xs text-gray-500">{agent.task}</p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-gray-400">{itemCount} 条记录</span>
+              {types.length > 0 && (
+                <span className="text-xs text-gray-400">({types.join(', ')})</span>
+              )}
+            </div>
           </div>
         </div>
         {isExpanded ? (

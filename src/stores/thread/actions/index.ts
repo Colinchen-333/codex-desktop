@@ -22,6 +22,7 @@ export {
   createRequeueMessageFront,
   createDispatchNextQueuedMessage,
   createSendMessage,
+  createRespondToApprovalInThread,
   createRespondToApproval,
   createAddInfoItem,
   createSetSessionOverride,

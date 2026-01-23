@@ -294,30 +294,33 @@ export function createSendMessage(
 
 // ==================== Respond to Approval Action ====================
 
-export function createRespondToApproval(
+export function createRespondToApprovalInThread(
   set: (fn: (state: WritableDraft<ThreadState>) => ThreadState | void) => void,
   get: () => ThreadState
 ) {
   return async (
+    threadId: string,
     itemId: string,
     decision: 'accept' | 'acceptForSession' | 'acceptWithExecpolicyAmendment' | 'decline' | 'cancel',
     options?: { snapshotId?: string; execpolicyAmendment?: { command: string[] } | null }
   ) => {
-    const { focusedThreadId, threads } = get()
-    if (!focusedThreadId || !threads[focusedThreadId]) return
+    const { threads } = get()
+    if (!threads[threadId]) {
+      log.error(`[respondToApprovalInThread] Thread not found: ${threadId}`, 'message-actions')
+      return
+    }
 
-    const threadState = threads[focusedThreadId]
-    const threadId = focusedThreadId
+    const threadState = threads[threadId]
 
     const pendingApproval = threadState.pendingApprovals.find((p) => p.itemId === itemId)
     if (!pendingApproval) {
-      log.error(`No pending approval found for itemId: ${itemId}`, 'message-actions')
+      log.error(`[respondToApprovalInThread] No pending approval found for itemId: ${itemId}`, 'message-actions')
       return
     }
 
     if (pendingApproval.threadId !== threadId) {
       log.error(
-        `[respondToApproval] Thread mismatch - approval.threadId: ${pendingApproval.threadId}, threadId: ${threadId}`,
+        `[respondToApprovalInThread] Thread mismatch - approval.threadId: ${pendingApproval.threadId}, threadId: ${threadId}`,
         'message-actions'
       )
       set((state) => {
@@ -340,7 +343,7 @@ export function createRespondToApproval(
 
       const { threads: currentThreads } = get()
       if (!currentThreads[threadId]) {
-        log.warn('[respondToApproval] Thread closed, discarding state update', 'message-actions')
+        log.warn('[respondToApprovalInThread] Thread closed, discarding state update', 'message-actions')
         return
       }
 
@@ -382,6 +385,23 @@ export function createRespondToApproval(
       }
       throw error
     }
+  }
+}
+
+export function createRespondToApproval(
+  _set: (fn: (state: WritableDraft<ThreadState>) => ThreadState | void) => void,
+  get: () => ThreadState,
+  respondToApprovalInThread: ReturnType<typeof createRespondToApprovalInThread>
+) {
+  return async (
+    itemId: string,
+    decision: 'accept' | 'acceptForSession' | 'acceptWithExecpolicyAmendment' | 'decline' | 'cancel',
+    options?: { snapshotId?: string; execpolicyAmendment?: { command: string[] } | null }
+  ) => {
+    const { focusedThreadId } = get()
+    if (!focusedThreadId) return
+
+    return respondToApprovalInThread(focusedThreadId, itemId, decision, options)
   }
 }
 

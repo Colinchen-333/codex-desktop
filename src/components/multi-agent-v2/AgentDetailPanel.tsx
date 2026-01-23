@@ -10,9 +10,11 @@
  */
 
 import { useRef, useEffect } from 'react'
-import { X, Minimize2, Terminal, AlertCircle, Wrench, User, Bot, ChevronDown } from 'lucide-react'
+import { X, Minimize2, Terminal, AlertCircle, Wrench, User, Bot, ChevronDown, FileCode, Check, XCircle } from 'lucide-react'
 import type { AgentDescriptor } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
+import { DiffView, parseDiff } from '../ui/DiffView'
+import type { FileChangeContentType } from '../chat/types'
 import {
   getAgentTypeDisplayName,
   getAgentTypeIcon,
@@ -115,6 +117,93 @@ export function AgentDetailPanel({ agent, onClose, onMinimize }: AgentDetailPane
                   <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono overflow-x-auto max-h-64 overflow-y-auto">
                     {content.output}
                   </pre>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      case 'fileChange': {
+        const content = item.content as FileChangeContentType
+        const addCount = content.changes.filter(c => c.kind === 'add').length
+        const modifyCount = content.changes.filter(c => c.kind === 'modify').length
+        const deleteCount = content.changes.filter(c => c.kind === 'delete').length
+        const needsApproval = content.needsApproval && !content.approved
+        const isApplied = content.applied
+
+        return (
+          <div key={itemId} className="flex items-start space-x-3">
+            <div className={cn(
+              "flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center",
+              isApplied ? "bg-green-100 dark:bg-green-900/40" : needsApproval ? "bg-amber-100 dark:bg-amber-900/40" : "bg-gray-100 dark:bg-gray-700"
+            )}>
+              <FileCode className={cn(
+                "w-4 h-4",
+                isApplied ? "text-green-600 dark:text-green-400" : needsApproval ? "text-amber-600 dark:text-amber-400" : "text-gray-600 dark:text-gray-400"
+              )} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className={cn(
+                "rounded-lg border overflow-hidden",
+                isApplied ? "border-green-200 dark:border-green-700" : needsApproval ? "border-amber-200 dark:border-amber-700" : "border-gray-200 dark:border-gray-700"
+              )}>
+                <div className={cn(
+                  "px-3 py-2 flex items-center justify-between",
+                  isApplied ? "bg-green-50 dark:bg-green-900/20" : needsApproval ? "bg-amber-50 dark:bg-amber-900/20" : "bg-gray-50 dark:bg-gray-800"
+                )}>
+                  <div className="flex items-center gap-2 text-xs font-medium">
+                    {addCount > 0 && <span className="text-green-600">+{addCount}</span>}
+                    {modifyCount > 0 && <span className="text-yellow-600">~{modifyCount}</span>}
+                    {deleteCount > 0 && <span className="text-red-600">-{deleteCount}</span>}
+                    <span className="text-gray-500">{content.changes.length} file(s)</span>
+                  </div>
+                  {isApplied && (
+                    <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                      <Check className="w-3 h-3" /> 已应用
+                    </span>
+                  )}
+                  {needsApproval && (
+                    <span className="text-xs text-amber-600 dark:text-amber-400 animate-pulse">待审批</span>
+                  )}
+                </div>
+
+                <div className="max-h-96 overflow-y-auto">
+                  {content.changes.map((change, idx) => {
+                    const hunks = parseDiff(change.diff)
+                    const fileDiff = {
+                      path: change.path,
+                      kind: change.kind as 'add' | 'modify' | 'delete' | 'rename',
+                      oldPath: change.oldPath,
+                      hunks,
+                    }
+                    return (
+                      <div key={idx} className="border-t border-gray-100 dark:border-gray-700 first:border-t-0">
+                        <DiffView diff={fileDiff} />
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {needsApproval && (
+                  <div className="px-3 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        void useThreadStore.getState().respondToApprovalInThread(agent.threadId, itemId, 'accept')
+                      }}
+                      className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
+                    >
+                      <Check className="w-3 h-3" /> 应用
+                    </button>
+                    <button
+                      onClick={() => {
+                        void useThreadStore.getState().respondToApprovalInThread(agent.threadId, itemId, 'decline')
+                      }}
+                      className="flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 border border-red-200 dark:border-red-700 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                    >
+                      <XCircle className="w-3 h-3" /> 拒绝
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

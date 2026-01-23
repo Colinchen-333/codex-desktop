@@ -102,6 +102,7 @@ function createMockState(threads: Record<string, SingleThreadState>): ThreadStat
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     respondToApproval: vi.fn(),
+    respondToApprovalInThread: vi.fn(),
     clearThread: vi.fn(),
     addInfoItem: vi.fn(),
     flushDeltaBuffer: vi.fn(),

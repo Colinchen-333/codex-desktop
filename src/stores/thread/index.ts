@@ -76,6 +76,7 @@ import {
   createRequeueMessageFront,
   createDispatchNextQueuedMessage,
   createSendMessage,
+  createRespondToApprovalInThread,
   createRespondToApproval,
   createFlushDeltaBuffer,
   createAddInfoItem,
@@ -132,6 +133,8 @@ export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<Threa
     const restoreMessageContent = createRestoreMessageContent(typedSet)
     const restoreThreadState = createRestoreThreadState(typedSet)
     const restoreItemOrder = createRestoreItemOrder(typedSet)
+
+    const respondToApprovalInThread = createRespondToApprovalInThread(typedSet, get)
 
     // Create thread actions
     const closeThread = createCloseThread(typedSet, get, getThreadStore)
@@ -265,7 +268,8 @@ export const useThreadStore: UseBoundStore<StoreApi<ThreadState>> = create<Threa
       },
       sendMessage: createSendMessage(typedSet, get, enqueueQueuedMessage, dispatchNextQueuedMessage),
       interrupt: createInterrupt(typedSet, get),
-      respondToApproval: createRespondToApproval(typedSet, get),
+      respondToApprovalInThread,
+      respondToApproval: createRespondToApproval(typedSet, get, respondToApprovalInThread),
       clearThread: createClearThread(get, closeThread),
 
       // ==================== Buffer and Info Actions ====================
@@ -367,6 +371,9 @@ export {
   selectItemOrder,
   selectOrderedItems,
   selectPendingApprovals,
+  selectPendingApprovalsByThread,
+  selectGlobalPendingApprovalCount,
+  selectPendingApprovalsForThread,
   selectQueuedMessages,
   selectTokenUsage,
   selectTurnTiming,

@@ -342,6 +342,12 @@ export interface ThreadState {
     decision: 'accept' | 'acceptForSession' | 'acceptWithExecpolicyAmendment' | 'decline' | 'cancel',
     options?: { snapshotId?: string; execpolicyAmendment?: { command: string[] } | null }
   ) => Promise<void>
+  respondToApprovalInThread: (
+    threadId: string,
+    itemId: string,
+    decision: 'accept' | 'acceptForSession' | 'acceptWithExecpolicyAmendment' | 'decline' | 'cancel',
+    options?: { snapshotId?: string; execpolicyAmendment?: { command: string[] } | null }
+  ) => Promise<void>
   clearThread: () => void
   addInfoItem: (title: string, details?: string) => void
   flushDeltaBuffer: (threadId?: string) => void
