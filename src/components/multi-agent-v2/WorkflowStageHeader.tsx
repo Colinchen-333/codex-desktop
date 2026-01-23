@@ -20,12 +20,13 @@ interface WorkflowStageHeaderProps {
   onRecoverTimeout?: (phaseId: string) => void
 }
 
-// Phase icons mapping
+// Phase icons mapping by kind
 const PHASE_ICONS: Record<string, React.ReactNode> = {
   explore: <Search className="w-4 h-4" />,
   design: <FileText className="w-4 h-4" />,
   review: <Eye className="w-4 h-4" />,
   implement: <Code className="w-4 h-4" />,
+  custom: <Loader2 className="w-4 h-4" />,
 }
 
 function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTimeout }: WorkflowStageHeaderProps) {
@@ -41,7 +42,7 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
     if (phase.status === 'running') {
       return (
         <div className="relative">
-          {PHASE_ICONS[phase.id] || <Loader2 className="w-4 h-4" />}
+          {PHASE_ICONS[phase.kind] || <Loader2 className="w-4 h-4" />}
           <span className="absolute -top-1 -right-1 w-2 h-2 bg-white rounded-full animate-ping" />
         </div>
       )
@@ -49,7 +50,7 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
     if (phase.status === 'awaiting_approval' || phase.status === 'approval_timeout') {
       return <Clock className="w-5 h-5" />
     }
-    return PHASE_ICONS[phase.id] || <span className="text-sm font-semibold">{index + 1}</span>
+    return PHASE_ICONS[phase.kind] || <span className="text-sm font-semibold">{index + 1}</span>
   }
 
   const getPhaseStyles = (phase: WorkflowPhase, index: number) => {
@@ -114,106 +115,100 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
     if (phase.status === 'running') {
       return 'bg-gradient-to-r from-blue-500 to-gray-300 dark:from-blue-600 dark:to-gray-700 animate-pulse'
     }
-    return 'bg-gray-300 dark:bg-gray-700'
+    return 'bg-gray-200 dark:bg-gray-700'
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
-      <div className="max-w-4xl mx-auto">
-        {/* Workflow Title */}
-        <div className="mb-4">
-          <div className="flex items-center space-x-3">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{workflow.name}</h2>
-            <span className={cn(
-              "px-2 py-0.5 text-xs font-medium rounded-full",
+    <div className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 px-6 py-4 sticky top-0 z-10 transition-colors duration-300">
+      <div className="max-w-5xl mx-auto">
+        {/* Workflow Title & Status - Compact Row */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">{workflow.name}</h2>
+            <div className={cn(
+              "px-2.5 py-0.5 text-xs font-semibold rounded-full uppercase tracking-wider",
               workflow.status === 'running'
-                ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400"
+                ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400"
                 : workflow.status === 'completed'
-                  ? "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400"
+                  ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
                   : workflow.status === 'failed'
-                    ? "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400"
-                    : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
+                    ? "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
+                    : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
             )}>
-              {workflow.status === 'running' ? '运行中' :
-               workflow.status === 'completed' ? '已完成' :
-               workflow.status === 'failed' ? '失败' : '等待中'}
-            </span>
-            {workflow.status === 'failed' && onRetryWorkflow && (
-              <button
-                onClick={onRetryWorkflow}
-                className="flex items-center space-x-1 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>重试</span>
-              </button>
-            )}
+              {workflow.status === 'running' ? 'EXECUTING' :
+               workflow.status === 'completed' ? 'COMPLETED' :
+               workflow.status === 'failed' ? 'FAILED' : 'PENDING'}
+            </div>
           </div>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{workflow.description}</p>
+          
+          {workflow.status === 'failed' && onRetryWorkflow && (
+            <button
+              onClick={onRetryWorkflow}
+              className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium text-white bg-gray-900 dark:bg-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 rounded-lg transition-all shadow-sm hover:shadow"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Retry Workflow</span>
+            </button>
+          )}
         </div>
 
-        {/* Phase Progress */}
-        <div className="flex items-center">
+        {/* Phase Progress - Minimalist Design */}
+        <div className="flex items-center relative">
           {phases.map((phase, index) => {
             const styles = getPhaseStyles(phase, index)
-
+            const isActive = index === currentPhaseIndex
+            
             return (
-              <div key={phase.id} className="flex items-center flex-1">
-                {/* Phase Circle & Info */}
-                <div className="flex flex-col items-center group">
+              <div key={phase.id} className="flex items-center flex-1 last:flex-none">
+                {/* Phase Point */}
+                <div className="relative flex flex-col items-center group z-10">
                   <div
                     className={cn(
-                      'w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 transform group-hover:scale-110',
-                      styles.circle
+                      'w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-500',
+                      styles.circle,
+                      isActive ? 'scale-110 shadow-xl ring-4 ring-white dark:ring-gray-900' : 'scale-100'
                     )}
                   >
                     {getPhaseIcon(phase, index)}
                   </div>
-                  <div className="mt-2 text-center">
-                    <p className={cn('text-xs font-medium transition-colors', styles.label)}>
+                  
+                  {/* Phase Label - Absolute positioning to avoid layout shift */}
+                  <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 w-32 text-center">
+                    <p className={cn(
+                      'text-xs font-bold uppercase tracking-wider transition-colors duration-300',
+                      styles.label
+                    )}>
                       {phase.name}
                     </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {phase.agentIds.length} 代理
-                      {typeof phase.metadata?.spawnFailedCount === 'number' && phase.metadata.spawnFailedCount > 0 && (
-                        <span className="text-red-500 dark:text-red-400 ml-1">
-                          ({phase.metadata.spawnFailedCount} 失败)
-                        </span>
-                      )}
-                    </p>
-
-                    {phase.requiresApproval &&
-                      (phase.status === 'awaiting_approval' || phase.status === 'approval_timeout') &&
-                      index === currentPhaseIndex && (
-                        <div className="mt-2 flex flex-col items-center gap-1">
-                          <span className="inline-block px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 rounded-full">
-                            {phase.status === 'approval_timeout' ? '审批超时' : '等待审批'}
-                          </span>
-                          {phase.status === 'approval_timeout' && onRecoverTimeout && (
-                            <button
-                              onClick={() => onRecoverTimeout(phase.id)}
-                              className="flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/30 rounded transition-colors"
-                            >
-                              <RotateCcw className="w-3 h-3" />
-                              恢复审批
-                            </button>
-                          )}
-                        </div>
-                      )}
+                    {/* Minimal status indicator below label */}
+                    {phase.status === 'running' && (
+                      <p className="text-[10px] text-blue-500 font-medium animate-pulse mt-0.5">Running...</p>
+                    )}
+                    {(phase.status === 'awaiting_approval' || phase.status === 'approval_timeout') && (
+                      <div className="flex flex-col items-center">
+                        <p className="text-[10px] text-amber-500 font-bold mt-0.5">NEEDS APPROVAL</p>
+                        {phase.status === 'approval_timeout' && onRecoverTimeout && (
+                          <button
+                            onClick={() => onRecoverTimeout(phase.id)}
+                            className="mt-1 px-2 py-0.5 text-[10px] bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 rounded hover:bg-orange-200 transition-colors"
+                          >
+                            Recover
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Connector Line - Enhanced */}
+                {/* Connector Line */}
                 {index < phases.length - 1 && (
-                  <div className="flex-1 mx-3 relative">
-                    {/* Background track */}
-                    <div className="h-1 bg-gray-200 dark:bg-gray-700 rounded-full" />
-                    {/* Progress fill */}
+                  <div className="flex-1 mx-2 h-0.5 bg-gray-100 dark:bg-gray-800 relative overflow-hidden rounded-full">
                     <div
                       className={cn(
-                        'absolute top-0 left-0 h-1 rounded-full transition-all duration-500',
+                        'absolute inset-0 transition-transform duration-700 origin-left',
                         getConnectorStyle(phase),
-                        phase.status === 'completed' ? 'w-full' :
-                        phase.status === 'running' ? 'w-1/2' : 'w-0'
+                        phase.status === 'completed' ? 'scale-x-100' : 
+                        phase.status === 'running' ? 'scale-x-50 opacity-50' : 'scale-x-0'
                       )}
                     />
                   </div>
@@ -222,28 +217,9 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
             )
           })}
         </div>
-
-        {/* Current Phase Description */}
-        {phases[currentPhaseIndex] && (
-          <div className="mt-4 p-3 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700">
-            <div className="flex items-center space-x-2">
-              <div className={cn(
-                "w-2 h-2 rounded-full",
-                phases[currentPhaseIndex].status === 'running'
-                  ? "bg-blue-500 animate-pulse"
-                  : phases[currentPhaseIndex].status === 'completed'
-                    ? "bg-green-500"
-                    : "bg-gray-400"
-              )} />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                当前阶段：{phases[currentPhaseIndex].name}
-              </span>
-            </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-4">
-              {phases[currentPhaseIndex].description}
-            </p>
-          </div>
-        )}
+        
+        {/* Spacer for absolute labels */}
+        <div className="h-6" />
       </div>
     </div>
   )

@@ -90,11 +90,14 @@ export interface AgentDescriptor {
  */
 export type WorkflowPhaseStatus = 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'approval_timeout'
 
+export type WorkflowPhaseKind = 'explore' | 'design' | 'review' | 'implement' | 'custom'
+
 /**
  * Workflow phase - represents a stage in a multi-agent workflow
  */
 export interface WorkflowPhase {
   id: string
+  kind: WorkflowPhaseKind
   name: string
   description: string
   agentIds: string[] // IDs of agents in this phase

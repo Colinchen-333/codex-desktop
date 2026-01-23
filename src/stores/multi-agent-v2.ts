@@ -2262,20 +2262,33 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         }
         
         if (state.workflow) {
+          let hasAwaitingApproval = false
+          let awaitingApprovalPhaseId: string | null = null
+          
           for (const phase of state.workflow.phases) {
             if (phase.status === 'running') {
               log.warn(`[onRehydrateStorage] Phase ${phase.id} was running before restart, marking as error`, 'multi-agent')
               phase.status = 'failed'
               phase.completedAt = new Date()
               phase.output = '应用重启后连接丢失。请重试此阶段。'
+            } else if (phase.status === 'awaiting_approval') {
+              hasAwaitingApproval = true
+              awaitingApprovalPhaseId = phase.id
             }
           }
-          // If workflow was running but has failed phases, mark as failed
+          
           if (state.workflow.status === 'running') {
             const hasFailedPhase = state.workflow.phases.some((p) => p.status === 'failed')
             if (hasFailedPhase) {
               state.workflow.status = 'failed'
             }
+          }
+          
+          if (hasAwaitingApproval && awaitingApprovalPhaseId && state.workflow.status === 'running') {
+            log.info(`[onRehydrateStorage] Restarting approval timeout for phase ${awaitingApprovalPhaseId}`, 'multi-agent')
+            setTimeout(() => {
+              useMultiAgentStore.getState()._startApprovalTimeout(awaitingApprovalPhaseId!)
+            }, 100)
           }
         }
       },

@@ -210,9 +210,34 @@ export function ApprovalDialog({
 
           {/* Agent Artifacts */}
           <div className="space-y-4">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-              代理工作成果 ({phaseAgents.length} 个代理)
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                代理工作成果 ({phaseAgents.length} 个代理)
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const allExpanded: Record<string, boolean> = {}
+                    phaseAgents.forEach((a) => { allExpanded[a.id] = true })
+                    setExpandedAgents(allExpanded)
+                  }}
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+                >
+                  全部展开
+                </button>
+                <span className="text-gray-300 dark:text-gray-600">|</span>
+                <button
+                  onClick={() => {
+                    const allCollapsed: Record<string, boolean> = {}
+                    phaseAgents.forEach((a) => { allCollapsed[a.id] = false })
+                    setExpandedAgents(allCollapsed)
+                  }}
+                  className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+                >
+                  全部折叠
+                </button>
+              </div>
+            </div>
             {phaseAgents.map((agent, index) => (
               <AgentArtifactCard
                 key={agent.id}

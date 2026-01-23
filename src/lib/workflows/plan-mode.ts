@@ -27,9 +27,10 @@ export function createPlanModeWorkflow(
   // Phase 1: Explore
   const explorePhase: WorkflowPhase = {
     id: `${workflowId}-explore`,
+    kind: 'explore',
     name: '探索',
     description: '探索代码库，理解现有结构和相关代码',
-    agentIds: [], // Will be populated when agents are spawned
+    agentIds: [],
     status: 'pending',
     requiresApproval: false,
     createdAt: new Date(),
@@ -46,11 +47,12 @@ export function createPlanModeWorkflow(
   // Phase 2: Design
   const designPhase: WorkflowPhase = {
     id: `${workflowId}-design`,
+    kind: 'design',
     name: '设计',
     description: '基于探索结果,设计详细的实施方案',
     agentIds: [],
     status: 'pending',
-    requiresApproval: true, // Requires user approval
+    requiresApproval: true,
     createdAt: new Date(),
     metadata: {
       agentCount: 1,
@@ -64,11 +66,12 @@ export function createPlanModeWorkflow(
   // Phase 3: Review
   const reviewPhase: WorkflowPhase = {
     id: `${workflowId}-review`,
+    kind: 'review',
     name: '审查',
     description: '审查设计方案的可行性和完整性',
     agentIds: [],
     status: 'pending',
-    requiresApproval: true, // Requires user approval
+    requiresApproval: true,
     createdAt: new Date(),
     metadata: {
       agentCount: 1,
@@ -82,6 +85,7 @@ export function createPlanModeWorkflow(
   // Phase 4: Implement
   const implementPhase: WorkflowPhase = {
     id: `${workflowId}-implement`,
+    kind: 'implement',
     name: '实施',
     description: '执行代码变更和测试',
     agentIds: [],

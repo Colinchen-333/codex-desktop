@@ -669,7 +669,7 @@ export function MultiAgentView() {
                   {safetyApprovalCount > 0 && (
                     <span className="flex items-center gap-1.5 px-2 py-0.5 bg-blue-100 dark:bg-blue-900/40 rounded text-blue-800 dark:text-blue-300">
                       <FileCode className="w-3.5 h-3.5" />
-                      {safetyApprovalCount} 安全审批
+                      {safetyApprovalCount} 变更审批
                     </span>
                   )}
                 </div>

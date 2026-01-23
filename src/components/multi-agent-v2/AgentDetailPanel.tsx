@@ -67,10 +67,11 @@ export function AgentDetailPanel({ agent, onClose, onMinimize }: AgentDetailPane
 
   const stats = useMemo(() => {
     if (!threadState?.itemOrder.length) return null
-    let files = 0, commands = 0, errors = 0
+    let files = 0, commands = 0, errors = 0, pendingApprovals = 0
     let firstFileId: string | null = null
     let firstCommandId: string | null = null
     let firstErrorId: string | null = null
+    let firstPendingApprovalId: string | null = null
 
     for (const id of threadState.itemOrder) {
       const item = threadState.items[id]
@@ -78,16 +79,32 @@ export function AgentDetailPanel({ agent, onClose, onMinimize }: AgentDetailPane
       if (item.type === 'fileChange') {
         files++
         if (!firstFileId) firstFileId = id
+        const content = item.content as { needsApproval?: boolean; approved?: boolean }
+        if (content.needsApproval && !content.approved) {
+          pendingApprovals++
+          if (!firstPendingApprovalId) firstPendingApprovalId = id
+        }
       } else if (item.type === 'commandExecution') {
         commands++
         if (!firstCommandId) firstCommandId = id
+        const content = item.content as { needsApproval?: boolean; approved?: boolean }
+        if (content.needsApproval && !content.approved) {
+          pendingApprovals++
+          if (!firstPendingApprovalId) firstPendingApprovalId = id
+        }
       } else if (item.type === 'error') {
         errors++
         if (!firstErrorId) firstErrorId = id
       }
     }
-    return { files, commands, errors, firstFileId, firstCommandId, firstErrorId }
+    return { files, commands, errors, pendingApprovals, firstFileId, firstCommandId, firstErrorId, firstPendingApprovalId }
   }, [threadState])
+
+  useEffect(() => {
+    if (stats?.firstPendingApprovalId) {
+      setTimeout(() => scrollToId(stats.firstPendingApprovalId), 100)
+    }
+  }, [agent.id])
 
   const scrollToId = (id: string | null) => {
     if (!id) return
