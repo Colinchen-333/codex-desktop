@@ -53,6 +53,21 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
     return PHASE_ICONS[phase.kind] || <span className="text-sm font-semibold">{index + 1}</span>
   }
 
+  const getPhaseRationale = (phase: WorkflowPhase) => {
+    switch (phase.kind) {
+      case 'explore':
+        return '分析代码库结构，发现相关文件和模式'
+      case 'design':
+        return '制定实施方案，确定变更策略'
+      case 'review':
+        return '验证方案可行性，检查潜在风险'
+      case 'implement':
+        return '执行代码变更，运行测试验证'
+      default:
+        return phase.description
+    }
+  }
+
   const getPhaseStyles = (phase: WorkflowPhase, index: number) => {
     const isCurrentPhase = index === currentPhaseIndex
     const isPastPhase = index < currentPhaseIndex
@@ -172,15 +187,18 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
                     {getPhaseIcon(phase, index)}
                   </div>
                   
-                  {/* Phase Label - Absolute positioning to avoid layout shift */}
-                  <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 w-32 text-center">
-                    <p className={cn(
-                      'text-xs font-bold uppercase tracking-wider transition-colors duration-300',
-                      styles.label
-                    )}>
-                      {phase.name}
-                    </p>
-                    {/* Minimal status indicator below label */}
+                    {/* Phase Label - Absolute positioning to avoid layout shift */}
+                    <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 w-32 text-center">
+                      <p className={cn(
+                        'text-xs font-bold uppercase tracking-wider transition-colors duration-300',
+                        styles.label
+                      )}>
+                        {phase.name}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight opacity-70">
+                        {getPhaseRationale(phase)}
+                      </p>
+                      {/* Minimal status indicator below label */}
                     {phase.status === 'running' && (
                       <p className="text-[10px] text-blue-500 font-medium animate-pulse mt-0.5">Running...</p>
                     )}

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { CheckCircle, XCircle, RotateCcw, ChevronDown, ChevronRight, Terminal, FileCode, AlertCircle, Loader2, X, AlertTriangle } from 'lucide-react'
+import { CheckCircle, XCircle, RotateCcw, ChevronDown, ChevronRight, Terminal, FileCode, AlertCircle, Loader2, X, AlertTriangle, Lightbulb } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { useMultiAgentStore, type WorkflowPhase, type AgentDescriptor } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
@@ -23,6 +23,18 @@ const REJECTION_REASONS = [
   "缺少回滚方案"
 ]
 
+const classifyRisk = (change: { path: string; kind: string; diff?: string }) => {
+  const lowRiskPatterns = [/\.md$/, /\.txt$/, /test.*\.tsx?$/, /\.test\./, /\.spec\./]
+  const highRiskPatterns = [/package\.json$/, /\.env/, /config/, /src\/stores/, /src\/lib/]
+  
+  const isLowRisk = lowRiskPatterns.some(p => p.test(change.path))
+  const isHighRisk = highRiskPatterns.some(p => p.test(change.path))
+  
+  if (isHighRisk) return 'high'
+  if (isLowRisk) return 'low'
+  return 'medium'
+}
+
 export function ApprovalPanel({
   phase,
   agents,
@@ -33,6 +45,7 @@ export function ApprovalPanel({
 }: ApprovalPanelProps) {
   const [rejectReason, setRejectReason] = useState('')
   const [isRejectMode, setIsRejectMode] = useState(false)
+  const [showLowRisk, setShowLowRisk] = useState(true)
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {}
     phase.agentIds.forEach((id) => { initial[id] = true })
@@ -62,9 +75,13 @@ export function ApprovalPanel({
           const item = thread.items[id]
           if (!item) return
           if (item.type === 'fileChange') {
-            const content = item.content as { changes?: unknown[] }
+            const content = item.content as { changes?: { path: string; kind: string; diff?: string }[] }
             if (content.changes) {
               acc.files += content.changes.length
+              content.changes.forEach(change => {
+                const risk = classifyRisk(change)
+                acc.riskCounts[risk]++
+              })
             }
           } else if (item.type === 'commandExecution') {
             acc.commands++
@@ -73,7 +90,7 @@ export function ApprovalPanel({
       }
       return acc
     },
-    { files: 0, commands: 0, success: 0, failed: 0 }
+    { files: 0, commands: 0, success: 0, failed: 0, riskCounts: { high: 0, medium: 0, low: 0 } }
   )
 
   const isHighRisk = hasErrors || stats.files > 10
@@ -311,6 +328,42 @@ export function ApprovalPanel({
           <span className="flex items-center gap-1 text-green-600 dark:text-green-500 font-medium">{stats.success} 成功</span>
           {stats.failed > 0 && <span className="flex items-center gap-1 text-red-600 dark:text-red-500 font-medium">{stats.failed} 失败</span>}
         </div>
+        
+        <div className="px-4 py-2 border-t border-border flex items-center justify-between text-xs bg-muted/5">
+          <div className="flex items-center gap-3">
+            <span className="text-muted-foreground">风险分布:</span>
+            {stats.riskCounts.high > 0 && (
+              <span className="flex items-center gap-1 px-2 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded">
+                <AlertTriangle className="w-3 h-3" /> {stats.riskCounts.high} 高风险
+              </span>
+            )}
+            {stats.riskCounts.medium > 0 && (
+              <span className="flex items-center gap-1 px-2 py-0.5 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded">
+                {stats.riskCounts.medium} 中风险
+              </span>
+            )}
+            {stats.riskCounts.low > 0 && (
+              <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded">
+                {stats.riskCounts.low} 低风险
+              </span>
+            )}
+            {stats.riskCounts.high === 0 && stats.riskCounts.medium === 0 && stats.riskCounts.low === 0 && (
+              <span className="text-muted-foreground/50">无文件变更</span>
+            )}
+          </div>
+          
+          <button
+            onClick={() => setShowLowRisk(!showLowRisk)}
+            className={cn(
+              "px-2 py-1 rounded transition-colors",
+              showLowRisk 
+                ? "bg-muted text-muted-foreground" 
+                : "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
+            )}
+          >
+            {showLowRisk ? '隐藏低风险' : '显示全部'}
+          </button>
+        </div>
       </div>
       
       {/* Scrollable Content */}
@@ -379,6 +432,7 @@ export function ApprovalPanel({
                 index={index}
                 isExpanded={expandedAgents[agent.id] || false}
                 onToggle={() => toggleAgentExpanded(agent.id)}
+                showLowRisk={showLowRisk}
               />
             ))}
           </div>
@@ -407,11 +461,13 @@ function AgentArtifactCard({
   agent,
   isExpanded,
   onToggle,
+  showLowRisk,
 }: {
   agent: AgentDescriptor
   index: number
   isExpanded: boolean
   onToggle: () => void
+  showLowRisk: boolean
 }) {
   const threadState = useThreadStore((state) => state.threads[agent.threadId])
 
@@ -506,6 +562,19 @@ function AgentArtifactCard({
       {/* Expanded Content */}
       {isExpanded && (
         <div className="border-t border-border divide-y divide-border/50">
+          {/* Decision Evidence */}
+          {artifacts.messages.length > 0 && (
+            <div className="p-2 bg-blue-50 dark:bg-blue-900/10 border-b border-border">
+              <p className="text-xs text-blue-700 dark:text-blue-400 flex items-center gap-1">
+                <Lightbulb className="w-3 h-3" />
+                <span className="font-medium">决策依据:</span>
+              </p>
+              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                {artifacts.messages[0]}
+              </p>
+            </div>
+          )}
+
           {/* Errors */}
           {artifacts.errors.length > 0 && (
             <div className="p-3 bg-red-50 dark:bg-red-900/10">
@@ -531,6 +600,8 @@ function AgentArtifactCard({
                   const fileKey = `${fc.id}-${idx}`
                   const isFileExpanded = expandedFiles.has(fileKey)
                   
+                  if (!showLowRisk && classifyRisk(change) === 'low') return null
+
                   return (
                     <div key={idx} className="border border-border rounded-md overflow-hidden bg-background">
                       <button

@@ -79,6 +79,11 @@ export function MultiAgentView() {
   const [selectedAgentType, setSelectedAgentType] = useState<AgentType>('explore')
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('')
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false)
+  
+  // Structured Intent State
+  const [showStructuredIntent, setShowStructuredIntent] = useState(false)
+  const [intentConstraints, setIntentConstraints] = useState('')
+  const [intentScope, setIntentScope] = useState('')
 
   const workflowInputRef = useRef<HTMLTextAreaElement>(null)
   const agentInputRef = useRef<HTMLTextAreaElement>(null)
@@ -255,6 +260,9 @@ export function MultiAgentView() {
   const openWorkflowDialogDirectly = () => {
     setShowWorkflowDialog(true)
     setWorkflowTask('')
+    setIntentConstraints('')
+    setIntentScope('')
+    setShowStructuredIntent(false)
     setShowAdvancedOptions(false)
     if (templates.length > 0) {
       setSelectedTemplateId(templates[0].id)
@@ -277,6 +285,9 @@ export function MultiAgentView() {
   const handleCloseWorkflowDialog = () => {
     setShowWorkflowDialog(false)
     setWorkflowTask('')
+    setIntentConstraints('')
+    setIntentScope('')
+    setShowStructuredIntent(false)
   }
 
   const handleStartWorkflow = async () => {
@@ -295,7 +306,16 @@ export function MultiAgentView() {
       clearWorkflow()
     }
 
-    void startWorkflowFromTemplate(template, workflowTask.trim())
+    // Build enhanced task with structured intent
+    let enhancedTask = workflowTask.trim()
+    if (intentConstraints.trim()) {
+      enhancedTask += `\n\n约束条件: ${intentConstraints.trim()}`
+    }
+    if (intentScope.trim()) {
+      enhancedTask += `\n范围: ${intentScope.trim()}`
+    }
+
+    void startWorkflowFromTemplate(template, enhancedTask)
     handleCloseWorkflowDialog()
   }
 
@@ -496,6 +516,51 @@ export function MultiAgentView() {
                     }
                   }}
                 />
+                
+                <button
+                  type="button"
+                  onClick={() => setShowStructuredIntent(!showStructuredIntent)}
+                  className="mt-3 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showStructuredIntent ? (
+                    <ChevronUp className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                  结构化意图 (可选)
+                </button>
+
+                {showStructuredIntent && (
+                  <div className="mt-3 space-y-3 p-4 bg-muted/30 rounded-lg border border-border">
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+                        约束条件 (不要做什么)
+                      </label>
+                      <input
+                        type="text"
+                        value={intentConstraints}
+                        onChange={(e) => setIntentConstraints(e.target.value)}
+                        placeholder="例如：不修改现有API、保持向后兼容..."
+                        className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+                        范围限制 (影响哪些模块)
+                      </label>
+                      <input
+                        type="text"
+                        value={intentScope}
+                        onChange={(e) => setIntentScope(e.target.value)}
+                        placeholder="例如：仅 src/components/、排除测试文件..."
+                        className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      💡 结构化意图帮助 AI 更准确理解您的需求边界
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Safety Promise */}
