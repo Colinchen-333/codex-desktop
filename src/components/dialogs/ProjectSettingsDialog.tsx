@@ -172,7 +172,7 @@ export function ProjectSettingsDialog({
                   className="text-xs text-muted-foreground hover:text-foreground"
                   onClick={() => clearSetting('model', 'Model')}
                 >
-                  Use default
+                  Reset to Global
                 </button>
               )}
             </div>
@@ -204,7 +204,7 @@ export function ProjectSettingsDialog({
                   className="text-xs text-muted-foreground hover:text-foreground"
                   onClick={() => clearSetting('sandboxMode', 'Sandbox Mode')}
                 >
-                  Use default
+                  Reset to Global
                 </button>
               )}
             </div>
@@ -236,7 +236,7 @@ export function ProjectSettingsDialog({
                   className="text-xs text-muted-foreground hover:text-foreground"
                   onClick={() => clearSetting('askForApproval', 'Approval Policy')}
                 >
-                  Use default
+                  Reset to Global
                 </button>
               )}
             </div>
@@ -268,7 +268,7 @@ export function ProjectSettingsDialog({
                   className="text-xs text-muted-foreground hover:text-foreground"
                   onClick={() => clearSetting('cwd', 'Working Directory')}
                 >
-                  Use default
+                  Reset to Global
                 </button>
               )}
             </div>

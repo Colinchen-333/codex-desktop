@@ -230,7 +230,7 @@ export function SnapshotListDialog({ isOpen, onClose }: SnapshotListDialogProps)
         <ConfirmDialog
           isOpen={confirmRevert.isOpen}
           title="Revert to Snapshot"
-          message="All changes after this snapshot will be lost. This action cannot be undone."
+          message="Reverting will restore the project to this snapshot and discard all changes after it. This cannot be undone."
           confirmText="Revert"
           cancelText="Cancel"
           variant="warning"
