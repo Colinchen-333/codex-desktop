@@ -779,6 +779,35 @@ export function MultiAgentView() {
           />
         )}
 
+        {(() => {
+          const restartErrorAgents = agents.filter(a => a.error?.code === 'APP_RESTART_LOST_CONNECTION')
+          if (restartErrorAgents.length === 0) return null
+
+          return (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 px-4 py-3 flex items-center justify-between animate-in slide-in-from-top-2">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-500" />
+                <div>
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                    检测到应用重启，部分代理已断开
+                  </p>
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    {restartErrorAgents.length} 个代理需要恢复。请在审批收件箱中进行操作。
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowReviewInbox(true)}
+                  className="px-3 py-1.5 text-xs font-medium bg-amber-100 dark:bg-amber-800 text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-700 transition-colors"
+                >
+                  去恢复
+                </button>
+              </div>
+            </div>
+          )
+        })()}
+
         {/* Review Inbox Badge - Clickable to open Review Inbox */}
         {totalPendingDecisions > 0 && (
           <button

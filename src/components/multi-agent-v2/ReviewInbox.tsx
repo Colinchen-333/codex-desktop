@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { X, CheckSquare, FileCode, ChevronRight, Clock } from 'lucide-react'
+import { X, CheckSquare, FileCode, ChevronRight, Clock, RotateCcw, AlertTriangle } from 'lucide-react'
 import { useMultiAgentStore } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
 import { cn } from '../../lib/utils'
@@ -23,6 +23,10 @@ export function ReviewInbox({ isOpen, onClose, onSelectAgent, onOpenPhaseApprova
   const agents = useMultiAgentStore((state) => Object.values(state.agents))
   const workflow = useMultiAgentStore((state) => state.workflow)
   const threadStoreState = useThreadStore((state) => state.threads)
+  
+  const recoverApprovalTimeout = useMultiAgentStore((state) => state.recoverApprovalTimeout)
+  const recoverCancelledWorkflow = useMultiAgentStore((state) => state.recoverCancelledWorkflow)
+  const retryAgent = useMultiAgentStore((state) => state.retryAgent)
 
   const pendingApprovalPhase = useMemo(() => {
     if (!workflow) return null
@@ -55,6 +59,20 @@ export function ReviewInbox({ isOpen, onClose, onSelectAgent, onOpenPhaseApprova
     return items
   }, [agents, threadStoreState])
 
+  const approvalTimeoutPhase = useMemo(() => {
+    if (!workflow) return null
+    return workflow.phases.find(p => p.status === 'approval_timeout')
+  }, [workflow])
+
+  const cancelledWorkflow = useMemo(() => {
+    return workflow?.status === 'cancelled'
+  }, [workflow])
+
+  const failedAgents = useMemo(() => {
+    return agents.filter(a => a.status === 'error' && a.error?.recoverable)
+  }, [agents])
+
+  const hasRecoveryItems = !!approvalTimeoutPhase || cancelledWorkflow || failedAgents.length > 0
   const totalCount = (pendingApprovalPhase ? 1 : 0) + safetyApprovals.reduce((sum, item) => sum + item.count, 0)
 
   return (
@@ -90,7 +108,7 @@ export function ReviewInbox({ isOpen, onClose, onSelectAgent, onOpenPhaseApprova
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {totalCount === 0 ? (
+          {totalCount === 0 && !hasRecoveryItems ? (
             <div className="p-6 text-center text-muted-foreground">
               <CheckSquare className="w-10 h-10 mx-auto mb-2 opacity-30" />
               <p className="text-sm">没有待处理的审批</p>
@@ -152,6 +170,76 @@ export function ReviewInbox({ isOpen, onClose, onSelectAgent, onOpenPhaseApprova
                   </span>
                 </button>
               ))}
+            </div>
+          )}
+
+          {hasRecoveryItems && (
+            <div className="mt-2 border-t border-border">
+              <div className="px-4 py-2 bg-muted/30 flex items-center gap-2">
+                <RotateCcw className="w-3.5 h-3.5 text-muted-foreground" />
+                <h4 className="text-xs font-medium text-muted-foreground">恢复中心</h4>
+              </div>
+              <div className="divide-y divide-border">
+                {approvalTimeoutPhase && (
+                  <div className="w-full px-4 py-3 flex items-center gap-3 hover:bg-muted/50 transition-colors">
+                    <div className="p-1.5 rounded-lg bg-red-500/10 flex-shrink-0">
+                      <Clock className="w-4 h-4 text-red-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">审批超时</p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {approvalTimeoutPhase.name}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => recoverApprovalTimeout(approvalTimeoutPhase.id)}
+                      className="px-2 py-1 text-xs font-medium bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
+                    >
+                      恢复
+                    </button>
+                  </div>
+                )}
+
+                {cancelledWorkflow && (
+                  <div className="w-full px-4 py-3 flex items-center gap-3 hover:bg-muted/50 transition-colors">
+                    <div className="p-1.5 rounded-lg bg-orange-500/10 flex-shrink-0">
+                      <RotateCcw className="w-4 h-4 text-orange-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">工作流已取消</p>
+                      <p className="text-xs text-muted-foreground">
+                        可恢复执行
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => recoverCancelledWorkflow()}
+                      className="px-2 py-1 text-xs font-medium bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors"
+                    >
+                      恢复
+                    </button>
+                  </div>
+                )}
+
+                {failedAgents.map(agent => (
+                  <div key={agent.id} className="w-full px-4 py-3 flex items-center gap-3 hover:bg-muted/50 transition-colors">
+                    <div className="p-1.5 rounded-lg bg-red-500/10 flex-shrink-0">
+                      <AlertTriangle className="w-4 h-4 text-red-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">代理执行失败</p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {getAgentTypeName(agent.type)}: {agent.error?.message}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => retryAgent(agent.id)}
+                      className="px-2 py-1 text-xs font-medium bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                    >
+                      重试
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

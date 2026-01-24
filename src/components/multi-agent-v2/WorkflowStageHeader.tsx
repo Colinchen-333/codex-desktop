@@ -200,12 +200,17 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
                       </p>
                       {/* Minimal status indicator below label */}
                     {phase.status === 'running' && (
-                      <p className="text-[10px] text-blue-500 font-medium animate-pulse mt-0.5">
-                        {phase.kind === 'explore' ? '探索中...' : 
-                         phase.kind === 'design' ? '规划中...' : 
-                         phase.kind === 'review' ? '审查中...' : 
-                         phase.kind === 'implement' ? '执行中...' : '处理中...'}
-                      </p>
+                      <div className="flex flex-col items-center">
+                        <p className="text-[10px] text-blue-500 font-medium animate-pulse mt-0.5">
+                          {phase.kind === 'explore' ? '探索中...' : 
+                           phase.kind === 'design' ? '规划中...' : 
+                           phase.kind === 'review' ? '审查中...' : 
+                           phase.kind === 'implement' ? '执行中...' : '处理中...'}
+                        </p>
+                        <p className="text-[9px] text-muted-foreground/60 mt-0.5">
+                          预计需要几分钟
+                        </p>
+                      </div>
                     )}
                     {(phase.status === 'awaiting_approval' || phase.status === 'approval_timeout') && (
                       <div className="flex flex-col items-center">
