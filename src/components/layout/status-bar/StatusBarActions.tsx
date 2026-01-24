@@ -139,8 +139,8 @@ export const StatusBarActions = memo(function StatusBarActions({
           onClick={() => void handleMultiAgentToggle()}
           disabled={isTransitioning}
           title={isTransitioning ? '切换中...' : appMode === 'normal' 
-            ? '多智能体模式 - 适合复杂任务：4阶段工作流 + 审批控制' 
-            : '返回普通模式 - 适合快速交互：直接对话获取帮助'}
+            ? '多智能体模式 - 并行Agent探索 + 阶段门控审批，适合复杂任务' 
+            : '返回普通模式 - Codex CLI 原生能力，直接交互'}
         >
           {isTransitioning ? (
             <Loader2 size={14} className="animate-spin" />

@@ -756,10 +756,10 @@ export function MultiAgentView() {
         <div className="flex items-center gap-2 px-4 py-1.5 bg-violet-50 dark:bg-violet-900/20 border-b border-violet-200 dark:border-violet-800">
           <Bot className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
           <span className="text-xs font-medium text-violet-700 dark:text-violet-300">
-            多智能体模式
+            多智能体编排
           </span>
           <span className="text-xs text-violet-600/70 dark:text-violet-400/70">
-            · 4阶段工作流 · 您是审查者，Agent 是执行者
+            · 并行Agent探索 · 阶段门控审批 · 指点江山
           </span>
         </div>
 
