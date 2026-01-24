@@ -38,6 +38,10 @@ src-tauri/WixTools/
 
 # Serena
 .serena/
+
+# AI/IDE local configs
+.sisyphus/
+.trae/
 # OpenAI Codex CLI (for development reference)
 codex/
 !codex/.gitkeep
