@@ -58,7 +58,7 @@ export function ApprovalDialog({
           const item = thread.items[id]
           if (!item) return
           if (item.type === 'fileChange') {
-            const content = item.content as any
+            const content = item.content as { changes?: unknown[] }
             if (content.changes) {
               acc.files += content.changes.length
             }
@@ -128,7 +128,7 @@ export function ApprovalDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="w-full max-w-5xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-2xl shadow-2xl flex flex-col mx-4">
-        {/* Header */}
+        {/* Header - Decision-focused */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gray-900 dark:bg-gray-800">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 bg-white dark:bg-gray-700 rounded-full flex items-center justify-center">
@@ -136,9 +136,15 @@ export function ApprovalDialog({
             </div>
             <div>
               <h2 className="text-xl font-semibold text-white">
-                阶段审批：{phase.name}
+                {phase.kind === 'design' ? '批准实施方案？' : 
+                 phase.kind === 'review' ? '批准审查结果？' : 
+                 `批准「${phase.name}」阶段？`}
               </h2>
-              <p className="text-sm text-gray-300">{phase.description}</p>
+              <p className="text-sm text-gray-300">
+                {phase.kind === 'design' ? '批准后将进入审查阶段' : 
+                 phase.kind === 'review' ? '批准后将开始实施代码变更' : 
+                 phase.description}
+              </p>
             </div>
           </div>
           {phase.status === 'approval_timeout' && (

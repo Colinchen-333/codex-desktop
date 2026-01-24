@@ -15,7 +15,7 @@ import { X, Plus, Play, Search, FileCode, Terminal, FileText, TestTube, AlertTri
 import { WorkflowStageHeader } from './WorkflowStageHeader'
 import { AgentGridView } from './AgentGridView'
 import { AgentDetailPanel } from './AgentDetailPanel'
-import { ApprovalDialog } from './ApprovalDialog'
+import { ApprovalPanel } from './ApprovalPanel'
 import { ReviewInbox } from './ReviewInbox'
 import { useMultiAgentStore, type AgentType } from '../../stores/multi-agent-v2'
 import { useWorkflowTemplatesStore } from '../../stores/workflowTemplates'
@@ -320,17 +320,6 @@ export function MultiAgentView() {
 
   return (
     <>
-      {/* Approval Dialog */}
-      {pendingApprovalPhase && (
-        <ApprovalDialog
-          phase={pendingApprovalPhase}
-          agents={agents.filter((a) => pendingApprovalPhase.agentIds.includes(a.id))}
-          onApprove={handleApproval}
-          onReject={handleRejection}
-          onRejectAndRetry={(reason) => void handleRejectAndRetry(reason)}
-        />
-      )}
-
       {/* Review Inbox Dialog */}
       <ReviewInbox
         isOpen={showReviewInbox}
@@ -838,8 +827,7 @@ export function MultiAgentView() {
             </div>
           </div>
 
-          {/* Agent Detail Panel - Right Side Drawer */}
-          {selectedAgent && (
+          {(pendingApprovalPhase || selectedAgent) && (
             <div
               className="flex-shrink-0 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl relative"
               style={{ width: panelWidth }}
@@ -870,7 +858,21 @@ export function MultiAgentView() {
                   document.addEventListener('mouseup', onMouseUp)
                 }}
               />
-              <AgentDetailPanel agent={selectedAgent} onClose={handleCloseDetail} />
+              
+              {pendingApprovalPhase ? (
+                <ApprovalPanel
+                  phase={pendingApprovalPhase}
+                  agents={agents.filter((a) => pendingApprovalPhase.agentIds.includes(a.id))}
+                  onApprove={handleApproval}
+                  onReject={handleRejection}
+                  onRejectAndRetry={(reason) => void handleRejectAndRetry(reason)}
+                  onClose={() => {
+                    setDismissedApprovalPhaseIds((prev) => new Set([...prev, pendingApprovalPhase.id]))
+                  }}
+                />
+              ) : selectedAgent ? (
+                <AgentDetailPanel agent={selectedAgent} onClose={handleCloseDetail} />
+              ) : null}
             </div>
           )}
         </div>
