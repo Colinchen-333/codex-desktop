@@ -135,6 +135,9 @@ export interface MultiAgentState {
   _startPauseTimeout: (agentId: string, timeoutMs?: number) => void
   _clearPauseTimeout: (agentId: string) => void
 
+  restartRecoveryInFlight: boolean
+  _autoResumeAfterRestart: () => Promise<void>
+
   // Phase/Workflow retry methods (allows recovery from failed state)
   retryPhase: (phaseId: string) => Promise<void>
   retryWorkflow: () => Promise<void>
@@ -290,6 +293,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       pauseInFlight: {},
       dependencyWaitTimeouts: {},
       pauseTimeouts: {},
+      restartRecoveryInFlight: false,
 
     // ==================== Configuration ====================
     setConfig: (config: Partial<MultiAgentConfig>) => {
@@ -1926,6 +1930,45 @@ export const useMultiAgentStore = create<MultiAgentState>()(
       }
     },
 
+    _autoResumeAfterRestart: async () => {
+      const state = get()
+      if (state.restartRecoveryInFlight) return
+
+      const candidates = Object.values(state.agents).filter(
+        (agent) => agent.threadId && agent.error?.code === 'APP_RESTART_LOST_CONNECTION'
+      )
+      if (candidates.length === 0) return
+
+      set((s) => {
+        s.restartRecoveryInFlight = true
+      })
+
+      try {
+        for (const agent of candidates) {
+          try {
+            if (!agent.threadId) continue
+            await useThreadStore.getState().resumeThread(agent.threadId)
+            set((s) => {
+              const current = s.agents[agent.id]
+              if (current) {
+                current.status = 'pending'
+                current.error = undefined
+                current.completedAt = undefined
+                current.progress = { ...current.progress, description: '正在恢复连接' }
+              }
+            })
+            await get().resumeAgent(agent.id)
+          } catch (error) {
+            log.warn(`[autoResumeAfterRestart] Failed to resume agent ${agent.id}: ${error}`, 'multi-agent')
+          }
+        }
+      } finally {
+        set((s) => {
+          s.restartRecoveryInFlight = false
+        })
+      }
+    },
+
     // ==================== Phase/Workflow Retry Methods ====================
 
     /**
@@ -2212,6 +2255,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         s.pauseInFlight = {}
         s.dependencyWaitTimeouts = {}
         s.pauseTimeouts = {}
+        s.restartRecoveryInFlight = false
       })
     },
   })),
@@ -2274,37 +2318,46 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           }
         }
         
-        if (state.workflow) {
-          let hasAwaitingApproval = false
-          let awaitingApprovalPhaseId: string | null = null
-          
-          for (const phase of state.workflow.phases) {
-            if (phase.status === 'running') {
-              log.warn(`[onRehydrateStorage] Phase ${phase.id} was running before restart, marking as error`, 'multi-agent')
-              phase.status = 'failed'
-              phase.completedAt = new Date()
-              phase.output = '应用重启后连接丢失。请重试此阶段。'
-            } else if (phase.status === 'awaiting_approval') {
-              hasAwaitingApproval = true
-              awaitingApprovalPhaseId = phase.id
-            }
-          }
-          
-          if (state.workflow.status === 'running') {
-            const hasFailedPhase = state.workflow.phases.some((p) => p.status === 'failed')
-            if (hasFailedPhase) {
-              state.workflow.status = 'failed'
-            }
-          }
-          
-          if (hasAwaitingApproval && awaitingApprovalPhaseId && state.workflow.status === 'running') {
-            log.info(`[onRehydrateStorage] Restarting approval timeout for phase ${awaitingApprovalPhaseId}`, 'multi-agent')
-            setTimeout(() => {
-              useMultiAgentStore.getState()._startApprovalTimeout(awaitingApprovalPhaseId!)
-            }, 100)
-          }
-        }
-      },
+         if (state.workflow) {
+           let hasAwaitingApproval = false
+           let awaitingApprovalPhaseId: string | null = null
+           
+           for (const phase of state.workflow.phases) {
+             if (phase.status === 'running') {
+               log.warn(`[onRehydrateStorage] Phase ${phase.id} was running before restart, marking as error`, 'multi-agent')
+               phase.status = 'failed'
+               phase.completedAt = new Date()
+               phase.output = '应用重启后连接丢失。请重试此阶段。'
+             } else if (phase.status === 'awaiting_approval') {
+               hasAwaitingApproval = true
+               awaitingApprovalPhaseId = phase.id
+             }
+           }
+           
+           if (state.workflow.status === 'running') {
+             const hasFailedPhase = state.workflow.phases.some((p) => p.status === 'failed')
+             if (hasFailedPhase) {
+               state.workflow.status = 'failed'
+             }
+           }
+           
+           if (hasAwaitingApproval && awaitingApprovalPhaseId && state.workflow.status === 'running') {
+             log.info(`[onRehydrateStorage] Restarting approval timeout for phase ${awaitingApprovalPhaseId}`, 'multi-agent')
+             setTimeout(() => {
+               useMultiAgentStore.getState()._startApprovalTimeout(awaitingApprovalPhaseId!)
+             }, 100)
+           }
+         }
+
+         const restartRecoveryCandidates = Object.values(state.agents || {}).filter(
+           (agent) => agent.threadId && agent.error?.code === 'APP_RESTART_LOST_CONNECTION'
+         )
+         if (restartRecoveryCandidates.length > 0) {
+           setTimeout(() => {
+             useMultiAgentStore.getState()._autoResumeAfterRestart()
+           }, 200)
+         }
+       },
     }
   )
 )

@@ -48,6 +48,7 @@ export function MultiAgentView() {
   const retryWorkflow = useMultiAgentStore((state) => state.retryWorkflow)
   const retryPhase = useMultiAgentStore((state) => state.retryPhase)
   const recoverApprovalTimeout = useMultiAgentStore((state) => state.recoverApprovalTimeout)
+  const restartRecoveryInFlight = useMultiAgentStore((state) => state.restartRecoveryInFlight)
   const clearAgents = useMultiAgentStore((state) => state.clearAgents)
   const clearWorkflow = useMultiAgentStore((state) => state.clearWorkflow)
   const startWorkflowFromTemplate = useMultiAgentStore((state) => state.startWorkflowFromTemplate)
@@ -781,7 +782,7 @@ export function MultiAgentView() {
 
         {(() => {
           const restartErrorAgents = agents.filter(a => a.error?.code === 'APP_RESTART_LOST_CONNECTION')
-          if (restartErrorAgents.length === 0) return null
+          if (restartErrorAgents.length === 0 && !restartRecoveryInFlight) return null
 
           return (
             <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 px-4 py-3 flex items-center justify-between animate-in slide-in-from-top-2">
@@ -792,18 +793,22 @@ export function MultiAgentView() {
                     检测到应用重启，部分代理已断开
                   </p>
                   <p className="text-xs text-amber-600 dark:text-amber-400">
-                    {restartErrorAgents.length} 个代理需要恢复。请在审批收件箱中进行操作。
+                    {restartRecoveryInFlight
+                      ? '正在自动恢复…如果失败请手动恢复'
+                      : `${restartErrorAgents.length} 个代理需要恢复。请在审批收件箱中进行操作。`}
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowReviewInbox(true)}
-                  className="px-3 py-1.5 text-xs font-medium bg-amber-100 dark:bg-amber-800 text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-700 transition-colors"
-                >
-                  去恢复
-                </button>
-              </div>
+              {!restartRecoveryInFlight && restartErrorAgents.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowReviewInbox(true)}
+                    className="px-3 py-1.5 text-xs font-medium bg-amber-100 dark:bg-amber-800 text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-700 transition-colors"
+                  >
+                    去恢复
+                  </button>
+                </div>
+              )}
             </div>
           )
         })()}
