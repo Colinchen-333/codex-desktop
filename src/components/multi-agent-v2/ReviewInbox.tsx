@@ -1,7 +1,6 @@
-import { useMemo } from 'react'
 import { X, CheckSquare, FileCode, ChevronRight, Clock, RotateCcw, AlertTriangle } from 'lucide-react'
 import { useMultiAgentStore } from '../../stores/multi-agent-v2'
-import { useThreadStore } from '../../stores/thread'
+import { usePendingApprovals } from '../../hooks/usePendingApprovals'
 import { cn } from '../../lib/utils'
 
 interface ReviewInboxProps {
@@ -11,69 +10,20 @@ interface ReviewInboxProps {
   onOpenPhaseApproval: () => void
 }
 
-interface SafetyApprovalItem {
-  agentId: string
-  agentName: string
-  agentType: string
-  threadId: string
-  count: number
-}
-
 export function ReviewInbox({ isOpen, onClose, onSelectAgent, onOpenPhaseApproval }: ReviewInboxProps) {
-  const agents = useMultiAgentStore((state) => Object.values(state.agents))
-  const workflow = useMultiAgentStore((state) => state.workflow)
-  const threadStoreState = useThreadStore((state) => state.threads)
-  
   const recoverApprovalTimeout = useMultiAgentStore((state) => state.recoverApprovalTimeout)
   const recoverCancelledWorkflow = useMultiAgentStore((state) => state.recoverCancelledWorkflow)
   const retryAgent = useMultiAgentStore((state) => state.retryAgent)
 
-  const pendingApprovalPhase = useMemo(() => {
-    if (!workflow) return null
-    const currentPhase = workflow.phases[workflow.currentPhaseIndex]
-    if (!currentPhase) return null
-    if (
-      currentPhase.requiresApproval &&
-      (currentPhase.status === 'awaiting_approval' || currentPhase.status === 'approval_timeout')
-    ) {
-      return currentPhase
-    }
-    return null
-  }, [workflow])
-
-  const safetyApprovals = useMemo((): SafetyApprovalItem[] => {
-    const items: SafetyApprovalItem[] = []
-    for (const agent of agents) {
-      if (!agent.threadId) continue
-      const thread = threadStoreState[agent.threadId]
-      if (thread?.pendingApprovals && thread.pendingApprovals.length > 0) {
-        items.push({
-          agentId: agent.id,
-          agentName: getAgentTypeName(agent.type),
-          agentType: agent.type,
-          threadId: agent.threadId,
-          count: thread.pendingApprovals.length,
-        })
-      }
-    }
-    return items
-  }, [agents, threadStoreState])
-
-  const approvalTimeoutPhase = useMemo(() => {
-    if (!workflow) return null
-    return workflow.phases.find(p => p.status === 'approval_timeout')
-  }, [workflow])
-
-  const cancelledWorkflow = useMemo(() => {
-    return workflow?.status === 'cancelled'
-  }, [workflow])
-
-  const failedAgents = useMemo(() => {
-    return agents.filter(a => a.status === 'error' && a.error?.recoverable)
-  }, [agents])
-
-  const hasRecoveryItems = !!approvalTimeoutPhase || cancelledWorkflow || failedAgents.length > 0
-  const totalCount = (pendingApprovalPhase ? 1 : 0) + safetyApprovals.reduce((sum, item) => sum + item.count, 0)
+  const {
+    phaseApproval: pendingApprovalPhase,
+    safetyApprovals,
+    approvalTimeoutPhase,
+    cancelledWorkflow,
+    failedAgents,
+    totalCount,
+    hasRecoveryItems,
+  } = usePendingApprovals()
 
   return (
     <>
@@ -232,7 +182,7 @@ export function ReviewInbox({ isOpen, onClose, onSelectAgent, onOpenPhaseApprova
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground">代理执行失败</p>
                       <p className="text-xs text-muted-foreground truncate">
-                        {getAgentTypeName(agent.type)}: {agent.error?.message}
+                        {agent.type}: {agent.error?.message}
                       </p>
                     </div>
                     <button
@@ -256,15 +206,4 @@ export function ReviewInbox({ isOpen, onClose, onSelectAgent, onOpenPhaseApprova
       </div>
     </>
   )
-}
-
-function getAgentTypeName(type: string): string {
-  const names: Record<string, string> = {
-    explore: '探索代理',
-    plan: '计划代理',
-    'code-writer': '编码代理',
-    bash: '命令代理',
-    tester: '测试代理',
-  }
-  return names[type] ?? type
 }

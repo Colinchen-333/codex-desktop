@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { CheckCircle, XCircle, RotateCcw, ChevronDown, ChevronRight, Terminal, FileCode, AlertCircle, Loader2, X, AlertTriangle, Lightbulb, Copy } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { classifyRisk } from '../../lib/safety-utils'
 import { useMultiAgentStore, type WorkflowPhase, type AgentDescriptor } from '../../stores/multi-agent-v2'
 import { useThreadStore } from '../../stores/thread'
 import { getAgentTypeDisplayName, getAgentTypeIcon } from '../../lib/agent-utils'
@@ -22,18 +23,6 @@ const REJECTION_REASONS = [
   "不符合项目架构",
   "缺少回滚方案"
 ]
-
-const classifyRisk = (change: { path: string; kind: string; diff?: string }) => {
-  const lowRiskPatterns = [/\.md$/, /\.txt$/, /test.*\.tsx?$/, /\.test\./, /\.spec\./]
-  const highRiskPatterns = [/package\.json$/, /\.env/, /config/, /src\/stores/, /src\/lib/]
-  
-  const isLowRisk = lowRiskPatterns.some(p => p.test(change.path))
-  const isHighRisk = highRiskPatterns.some(p => p.test(change.path))
-  
-  if (isHighRisk) return 'high'
-  if (isLowRisk) return 'low'
-  return 'medium'
-}
 
 export function ApprovalPanel({
   phase,
