@@ -735,7 +735,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
             await threadApi.sendMessage(agent.threadId, '请重新执行任务', [], [])
             set((state) => {
               const current = state.agents[id]
-              if (current) {
+              if (current && current.status === 'pending') {
                 current.status = 'running'
                 current.startedAt = new Date()
               }
@@ -752,7 +752,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           log.error(`[retryAgent] Failed to retry agent ${id}: ${error}`, 'multi-agent')
           set((state) => {
             const current = state.agents[id]
-            if (current) {
+            if (current && current.status !== 'completed') {
               current.status = 'error'
               current.error = {
                 message: `重试失败: ${error}`,

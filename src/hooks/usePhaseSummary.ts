@@ -81,13 +81,14 @@ export function usePhaseSummary(
       .map((id) => agents.find((a) => a.id === id))
       .filter((a): a is AgentInfo => !!a)
 
-    const agentStatuses = phaseAgents.map((a) => `${a.id}:${a.status}`).join(',')
-    const itemCounts = phaseAgents
+    const sortedAgents = [...phaseAgents].sort((a, b) => a.id.localeCompare(b.id))
+    const agentStatuses = sortedAgents.map((a) => `${a.id}|${a.status}`).join(';')
+    const itemCounts = sortedAgents
       .map((a) => {
         const thread = threads[a.threadId]
-        return `${a.threadId}:${thread?.itemOrder?.length || 0}`
+        return `${a.id}|${thread?.itemOrder?.length ?? 0}`
       })
-      .join(',')
+      .join(';')
 
     const depsKey = {
       phaseId: pendingPhase.id,

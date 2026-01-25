@@ -261,6 +261,7 @@ interface FailedAgentCardProps {
 function FailedAgentCard({ agent, onRetry, onSkip, onCancelWorkflow }: FailedAgentCardProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [loadingAction, setLoadingAction] = useState<string | null>(null)
+  const [completedAction, setCompletedAction] = useState<string | null>(null)
   
   const errorCode = agent.error?.code || 'UNKNOWN'
   const guidance = getErrorGuidance(errorCode)
@@ -270,9 +271,30 @@ function FailedAgentCard({ agent, onRetry, onSkip, onCancelWorkflow }: FailedAge
     setLoadingAction(actionType)
     try {
       await handler()
+      setCompletedAction(actionType)
     } finally {
       setLoadingAction(null)
     }
+  }
+
+  if (completedAction) {
+    const actionLabels: Record<string, string> = {
+      retry: '正在重试...',
+      skip: '已跳过，推进中...',
+      cancel: '正在取消...',
+    }
+    return (
+      <div className="w-full px-4 py-3 bg-green-50 dark:bg-green-900/10 transition-colors">
+        <div className="flex items-center gap-3">
+          <div className="p-1.5 rounded-lg bg-green-500/10 flex-shrink-0">
+            <RotateCcw className="w-4 h-4 text-green-500 animate-spin" />
+          </div>
+          <p className="text-sm font-medium text-green-700 dark:text-green-300">
+            {actionLabels[completedAction] || '处理中...'}
+          </p>
+        </div>
+      </div>
+    )
   }
   
   return (
