@@ -103,7 +103,6 @@ export function MultiAgentView() {
   // Check if there's a running workflow
   const hasRunningWorkflow = workflow && workflow.status === 'running'
 
-  // Compute pending approval phase using useMemo to avoid race conditions
   const pendingApprovalPhase = useMemo(() => {
     if (!workflow) return null
 
@@ -116,20 +115,10 @@ export function MultiAgentView() {
       currentPhase.agentIds.length > 0 &&
       !dismissedApprovalPhaseIds.has(currentPhase.id)
     ) {
-      const phaseAgents = currentPhase.agentIds
-        .map((id) => agents.find((a) => a.id === id))
-        .filter(Boolean)
-
-      const allCompleted = phaseAgents.every(
-        (a) => a!.status === 'completed' || a!.status === 'error' || a!.status === 'cancelled'
-      )
-
-      if (allCompleted) {
-        return currentPhase
-      }
+      return currentPhase
     }
     return null
-  }, [workflow, agents, dismissedApprovalPhaseIds])
+  }, [workflow, dismissedApprovalPhaseIds])
 
   const threadStoreState = useThreadStore((state) => state.threads)
   const safetyApprovalCount = useMemo(() => {
@@ -218,10 +207,9 @@ export function MultiAgentView() {
     }
   }
 
-  const handleRejection = (reason: string) => {
+  const handleRejection = async (reason: string) => {
     if (pendingApprovalPhase) {
-      rejectPhase(pendingApprovalPhase.id, reason)
-      // Mark as dismissed to prevent re-showing
+      await rejectPhase(pendingApprovalPhase.id, reason)
       setDismissedApprovalPhaseIds((prev) => new Set([...prev, pendingApprovalPhase.id]))
     }
   }
@@ -229,7 +217,7 @@ export function MultiAgentView() {
   const handleRejectAndRetry = useCallback(async (reason: string) => {
     if (!pendingApprovalPhase) return
     
-    rejectPhase(pendingApprovalPhase.id, reason)
+    await rejectPhase(pendingApprovalPhase.id, reason)
     await retryPhase(pendingApprovalPhase.id)
   }, [pendingApprovalPhase, rejectPhase, retryPhase])
 

@@ -989,6 +989,8 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         try {
           get()._clearApprovalTimeout(phaseId)
 
+          log.info(`[AUDIT] Phase approved: ${phase.name} (${phaseId}), agents: ${phase.agentIds.length}, next: ${hasNextPhase ? nextPhase?.name : 'workflow complete'}`, 'multi-agent')
+
           set((s) => {
             if (!s.workflow) return
 
@@ -1020,7 +1022,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         }
       },
 
-      rejectPhase: (phaseId: string, reason?: string) => {
+      rejectPhase: async (phaseId: string, reason?: string) => {
         const state = get()
         const workflow = state.workflow
 
@@ -1041,23 +1043,55 @@ export const useMultiAgentStore = create<MultiAgentState>()(
 
         set((s) => {
           if (!s.workflow) return
-
           s.approvalInFlight[phaseId] = true
+        })
 
-          const phase = s.workflow.phases.find((p) => p.id === phaseId)
-          if (phase) {
-            phase.status = 'failed'
-            phase.completedAt = new Date()
-            if (reason) {
-              phase.output = `Phase rejected: ${reason}`
+        try {
+          const phaseAgentIds = phaseRef.agentIds || []
+          for (const agentId of phaseAgentIds) {
+            const agent = state.agents[agentId]
+            if (agent && agent.status === 'running' && agent.threadId) {
+              try {
+                await threadApi.interrupt(agent.threadId)
+                log.info(`[rejectPhase] Interrupted agent ${agentId} for rejected phase ${phaseId}`, 'multi-agent')
+              } catch (error) {
+                log.error(`[rejectPhase] Failed to interrupt agent ${agentId}: ${error}`, 'multi-agent')
+              }
             }
           }
 
-          s.workflow.status = 'failed'
-          s.workflow.completedAt = new Date()
+          set((s) => {
+            if (!s.workflow) return
 
-          delete s.approvalInFlight[phaseId]
-        })
+            const phase = s.workflow.phases.find((p) => p.id === phaseId)
+            if (phase) {
+              phase.status = 'failed'
+              phase.completedAt = new Date()
+              if (reason) {
+                phase.output = `Phase rejected: ${reason}`
+              }
+            }
+
+            for (const agentId of phaseAgentIds) {
+              const agent = s.agents[agentId]
+              if (agent && agent.status === 'running') {
+                agent.status = 'cancelled'
+                agent.completedAt = new Date()
+                agent.interruptReason = 'cancel'
+                agent.progress.description = '阶段被拒绝'
+              }
+            }
+
+            s.workflow.status = 'failed'
+            s.workflow.completedAt = new Date()
+          })
+
+          log.info(`[AUDIT] Phase rejected: ${phaseRef.name} (${phaseId}), reason: ${reason || 'no reason provided'}, interrupted agents: ${phaseAgentIds.length}`, 'multi-agent')
+        } finally {
+          set((s) => {
+            delete s.approvalInFlight[phaseId]
+          })
+        }
       },
 
       recoverApprovalTimeout: (phaseId: string) => {
@@ -1102,6 +1136,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         }
 
         log.info(`[recoverApprovalTimeout] Phase ${phaseId} recovered, approval timeout restarted`, 'multi-agent')
+        log.info(`[AUDIT] Approval timeout recovered: ${phase.name} (${phaseId}), timeout reset to ${approvalTimeoutMs}ms`, 'multi-agent')
       },
 
       cancelWorkflow: async () => {
@@ -1607,6 +1642,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         }
 
         log.info(`[retryPhase] Phase ${phase.name} retry initiated`, 'multi-agent')
+        log.info(`[AUDIT] Phase retry: ${phase.name} (${phaseId}), cleaned up ${oldAgentIds.length} previous agents`, 'multi-agent')
       },
 
       retryWorkflow: async () => {

@@ -99,7 +99,7 @@ export interface MultiAgentState {
   startWorkflow: (workflow: Workflow) => Promise<void>
   startWorkflowFromTemplate: (template: import('../../lib/workflows/types').WorkflowTemplate, userTask: string) => Promise<void>
   approvePhase: (phaseId: string) => Promise<void>
-  rejectPhase: (phaseId: string, reason?: string) => void
+  rejectPhase: (phaseId: string, reason?: string) => Promise<void>
   recoverApprovalTimeout: (phaseId: string) => void
   cancelWorkflow: () => Promise<void>
   clearWorkflow: () => void
