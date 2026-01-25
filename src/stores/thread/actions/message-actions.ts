@@ -312,6 +312,11 @@ export function createRespondToApprovalInThread(
 
     const threadState = threads[threadId]
 
+    if (threadState.approvalInFlight?.[itemId]) {
+      log.warn(`[respondToApprovalInThread] Approval already in flight for item: ${itemId}`, 'message-actions')
+      return
+    }
+
     const pendingApproval = threadState.pendingApprovals.find((p) => p.itemId === itemId)
     if (!pendingApproval) {
       log.error(`[respondToApprovalInThread] No pending approval found for itemId: ${itemId}`, 'message-actions')
@@ -329,6 +334,22 @@ export function createRespondToApprovalInThread(
         ts.pendingApprovals = ts.pendingApprovals.filter((p) => p.itemId !== itemId)
         return state
       })
+      return
+    }
+
+    let claimed = false
+    set((state) => {
+      const ts = state.threads[threadId]
+      if (!ts) return state
+      if (ts.approvalInFlight?.[itemId]) return state
+      if (!ts.approvalInFlight) ts.approvalInFlight = {}
+      ts.approvalInFlight[itemId] = true
+      claimed = true
+      return state
+    })
+
+    if (!claimed) {
+      log.warn(`[respondToApprovalInThread] Failed to claim approval lock for item: ${itemId}`, 'message-actions')
       return
     }
 
@@ -357,7 +378,6 @@ export function createRespondToApprovalInThread(
           decision === 'acceptForSession' ||
           decision === 'acceptWithExecpolicyAmendment'
 
-        // Use type guards for runtime type safety
         if (isCommandExecutionContent(item?.content)) {
           item.content.needsApproval = false
           item.content.approved = isApproved
@@ -384,6 +404,14 @@ export function createRespondToApprovalInThread(
         })
       }
       throw error
+    } finally {
+      set((state) => {
+        const ts = state.threads[threadId]
+        if (ts?.approvalInFlight) {
+          delete ts.approvalInFlight[itemId]
+        }
+        return state
+      })
     }
   }
 }

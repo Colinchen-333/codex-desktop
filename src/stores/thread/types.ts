@@ -283,6 +283,7 @@ export interface SingleThreadState {
   turnStatus: TurnStatus
   currentTurnId: string | null
   pendingApprovals: PendingApproval[]
+  approvalInFlight: Record<string, boolean>
   tokenUsage: TokenUsage
   turnTiming: TurnTiming
   sessionOverrides: SessionOverrides

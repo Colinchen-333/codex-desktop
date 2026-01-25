@@ -304,6 +304,7 @@ export function createEmptyThreadState(thread: ThreadInfo): SingleThreadState {
     turnStatus: 'idle',
     currentTurnId: null,
     pendingApprovals: [],
+    approvalInFlight: {},
     tokenUsage: defaultTokenUsage,
     turnTiming: defaultTurnTiming,
     sessionOverrides: {},

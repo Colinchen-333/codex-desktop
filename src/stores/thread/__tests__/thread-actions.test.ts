@@ -97,6 +97,7 @@ function createMockThreadState(threadId: string): SingleThreadState {
     turnStatus: 'idle',
     currentTurnId: null,
     pendingApprovals: [],
+    approvalInFlight: {},
     tokenUsage: defaultTokenUsage,
     turnTiming: defaultTurnTiming,
     sessionOverrides: {},

@@ -167,9 +167,40 @@ function WorkflowStageHeaderComponent({ workflow, onRetryWorkflow, onRecoverTime
           )}
         </div>
 
-        <p className="text-xs text-muted-foreground -mt-4 mb-4">
-          当前阶段完成后需要审批，您将决定是否推进到下一阶段
-        </p>
+        {(() => {
+          const currentPhase = phases[currentPhaseIndex]
+          if (!currentPhase) return null
+          
+          if (currentPhase.status === 'awaiting_approval' || currentPhase.status === 'approval_timeout') {
+            return (
+              <div className="flex items-center gap-2 px-3 py-2 mb-4 -mt-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <span className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                  等待您审批「{currentPhase.name}」阶段的工作成果
+                </span>
+                {currentPhase.status === 'approval_timeout' && (
+                  <span className="text-xs text-orange-600 dark:text-orange-400 ml-auto">
+                    (已超时 - 仍可操作)
+                  </span>
+                )}
+              </div>
+            )
+          }
+          
+          if (currentPhase.status === 'running') {
+            return (
+              <p className="text-xs text-muted-foreground -mt-4 mb-4">
+                正在执行「{currentPhase.name}」阶段，完成后将进入审批环节
+              </p>
+            )
+          }
+          
+          return (
+            <p className="text-xs text-muted-foreground -mt-4 mb-4">
+              当前阶段完成后需要审批，您将决定是否推进到下一阶段
+            </p>
+          )
+        })()}
 
         {/* Phase Progress - Minimalist Design */}
         <div className="flex items-center relative">

@@ -321,6 +321,7 @@ export function createResumeThread(
         turnStatus: 'idle',
         currentTurnId: null,
         pendingApprovals: [],
+        approvalInFlight: {},
         tokenUsage: defaultTokenUsage,
         turnTiming: defaultTurnTiming,
         sessionOverrides: {},

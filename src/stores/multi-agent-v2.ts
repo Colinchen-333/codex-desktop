@@ -2261,17 +2261,52 @@ export const useMultiAgentStore = create<MultiAgentState>()(
   })),
     {
       name: 'codex-multi-agent-state',
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        config: state.config,
-        workingDirectory: state.workingDirectory,
-        agents: state.agents,
-        agentOrder: state.agentOrder,
-        agentMapping: state.agentMapping,
-        workflow: state.workflow,
-        previousPhaseOutput: state.previousPhaseOutput,
-      }),
+      partialize: (state) => {
+        const MAX_PHASE_OUTPUT_LENGTH = 8000
+        const truncatedPreviousPhaseOutput = state.previousPhaseOutput
+          ? state.previousPhaseOutput.slice(0, MAX_PHASE_OUTPUT_LENGTH)
+          : undefined
+
+        const compactAgents: Record<string, Partial<AgentDescriptor>> = {}
+        for (const [id, agent] of Object.entries(state.agents)) {
+          compactAgents[id] = {
+            id: agent.id,
+            type: agent.type,
+            threadId: agent.threadId,
+            task: agent.task.slice(0, 500),
+            dependencies: agent.dependencies,
+            status: agent.status,
+            progress: agent.progress,
+            threadStoreRef: agent.threadStoreRef,
+            createdAt: agent.createdAt,
+            startedAt: agent.startedAt,
+            completedAt: agent.completedAt,
+            error: agent.error,
+            interruptReason: agent.interruptReason,
+            config: agent.config,
+          }
+        }
+
+        const compactWorkflow = state.workflow ? {
+          ...state.workflow,
+          phases: state.workflow.phases.map((phase) => ({
+            ...phase,
+            output: phase.output?.slice(0, MAX_PHASE_OUTPUT_LENGTH),
+          })),
+        } : null
+
+        return {
+          config: state.config,
+          workingDirectory: state.workingDirectory,
+          agents: compactAgents as Record<string, AgentDescriptor>,
+          agentOrder: state.agentOrder,
+          agentMapping: state.agentMapping,
+          workflow: compactWorkflow,
+          previousPhaseOutput: truncatedPreviousPhaseOutput,
+        }
+      },
       onRehydrateStorage: () => (state) => {
         if (!state) return
         
@@ -2354,7 +2389,7 @@ export const useMultiAgentStore = create<MultiAgentState>()(
          )
          if (restartRecoveryCandidates.length > 0) {
            setTimeout(() => {
-             useMultiAgentStore.getState()._autoResumeAfterRestart()
+             void useMultiAgentStore.getState()._autoResumeAfterRestart()
            }, 200)
          }
        },

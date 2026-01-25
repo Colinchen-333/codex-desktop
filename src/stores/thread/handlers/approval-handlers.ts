@@ -160,6 +160,10 @@ export function createHandleFileChangeApprovalRequested(
 /**
  * Create the cleanup function for stale pending approvals.
  * Returns a function that cleans up approvals that have exceeded the timeout.
+ * 
+ * CRITICAL FIX: Only removes approvals that were successfully cancelled AND
+ * still exist in pendingApprovals at cleanup time. This prevents race conditions
+ * where user-approved items could be incorrectly marked as failed.
  */
 export function createCleanupStaleApprovals(
   getThreadStore: () => ThreadState,
@@ -181,6 +185,7 @@ export function createCleanupStaleApprovals(
       const cancelRequests: Array<{
         threadId: string
         itemId: string
+        requestId: number
         promise: Promise<void>
       }> = []
 
@@ -201,6 +206,7 @@ export function createCleanupStaleApprovals(
             cancelRequests.push({
               threadId,
               itemId: approval.itemId,
+              requestId: approval.requestId,
               promise: cancelApprovalWithRetry(
                 threadId,
                 approval.itemId,
@@ -211,52 +217,60 @@ export function createCleanupStaleApprovals(
         }
       })
 
+      const successfullyCancelledIds = new Set<string>()
+
       if (cancelRequests.length > 0) {
         const results = await Promise.allSettled(cancelRequests.map((req) => req.promise))
         results.forEach((result, index) => {
-          if (result.status === 'rejected') {
-            const failed = cancelRequests[index]
+          const request = cancelRequests[index]
+          if (result.status === 'fulfilled') {
+            successfullyCancelledIds.add(`${request.threadId}:${request.itemId}`)
+          } else {
             log.warn(
-              `[cleanupStaleApprovals] Failed to cancel approval: ${failed.threadId}/${failed.itemId} ${result.reason}`,
+              `[cleanupStaleApprovals] Failed to cancel approval: ${request.threadId}/${request.itemId} ${result.reason}`,
               'approval-handlers'
             )
           }
         })
       }
 
-      // Update state to remove stale approvals - Using Immer for efficient nested updates
       setThreadStore((state) => {
-        Object.entries(state.threads).forEach(([_threadId, threadState]) => {
-          // Find stale approvals first
-          const staleApprovals = threadState.pendingApprovals.filter(
-            (approval) => now - approval.createdAt > APPROVAL_TIMEOUT_MS
-          )
+        Object.entries(state.threads).forEach(([threadId, threadState]) => {
+          const approvalsToRemove = threadState.pendingApprovals.filter((approval) => {
+            const key = `${threadId}:${approval.itemId}`
+            return successfullyCancelledIds.has(key)
+          })
 
-          if (staleApprovals.length > 0) {
-            // Immer allows direct mutation of draft state
-            // Filter out stale approvals
+          if (approvalsToRemove.length > 0) {
+            const removeIds = new Set(approvalsToRemove.map((a) => a.itemId))
+            
             threadState.pendingApprovals = threadState.pendingApprovals.filter(
-              (approval) => now - approval.createdAt <= APPROVAL_TIMEOUT_MS
+              (approval) => !removeIds.has(approval.itemId)
             )
 
-            // Update items for stale approvals using type guards
-            staleApprovals.forEach((approval) => {
+            approvalsToRemove.forEach((approval) => {
               const item = threadState.items[approval.itemId]
-              // Use type guards for runtime type safety
               if (isCommandExecutionContent(item?.content)) {
-                // Direct mutation with Immer - no need to spread
-                item.status = 'failed'
-                item.content.needsApproval = false
-                item.content.approved = false
-                item.content.reason = 'Approval request timed out'
+                if (item.content.needsApproval) {
+                  item.status = 'failed'
+                  item.content.needsApproval = false
+                  item.content.approved = false
+                  item.content.reason = 'Approval request timed out'
+                }
               } else if (isFileChangeContent(item?.content)) {
-                // Direct mutation with Immer - no need to spread
-                item.status = 'failed'
-                item.content.needsApproval = false
-                item.content.approved = false
-                item.content.reason = 'Approval request timed out'
+                if (item.content.needsApproval) {
+                  item.status = 'failed'
+                  item.content.needsApproval = false
+                  item.content.approved = false
+                  item.content.reason = 'Approval request timed out'
+                }
               }
             })
+
+            log.debug(
+              `[cleanupStaleApprovals] Removed ${approvalsToRemove.length} timed-out approvals for thread: ${threadId}`,
+              'approval-handlers'
+            )
           }
         })
 

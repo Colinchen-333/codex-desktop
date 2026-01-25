@@ -46,9 +46,10 @@ export function ApprovalPanel({
   const [rejectReason, setRejectReason] = useState('')
   const [isRejectMode, setIsRejectMode] = useState(false)
   const [showLowRisk, setShowLowRisk] = useState(true)
+  const [summaryFirstMode, setSummaryFirstMode] = useState(true)
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {}
-    phase.agentIds.forEach((id) => { initial[id] = true })
+    phase.agentIds.forEach((id) => { initial[id] = false })
     return initial
   })
   const { showToast } = useToast()
@@ -428,24 +429,32 @@ export function ApprovalPanel({
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
+                    setSummaryFirstMode(false)
                     const allExpanded: Record<string, boolean> = {}
                     phaseAgents.forEach((a) => { allExpanded[a.id] = true })
                     setExpandedAgents(allExpanded)
                   }}
-                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  className={cn(
+                    "text-xs hover:underline",
+                    summaryFirstMode ? "text-blue-600 dark:text-blue-400" : "text-muted-foreground"
+                  )}
                 >
                   全部展开
                 </button>
                 <span className="text-muted-foreground/30">|</span>
                 <button
                   onClick={() => {
+                    setSummaryFirstMode(true)
                     const allCollapsed: Record<string, boolean> = {}
                     phaseAgents.forEach((a) => { allCollapsed[a.id] = false })
                     setExpandedAgents(allCollapsed)
                   }}
-                  className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                  className={cn(
+                    "text-xs hover:underline",
+                    summaryFirstMode ? "text-muted-foreground" : "text-blue-600 dark:text-blue-400"
+                  )}
                 >
-                  全部折叠
+                  摘要模式
                 </button>
               </div>
             </div>
