@@ -45,6 +45,10 @@ import {
   partializeState,
   createOnRehydrateHandler,
 } from './persistence'
+import {
+  canAgentTransition,
+  isPhaseTerminal,
+} from './state-machine'
 
 // Re-export types for backward compatibility
 export type {
@@ -64,6 +68,24 @@ export type {
   WorkflowExecutionContext,
   AgentType,
 } from '../../lib/workflows/types'
+
+export {
+  canAgentTransition,
+  canPhaseTransition,
+  canWorkflowTransition,
+  isPhaseTerminal,
+  isPhaseAwaitingAction,
+  isWorkflowTerminal,
+  isWorkflowRecoverable,
+  classifyError,
+  getDecisionPriority,
+  sortDecisionsByPriority,
+  type ClassifiedError,
+  type PendingDecision,
+  type DecisionType,
+  type ErrorDomain,
+  type ErrorSeverity,
+} from './state-machine'
 
 export const useMultiAgentStore = create<MultiAgentState>()(
   persist(
@@ -520,6 +542,11 @@ export const useMultiAgentStore = create<MultiAgentState>()(
         set((state) => {
           const agent = state.agents[id]
           if (!agent) return
+
+          if (!canAgentTransition(agent.status, status)) {
+            log.warn(`[updateAgentStatus] Invalid transition for agent ${id}: ${agent.status} → ${status}`, 'multi-agent')
+            return
+          }
 
           agent.status = status
 
@@ -1243,7 +1270,17 @@ export const useMultiAgentStore = create<MultiAgentState>()(
           }
 
           const latestPhase = latestWorkflow.phases[latestWorkflow.currentPhaseIndex]
-          if (!latestPhase || latestPhase.id !== phaseId || latestPhase.status !== 'running') {
+          if (!latestPhase || latestPhase.id !== phaseId) {
+            log.info('[checkPhaseCompletion] Phase changed during execution, aborting', 'multi-agent')
+            return
+          }
+
+          if (isPhaseTerminal(latestPhase.status)) {
+            log.info(`[checkPhaseCompletion] Phase ${latestPhase.name} already terminal (${latestPhase.status}), aborting`, 'multi-agent')
+            return
+          }
+
+          if (latestPhase.status !== 'running') {
             log.info('[checkPhaseCompletion] Phase state changed during execution, aborting', 'multi-agent')
             return
           }

@@ -489,6 +489,54 @@ export function AgentDetailPanel({ agent, onClose, onMinimize }: AgentDetailPane
           <p className="text-sm text-gray-600 dark:text-gray-400">{agent.task}</p>
         </div>
 
+        {/* Summary Strip - What changed / What needs attention */}
+        {stats && (stats.files > 0 || stats.commands > 0 || stats.pendingApprovals > 0 || stats.errors > 0) && (
+          <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 text-xs">
+                {stats.files > 0 && (
+                  <button
+                    onClick={() => scrollToId(stats.firstFileId)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors"
+                  >
+                    <FileCode className="w-3.5 h-3.5" />
+                    <span className="font-medium">{stats.files} 文件变更</span>
+                  </button>
+                )}
+                {stats.commands > 0 && (
+                  <button
+                    onClick={() => scrollToId(stats.firstCommandId)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span className="font-medium">{stats.commands} 命令</span>
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {stats.pendingApprovals > 0 && (
+                  <button
+                    onClick={() => scrollToId(stats.firstPendingApprovalId)}
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-md hover:bg-amber-200 dark:hover:bg-amber-900/60 transition-colors animate-pulse"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span className="font-bold">{stats.pendingApprovals} 待审批</span>
+                  </button>
+                )}
+                {stats.errors > 0 && (
+                  <button
+                    onClick={() => scrollToId(stats.firstErrorId)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded-md hover:bg-red-200 dark:hover:bg-red-900/60 transition-colors"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span className="font-medium">{stats.errors} 错误</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
       {/* Message History */}
       <div className="relative flex-1 min-h-0 bg-gray-50/50 dark:bg-gray-900/50">
         {stats && (stats.files > 0 || stats.commands > 0 || stats.errors > 0) && (

@@ -11,15 +11,15 @@
  */
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
-import { X, Plus, Play, Search, FileCode, Terminal, FileText, TestTube, AlertTriangle, Loader2, Bell, CheckSquare, Box, User, ChevronDown, ChevronUp, Sparkles, Bot, Clock } from 'lucide-react'
+import { X, Plus, Play, Search, FileCode, Terminal, FileText, TestTube, AlertTriangle, Loader2, Box, User, ChevronDown, ChevronUp, Sparkles, Bot, Clock } from 'lucide-react'
 import { WorkflowStageHeader } from './WorkflowStageHeader'
 import { AgentGridView } from './AgentGridView'
 import { AgentDetailPanel } from './AgentDetailPanel'
 import { ApprovalPanel } from './ApprovalPanel'
 import { ReviewInbox } from './ReviewInbox'
+import { PrimaryDecision } from './PrimaryDecision'
 import { useMultiAgentStore, type AgentType } from '../../stores/multi-agent-v2'
 import { useWorkflowTemplatesStore } from '../../stores/workflowTemplates'
-import { useThreadStore } from '../../stores/thread'
 import { useAgents, useWorkflow } from '../../hooks/useMultiAgent'
 import { cn } from '../../lib/utils'
 
@@ -120,20 +120,7 @@ export function MultiAgentView() {
     return null
   }, [workflow, dismissedApprovalPhaseIds])
 
-  const threadStoreState = useThreadStore((state) => state.threads)
-  const safetyApprovalCount = useMemo(() => {
-    const agentThreadIds = new Set(agents.map((a) => a.threadId))
-    let count = 0
-    for (const threadId of agentThreadIds) {
-      const thread = threadStoreState[threadId]
-      if (thread?.pendingApprovals) {
-        count += thread.pendingApprovals.length
-      }
-    }
-    return count
-  }, [agents, threadStoreState])
 
-  const totalPendingDecisions = (pendingApprovalPhase ? 1 : 0) + safetyApprovalCount
 
   const handleViewDetails = (agentId: string) => {
     setSelectedAgentId(agentId)
@@ -842,39 +829,28 @@ export function MultiAgentView() {
           )
         })()}
 
-        {/* Review Inbox Badge - Clickable to open Review Inbox */}
-        {totalPendingDecisions > 0 && (
-          <button
-            onClick={() => setShowReviewInbox(true)}
-            className="w-full px-6 py-2 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors text-left"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
-                  <Bell className="w-4 h-4 animate-pulse" />
-                  <span className="font-medium">待处理决策</span>
-                </div>
-                <div className="flex items-center gap-4 text-sm">
-                  {pendingApprovalPhase && (
-                    <span className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 rounded text-amber-800 dark:text-amber-300">
-                      <CheckSquare className="w-3.5 h-3.5" />
-                      1 阶段审批
-                    </span>
-                  )}
-                  {safetyApprovalCount > 0 && (
-                    <span className="flex items-center gap-1.5 px-2 py-0.5 bg-blue-100 dark:bg-blue-900/40 rounded text-blue-800 dark:text-blue-300">
-                      <FileCode className="w-3.5 h-3.5" />
-                      {safetyApprovalCount} 变更审批
-                    </span>
-                  )}
-                </div>
-              </div>
-              <span className="text-xs text-amber-600 dark:text-amber-400 hover:underline">
-                点击查看详情 →
-              </span>
-            </div>
-          </button>
-        )}
+        {/* Primary Decision Block - Shows the most important pending action */}
+        <PrimaryDecision
+          pendingPhase={pendingApprovalPhase}
+          agents={agents}
+          onApprovePhase={handleApproval}
+          onRejectPhase={() => {
+            if (pendingApprovalPhase) {
+              setDismissedApprovalPhaseIds((prev) => {
+                const next = new Set(prev)
+                next.delete(pendingApprovalPhase.id)
+                return next
+              })
+            }
+            setShowReviewInbox(true)
+          }}
+          onOpenReviewInbox={() => setShowReviewInbox(true)}
+          onRecoverTimeout={() => {
+            if (pendingApprovalPhase) {
+              recoverApprovalTimeout(pendingApprovalPhase.id)
+            }
+          }}
+        />
 
         {/* Main Content Area */}
         <div className="flex-1 flex overflow-hidden">
